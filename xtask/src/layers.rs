@@ -56,12 +56,14 @@ pub const RULES: Rules = Rules {
             ],
         ),
         ("florastack-metrics", &[CORE]),
+        ("florastack-testkit", &[]),
         ("florastack", &[ENGINE]),
         ("florastack-cli", &[ENGINE]),
         ("xtask", &[]),
     ],
-    allowed_dev: &[],
-    dev_only: &["florastack-metrics"],
+    // The CPU references that the GPU kernels' agreement tests compare against (AGENTS.md, CPU oracle).
+    allowed_dev: &[("florastack-gpu", &["florastack-align", "florastack-stack"])],
+    dev_only: &["florastack-metrics", "florastack-testkit"],
     ui_crates: &["egui*", "eframe", "winit", "rfd"],
     ui_allowed: &["florastack"],
 };
@@ -353,32 +355,44 @@ mod tests {
     }
 
     #[test]
-    fn metrics_is_dev_only() {
-        for kind in [DepKind::Normal, DepKind::Build] {
+    fn metrics_and_testkit_are_dev_only() {
+        assert_eq!(RULES.dev_only, ["florastack-metrics", "florastack-testkit"]);
+        for &test_crate in RULES.dev_only {
+            for kind in [DepKind::Normal, DepKind::Build] {
+                let mut ws = workspace();
+                add_dep(&mut ws, "florastack-stack", test_crate, kind);
+                let v = violations(&ws);
+                assert!(
+                    matches!(&v[..], [Violation::DevOnly { krate, dep, kind: k }]
+                        if krate == "florastack-stack" && dep == test_crate && *k == kind),
+                    "{v:?}"
+                );
+            }
             let mut ws = workspace();
-            add_dep(&mut ws, "florastack-stack", "florastack-metrics", kind);
+            for krate in ["florastack-stack", ENGINE, "florastack-cli", "xtask"] {
+                add_dep(&mut ws, krate, test_crate, DepKind::Dev);
+            }
             let v = violations(&ws);
-            assert!(matches!(&v[..], [Violation::DevOnly { krate, kind: k, .. }] if krate == "florastack-stack" && *k == kind), "{v:?}");
+            assert!(v.is_empty(), "{v:?}");
         }
-        let mut ws = workspace();
-        for krate in ["florastack-stack", ENGINE, "florastack-cli"] {
-            add_dep(&mut ws, krate, "florastack-metrics", DepKind::Dev);
-        }
-        let v = violations(&ws);
-        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
-    fn dev_allowance_covers_dev_dependencies_only() {
-        let rules = Rules { allowed_dev: &[("florastack-gpu", &["florastack-stack"])], ..RULES };
-        let branding = crate::branding::repository();
+    fn gpu_tests_may_use_the_cpu_references_as_dev_dependencies_only() {
         let mut ws = workspace();
-        add_dep(&mut ws, "florastack-gpu", "florastack-stack", DepKind::Dev);
-        let v = check(&rules, &ws, &branding);
+        for reference in ["florastack-align", "florastack-stack"] {
+            add_dep(&mut ws, "florastack-gpu", reference, DepKind::Dev);
+        }
+        let v = violations(&ws);
         assert!(v.is_empty(), "{v:?}");
         add_dep(&mut ws, "florastack-gpu", "florastack-stack", DepKind::Normal);
-        let v = check(&rules, &ws, &branding);
-        assert!(matches!(&v[..], [Violation::NotAllowed { kind: DepKind::Normal, .. }]), "{v:?}");
+        let v = violations(&ws);
+        assert!(matches!(&v[..], [Violation::NotAllowed { krate, kind: DepKind::Normal, .. }] if krate == "florastack-gpu"), "{v:?}");
+        // The allowance is the GPU crate's alone.
+        let mut ws = workspace();
+        add_dep(&mut ws, "florastack-codecs", "florastack-stack", DepKind::Dev);
+        let v = violations(&ws);
+        assert!(matches!(&v[..], [Violation::NotAllowed { krate, kind: DepKind::Dev, .. }] if krate == "florastack-codecs"), "{v:?}");
     }
 
     #[test]

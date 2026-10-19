@@ -1,0 +1,13 @@
+[package]
+name = "florastack-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# No dependencies: std only, so any crate's tests can use it at no build cost.
+[dependencies]

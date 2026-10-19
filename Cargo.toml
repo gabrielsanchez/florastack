@@ -22,6 +22,7 @@ florastack-project = { path = "crates/project" }
 florastack-retouch = { path = "crates/retouch" }
 florastack-engine = { path = "crates/engine" }
 florastack-metrics = { path = "crates/metrics" }
+florastack-testkit = { path = "crates/testkit" }
 
 # External crates.
 serde = { version = "1", features = ["derive"] }
@@ -54,3 +55,13 @@ many_single_char_names = "allow"
 # Leftover debugging and unfinished stubs (restriction lints, as in PhotoCraft and LightCraft).
 dbg_macro = "warn"
 todo = "warn"
+# Never crash (AGENTS.md): no unwrap, expect or panicking macro outside tests. clippy.toml allows the first three
+# in #[test] functions and #[cfg(test)] code; that leaves out integration-test helpers, examples and benches, so
+# such a file that needs them starts with #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)].
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+unimplemented = "warn"
+# Every unsafe block needs a `// SAFETY:` comment. unsafe itself is denied above, except in the modules AGENTS.md lists.
+undocumented_unsafe_blocks = "warn"

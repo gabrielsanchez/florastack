@@ -2,6 +2,7 @@
 //! FloraStack crate: it checks the workspace from the outside, through `cargo metadata` and the manifests themselves.
 
 mod branding;
+mod ci;
 mod layers;
 
 use std::path::Path;
@@ -14,6 +15,9 @@ commands:
   check-layers  check every Cargo.toml against the crate dependency allowlist (RULES in xtask/src/layers.rs),
                 check that every crate inherits the workspace lints, and that the binaries named in
                 branding.toml exist
+  ci            run what CI runs (.github/workflows/ci.yml): cargo fmt --check, clippy, check-layers, the tests,
+                cargo deny and cargo audit, stopping at the first failure, then print a summary that lists the
+                tests skipped for want of hardware or corpus files (cargo-deny and cargo-audit must be installed)
   help          show this message
 ";
 
@@ -23,6 +27,8 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["check-layers"] => cargo_metadata().and_then(|meta| layers::run(&meta)),
         ["check-layers", ..] => Err("check-layers takes no arguments".to_owned()),
+        ["ci"] => cargo_metadata().and_then(|meta| ci::run(&meta)),
+        ["ci", ..] => Err("ci takes no arguments".to_owned()),
         [] | ["help" | "-h" | "--help"] => {
             print!("{USAGE}");
             Ok(())
@@ -38,12 +44,16 @@ fn main() -> ExitCode {
     }
 }
 
+/// A command for the cargo that runs xtask (`cargo` sets `CARGO` for the programs it runs).
+fn cargo() -> Command {
+    Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+}
+
 /// The workspace members as `cargo metadata` describes them (no dependency resolution).
 fn cargo_metadata() -> Result<serde_json::Value, String> {
     // xtask lives one directory below the workspace root.
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Cargo.toml");
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
+    let output = cargo()
         .args(["metadata", "--format-version", "1", "--no-deps", "--manifest-path"])
         .arg(&manifest)
         .output()

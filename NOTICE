@@ -5,5 +5,11 @@ Licensed under the MIT License or the Apache License, Version 2.0, at your optio
 
 Third-party material
 
-FloraStack does not bundle any third-party code, data or assets yet. When it does, each item is
-listed here with its license, and ATTRIBUTION.md records its source and what it is used for.
+FloraStack contains the following third-party code. None of it ships in the apps: it is test and
+developer tooling. ATTRIBUTION.md records the source of each item and what it is used for.
+
+- crates/testkit/src/lib.rs and xtask/src/ci.rs are adapted from LightCraft
+  (https://github.com/storytold/lightcraft), files crates/testkit/src/lib.rs and xtask/src/ci_report.rs.
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+  Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
+  are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).

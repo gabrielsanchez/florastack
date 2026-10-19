@@ -1,0 +1,88 @@
+# FloraStack CI: formatting, Clippy, the crate layering check and the tests on Linux, macOS and Windows, plus the
+# dependency policy (cargo deny with deny.toml, and cargo audit). `cargo xtask ci` runs the same cargo commands
+# locally; a test in xtask/src/ci.rs keeps its list and this file's `run:` lines the same, so keep every cargo
+# command on a single `run:` line.
+#
+# The toolchain comes from rust-toolchain.toml. Third-party actions are pinned to a full commit SHA, with the
+# release in a comment.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels its older run; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    # macos-latest is an Apple silicon (arm64) runner.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rustup is preinstalled on GitHub's runners. With no argument it installs the toolchain, components and
+      # profile that rust-toolchain.toml names; it runs before the cache, whose key includes the rustc version.
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      # Caches the cargo registry and the compiled dependencies, keyed by OS, rustc version and Cargo.lock.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Crate layering
+        run: cargo xtask check-layers
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  dependencies:
+    name: dependency policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      # Prebuilt, checksum-verified binaries, at the versions `cargo xtask ci` is checked with.
+      - id: tools
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
+
+      # Licenses, banned crates, sources and RustSec advisories, as configured in deny.toml.
+      - name: Dependency policy
+        run: cargo deny check
+
+      # Runs even when the policy check failed, so that both results show.
+      - name: Security advisories
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: cargo audit

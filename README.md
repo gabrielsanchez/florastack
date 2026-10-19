@@ -14,7 +14,14 @@ cargo test --workspace                                  # run the tests
 cargo clippy --workspace --all-targets -- -D warnings   # lint (Clippy pedantic, warnings are errors)
 cargo fmt --all --check                                 # check formatting
 cargo xtask check-layers                                # check which crate may depend on which
+cargo xtask ci                                          # everything CI runs, with a summary of skipped tests
 ```
+
+`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`.
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) first: it has the crate map and the rules every change follows, for human contributors and AI coding agents alike. [docs/ROADMAP.md](docs/ROADMAP.md) tracks what is done and what comes next.
 
 ## License
 
