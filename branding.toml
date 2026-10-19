@@ -12,9 +12,9 @@ display_name = "FloraStack"
 project_extension = ".florastack"
 
 # Reverse-DNS application ID (Flatpak, .desktop and metainfo files, macOS bundle identifier).
-# TODO: replace OWNER with the GitHub user or organization that publishes FloraStack.
-# Release packaging must refuse to ship while the placeholder is still here.
-app_id = "io.github.OWNER.FloraStack"
+# The owner segment is the GitHub user or organization that publishes FloraStack. Release
+# packaging must refuse to ship an ID that still contains the OWNER placeholder.
+app_id = "io.github.gabrielsanchez.FloraStack"
 
 # Executable names. Each must be the name of a binary that a crate in apps/ builds.
 [binaries]
