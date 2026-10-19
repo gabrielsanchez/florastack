@@ -1,0 +1,22 @@
+# FloraStack's product identity: the one place these names are defined.
+#
+# Two readers: xtask (`cargo xtask check-layers` checks the binary names against the Cargo targets),
+# and florastack-core's build script, which turns this file into the constants in
+# `florastack_core::branding` (florastack-engine re-exports them for the apps). Don't repeat these
+# values elsewhere: use the constants from Rust and read this file from tooling.
+
+# Name shown to people: window titles, menus, installers, file metadata.
+display_name = "FloraStack"
+
+# Extension of a project folder (`<name>.florastack/`), including the dot.
+project_extension = ".florastack"
+
+# Reverse-DNS application ID (Flatpak, .desktop and metainfo files, macOS bundle identifier).
+# TODO: replace OWNER with the GitHub user or organization that publishes FloraStack.
+# Release packaging must refuse to ship while the placeholder is still here.
+app_id = "io.github.OWNER.FloraStack"
+
+# Executable names. Each must be the name of a binary that a crate in apps/ builds.
+[binaries]
+gui = "florastack"
+cli = "florastack-cli"

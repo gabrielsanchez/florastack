@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Which crate may depend on which is enforced by `cargo xtask check-layers`
+# (the allowlist is RULES in xtask/src/layers.rs).
+florastack-core = { path = "crates/core" }
+florastack-codecs = { path = "crates/codecs" }
+florastack-raw = { path = "crates/raw" }
+florastack-align = { path = "crates/align" }
+florastack-stack = { path = "crates/stack" }
+florastack-gpu = { path = "crates/gpu" }
+florastack-project = { path = "crates/project" }
+florastack-retouch = { path = "crates/retouch" }
+florastack-engine = { path = "crates/engine" }
+florastack-metrics = { path = "crates/metrics" }
+
+# External crates.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+
+[workspace.lints.rust]
+# No unsafe code. A module that truly needs it opts in with #[allow(unsafe_code)] and is listed in
+# AGENTS.md; `deny` rather than `forbid` keeps that possible.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# Pedantic everywhere: every crate opts in with `[lints] workspace = true` (checked by
+# `cargo xtask check-layers`), and CI runs clippy with `-D warnings`. Lint levels can't be set in
+# clippy.toml, which only configures lints. The group has a lower priority so the single-lint
+# levels below override it.
+pedantic = { level = "warn", priority = -1 }
+# Noisy pedantic lints, allowed everywhere:
+# - suggests #[must_use] on nearly every pure function: clutter that catches nothing.
+must_use_candidate = "allow"
+# - wants an "# Errors" section on every pub fn that returns Result; the error enums document failures.
+missing_errors_doc = "allow"
+# - usize/u32 to f32 for pixel coordinates and sizes is exact below 2^24, beyond any image side.
+cast_precision_loss = "allow"
+# - x, y, w, h, r, g, b and a are the clearest names in pixel and geometry maths.
+many_single_char_names = "allow"
+# The other cast lints (truncation, sign loss, wrap) stay on: they are real bugs in index and offset
+# maths. Keep pixel quantization in a few helpers that allow them locally.
+#
+# Leftover debugging and unfinished stubs (restriction lints, as in PhotoCraft and LightCraft).
+dbg_macro = "warn"
+todo = "warn"
