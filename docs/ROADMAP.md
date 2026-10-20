@@ -23,7 +23,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] GitHub Actions CI: fmt, Clippy, check-layers and the tests on Ubuntu, macOS (arm64) and Windows, with cargo caching
 - [x] Dependency policy job: `cargo deny check` with the license policy in `deny.toml`, and `cargo audit`
 - [x] `cargo xtask ci`: runs what CI runs and prints a summary that lists the tests skipped for want of hardware or corpus files (recorded with `florastack-testkit`'s `skip!`)
-- [ ] First CI run on GitHub green on all three operating systems
+- [x] First CI run on GitHub green on all three operating systems (PR #1, 2026-10-20)
 
 ### 0.3 Test corpus, golden images and benchmarks
 
