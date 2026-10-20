@@ -1,0 +1,4 @@
+# Same style as PhotoCraft and LightCraft: wide lines, small items kept on one line.
+edition = "2024"
+max_width = 150
+use_small_heuristics = "Max"

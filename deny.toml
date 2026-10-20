@@ -1,0 +1,60 @@
+# cargo-deny's policy for FloraStack's dependencies: `cargo deny check` (CI and `cargo xtask ci` run it) checks
+# licenses, banned crates, sources and RustSec advisories against this file.
+# Reference: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Every target platform and every feature, so that Windows-only, macOS-only and optional dependencies (such as
+# camera control behind a cargo feature) are checked too.
+all-features = true
+
+[advisories]
+# Vulnerable, unmaintained and unsound crates fail the check. Ignore an advisory only with a reason, in the same
+# change that needs it: { id = "RUSTSEC-0000-0000", reason = "..." }.
+ignore = []
+
+[licenses]
+# Permissive licenses, plus MPL-2.0: its copyleft covers only the MPL-licensed files themselves, it is common in
+# Rust dependency trees, and it doesn't reach FloraStack's own code. Everything else is denied, in particular GPL,
+# LGPL and AGPL in every version (AGENTS.md, Clean-room). A crate offering a choice ("MIT OR GPL-3.0") passes when
+# one of its options is allowed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+# The list is a policy, not an inventory: licenses that no dependency uses yet are expected.
+unused-allowed-license = "allow"
+confidence-threshold = 0.8
+# Dev-dependencies are checked too: the clean-room rule covers test code.
+include-dev = true
+# Font licenses, allowed only for the crate that bundles egui's default fonts: OFL-1.1 (Noto Emoji) and the Ubuntu
+# Font Licence (Ubuntu-Light). The desktop app adds egui in Phase 5; until then the exception matches nothing.
+exceptions = [
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
+]
+unused-license-exception = "allow"
+
+[licenses.private]
+# Check FloraStack's own crates (MIT OR Apache-2.0) too.
+ignore = false
+
+[bans]
+# Two versions of a crate are worth knowing about, not a failure.
+multiple-versions = "warn"
+
+[sources]
+# Crates come from crates.io only. A git dependency (such as a pinned LightCraft commit) is added to allow-git in
+# the same change that adds the dependency.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

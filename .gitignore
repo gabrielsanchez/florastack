@@ -1,0 +1,6 @@
+/target
+
+# The test corpus: downloads and local stacks stay out of the repository; the manifest and its README are tracked.
+/corpus/*
+!/corpus/manifest.toml
+!/corpus/README.md

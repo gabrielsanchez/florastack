@@ -1,0 +1,11 @@
+# Clippy configuration. Lint levels (pedantic on, and the documented exceptions) are set in
+# [workspace.lints.clippy] in the root Cargo.toml: this file can configure lints but not enable them.
+
+# Names that pedantic's doc_markdown lint would otherwise want in backticks. ".." keeps Clippy's
+# default list (which already has WebGPU, WebP and sRGB).
+doc-valid-idents = ["FloraStack", "PhotoCraft", "LightCraft", "OpenEXR", ".."]
+
+# Never crash (AGENTS.md): the workspace lints reject unwrap, expect and panic! outside tests; tests may use them.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

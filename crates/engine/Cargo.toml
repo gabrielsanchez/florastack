@@ -1,0 +1,20 @@
+[package]
+name = "florastack-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+florastack-core.workspace = true
+florastack-codecs.workspace = true
+florastack-raw.workspace = true
+florastack-align.workspace = true
+florastack-stack.workspace = true
+florastack-gpu.workspace = true
+florastack-project.workspace = true
+florastack-retouch.workspace = true

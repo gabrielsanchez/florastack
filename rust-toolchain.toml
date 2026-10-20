@@ -1,0 +1,6 @@
+# The one toolchain for builds, tests and CI; rustup installs it on first use.
+# It must stay at 1.95 or later, the floor set for the LightCraft crates added in Phase 1.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
