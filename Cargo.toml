@@ -27,7 +27,12 @@ florastack-testkit = { path = "crates/testkit" }
 # External crates.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
 toml = "1"
+# Benchmarks only (dev-dependency): `cargo xtask bench` runs them and summarizes criterion's JSON estimates, so
+# neither the HTML/plot reports (plotters) nor criterion's own rayon parallelism are needed. 0.7 is the newest release
+# in pure Rust: 0.8 depends on `alloca`, which compiles C (AGENTS.md, Pure Rust).
+criterion ={ version = "0.7", default-features = false, features = ["cargo_bench_support"] }
 
 [workspace.lints.rust]
 # No unsafe code. A module that truly needs it opts in with #[allow(unsafe_code)] and is listed in

@@ -8,6 +8,12 @@ Third-party material
 FloraStack contains the following third-party code. None of it ships in the apps: it is test and
 developer tooling. ATTRIBUTION.md records the source of each item and what it is used for.
 
+- xtask/src/sha256.rs is adapted from PhotoCraft (https://github.com/storytold/photocraft), file
+  xtask/src/sha256.rs, and the download flow of xtask/src/corpus/ follows its xtask/src/corpus.rs
+  and xtask/src/pinned.rs.
+  Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
+  Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
+  are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).
 - crates/testkit/src/lib.rs and xtask/src/ci.rs are adapted from LightCraft
   (https://github.com/storytold/lightcraft), files crates/testkit/src/lib.rs and xtask/src/ci_report.rs.
   Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.

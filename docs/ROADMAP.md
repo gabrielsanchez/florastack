@@ -27,23 +27,26 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 0.3 Test corpus, golden images and benchmarks
 
-- [ ] `cargo xtask corpus`: pinned, sha256-verified sample stacks from `corpus/manifest.toml` into the gitignored `corpus/`, with a README on adding stacks
-- [ ] Local stacks in `corpus/local/<name>/`, each with a `stack.toml` (subject type, frame order, optional ground-truth notes)
-- [ ] Synthetic stack generator in florastack-core's test utilities: depth-dependent blur, focus breathing, sub-pixel shift, rotation, brightness jitter, sensor noise and dust, with the sharp image and true transforms as ground truth
-- [ ] florastack-metrics: PSNR, SSIM, halo detector, flat-region noise estimate and color shift (mean deltaE2000)
-- [ ] `cargo xtask bench`: criterion benchmarks with a JSON summary in `target/bench-summary.json`
-- [ ] Tests: the generator with zero blur and no transform returns its input
+- [x] `cargo xtask corpus`: pinned, sha256-verified sample stacks from `corpus/manifest.toml` into the gitignored `corpus/`, with a README on adding stacks
+- [x] Local stacks in `corpus/local/<name>/`, each with a `stack.toml` (subject type, frame order, optional ground-truth notes)
+- [x] Synthetic stack generator in florastack-core's test utilities: depth-dependent blur, focus breathing, sub-pixel shift, rotation, brightness jitter, sensor noise and dust, with the sharp image and true transforms as ground truth
+- [x] florastack-metrics: PSNR, SSIM, halo detector, flat-region noise estimate and color shift (mean deltaE2000)
+- [x] `cargo xtask bench`: criterion benchmarks with a JSON summary in `target/bench-summary.json`
+- [x] Tests: the generator with zero blur and no transform returns its input
+- [x] `Image<T>` and the `Affine` transform in florastack-core ahead of 1.1, because the generator and the metrics need them (see 1.1)
+- [x] check-layers: florastack-core's `testutil` feature only from `[dev-dependencies]`, never by default
 
 ## Phase 1 — Core I/O and model
 
 ### 1.1 Image buffers and tiling
 
-- [ ] `Image<T>` over u8, u16 and f32 with 1 to 4 channels, a row stride and a color-space tag (linear or sRGB-encoded, optional ICC profile)
+- [x] `Image<T>` over u8, u16 and f32 with 1 to 4 channels, a row stride and a color-space tag (linear or sRGB-encoded, optional ICC profile), done in 0.3; the rest of 1.1 builds on it
 - [ ] Conversions between sample types and between encoded and linear, vectorized and parallel with rayon; stacking math in linear f32
 - [ ] Tiled view: overlapping tiles stitched back with feathered seams
 - [ ] Disk-backed `TileStore`: temp files, LRU eviction and a RAM budget, so 500+ frames at 60 MP never need to be resident, with plain file I/O
 - [ ] Basic ops: Lanczos3 resize, separable Gaussian blur with a running-sum approximation for large radii, Sobel, Laplacian, and bilinear and bicubic affine warps
 - [ ] Property tests (proptest) for conversions and tile round trips; criterion benches for blur and warp on a 24 MP image
+- [ ] The synthetic generator's private exact blur and bicubic warp (`crates/core/src/testutil/ops.rs`) used as oracles for the new ops, or replaced by them where the ops are exact enough
 
 ### 1.2 LightCraft dependency, codecs, metadata and color *(plan first)*
 
@@ -54,6 +57,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Embedded ICC profiles kept (sRGB assumed without one), with output in the input profile or a wide working space
 - [ ] EXIF orientation honored or ignored by option
 - [ ] Tests: round trip per format and bit depth, metadata, orientation; PngSuite and TIFF fixtures fetched by `cargo xtask corpus`
+- [ ] `cargo xtask corpus`: archive entries (PngSuite ships as one `.tgz`) and a place for format fixtures beside the stacks
 
 ### 1.3 RAW import through LightCraft
 
@@ -84,7 +88,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### Before Phase 2
 
-- [ ] 5–10 real stacks (a bristly insect, a flower, a coin, a handheld landscape) in the corpus
+- [ ] 5–10 real stacks (a bristly insect, a flower, a coin, a handheld landscape) in the corpus: fill the placeholders of `corpus/manifest.toml` or add local stacks (`corpus/README.md`)
 
 ## Phase 2 — Alignment
 

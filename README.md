@@ -15,9 +15,11 @@ cargo clippy --workspace --all-targets -- -D warnings   # lint (Clippy pedantic,
 cargo fmt --all --check                                 # check formatting
 cargo xtask check-layers                                # check which crate may depend on which
 cargo xtask ci                                          # everything CI runs, with a summary of skipped tests
+cargo xtask corpus                                      # download the sample stacks pinned in corpus/manifest.toml
+cargo xtask bench                                       # criterion benchmarks, summarized in target/bench-summary.json
 ```
 
-`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`.
+`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl`, which comes with Windows 10 and later, macOS and most Linux systems; [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks.
 
 ## Contributing
 

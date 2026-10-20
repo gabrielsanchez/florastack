@@ -1,0 +1,74 @@
+# FloraStack's test corpus: real focus stacks that `cargo xtask corpus` downloads into corpus/stacks/<name>/,
+# checking every file against its sha256 before moving it into place. Only this file and README.md are tracked:
+# the downloads, and the local stacks in corpus/local/, are gitignored. README.md says how to add a stack.
+#
+# Each [[stack]] has:
+#   name          its folder name: lower-case letters, digits and dashes
+#   subject       insect, flower, coin, landscape or microscopy
+#   frame_order   near-to-far, far-to-near or unknown: which way focus moves through the files, in the order listed
+#   description   free text (optional)
+#   source        the page the stack comes from (required unless a placeholder)
+#   license       the license of the images, an SPDX identifier where there is one (required unless a placeholder)
+#   attribution   whom to credit, as the license asks (optional)
+#   placeholder   true for a slot still to be filled: it lists no files and is never downloaded
+#   ground_truth  optional: { notes = "what must come out right", reference = "one of the files: a trusted result" }
+#   [[stack.files]]  the frames in focus order, plus the reference if there is one: name, url (https://, http://
+#                    or file://), sha256 (64 lower-case hex digits) and size in bytes
+#
+# A filled-in stack looks like this; `cargo xtask corpus --hash <folder>` prints the [[stack.files]] entries:
+#
+# [[stack]]
+# name = "bee-head-rail"
+# subject = "insect"
+# frame_order = "near-to-far"
+# description = "Bee head at 3x on a rail, 80 frames, 16-bit TIFF"
+# source = "https://example.org/stacks/bee-head"
+# license = "CC-BY-4.0"
+# attribution = "A. Photographer"
+# ground_truth = { notes = "The hairs over the eye stay sharp and free of halos." }
+#
+# [[stack.files]]
+# name = "bee-001.tif"
+# url = "https://example.org/stacks/bee-head/bee-001.tif"
+# sha256 = "<64 lower-case hex digits>"
+# size = 74649808
+
+version = 1
+
+# Placeholders: the stacks the roadmap asks for before Phase 2 (docs/ROADMAP.md, "Before Phase 2"). Replace each
+# with a real, freely licensed stack, or add the stack under corpus/local/ instead and delete its placeholder.
+
+[[stack]]
+name = "insect-bristly"
+placeholder = true
+subject = "insect"
+frame_order = "near-to-far"
+description = "Wanted: a bristly insect (fly, bee or weevil) at 2-5x, 40-150 frames. Hairs crossing a dark background are where pyramid halos and depth-map smearing show."
+
+[[stack]]
+name = "flower"
+placeholder = true
+subject = "flower"
+frame_order = "near-to-far"
+description = "Wanted: a flower at 0.5-1x, 15-40 frames, with smooth petals in front of a soft background, which tests color shift, tonal smoothness and noise."
+
+[[stack]]
+name = "coin"
+placeholder = true
+subject = "coin"
+frame_order = "far-to-near"
+description = "Wanted: a coin or other flat, shiny subject at 1-2x, 10-30 frames: little depth, strong specular edges and fine lettering."
+
+[[stack]]
+name = "landscape-handheld"
+placeholder = true
+subject = "landscape"
+frame_order = "unknown"
+description = "Wanted: a handheld landscape, 3-10 frames from near foreground to infinity, with the shifts, rotation and focus breathing that handheld shooting brings."
+
+[[stack]]
+name = "microscopy"
+placeholder = true
+subject = "microscopy"
+frame_order = "near-to-far"
+description = "Wanted: a microscope stack (diatoms, pollen or a slide specimen) at 10x or more, 50-300 frames: a deep stack for slabbing and a test of the depth map."

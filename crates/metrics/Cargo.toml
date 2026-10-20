@@ -11,3 +11,13 @@ workspace = true
 
 [dependencies]
 florastack-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Synthetic stacks and the seeded generator for the tests and benches.
+florastack-core = { workspace = true, features = ["testutil"] }
+criterion.workspace = true
+
+[[bench]]
+name = "metrics"
+harness = false

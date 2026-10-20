@@ -16,7 +16,7 @@ It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `car
 
 | Crate | Path | Responsibility | May depend on |
 |---|---|---|---|
-| `florastack-core` | `crates/core` | Image buffers, pixel formats, geometry, error types, and the product identity (`branding`) | no FloraStack crate |
+| `florastack-core` | `crates/core` | Image buffers (`Image<T>`), pixel formats, geometry (`Affine`), error types and the product identity (`branding`); behind its test-only `testutil` feature, the synthetic stack generator | no FloraStack crate |
 | `florastack-codecs` | `crates/codecs` | Image files with their metadata and ICC profiles | core |
 | `florastack-raw` | `crates/raw` | RAW decoding (an adapter over LightCraft's decoders) and the develop step to linear RGB | core |
 | `florastack-align` | `crates/align` | Frame alignment, stack ordering and framing, dust and movement handling; CPU reference for GPU kernels | core |
@@ -25,11 +25,11 @@ It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `car
 | `florastack-project` | `crates/project` | The project model, project folders and presets | core |
 | `florastack-retouch` | `crates/retouch` | Retouching brushes and stroke layers | core, project |
 | `florastack-engine` | `crates/engine` | The command registry, jobs and orchestration; re-exports what the apps need | every library crate above |
-| `florastack-metrics` | `crates/metrics` | Image-quality metrics for tests and benchmarks | core; other crates use it as a dev-dependency only |
+| `florastack-metrics` | `crates/metrics` | Image-quality metrics for tests and benchmarks: PSNR, SSIM, halos, flat-region noise and color shift (CIEDE2000) | core; other crates use it as a dev-dependency only |
 | `florastack-testkit` | `crates/testkit` | Test tooling: `skip!`, which records a test that can't run here | nothing; other crates use it as a dev-dependency only |
 | `florastack` | `apps/florastack` | The egui desktop app | engine only |
 | `florastack-cli` | `apps/florastack-cli` | The command-line tool | engine only |
-| `xtask` | `xtask` | Developer tooling: `cargo xtask check-layers`, `cargo xtask ci` | no FloraStack crate |
+| `xtask` | `xtask` | Developer tooling: `cargo xtask check-layers`, `ci`, `corpus` and `bench` | no FloraStack crate |
 
 ### Layering rules
 
@@ -37,11 +37,19 @@ It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `car
 
 - A crate depends only on the workspace crates in its row, in every dependency table, plus the two test-only crates below as dev-dependencies. `florastack-core` depends on none, so that every crate can depend on it.
 - The apps depend on `florastack-engine` alone. When an app needs a type from another crate, the engine re-exports it.
-- `florastack-metrics` and `florastack-testkit` appear only in `[dev-dependencies]`, so none of their code ships.
+- `florastack-metrics` and `florastack-testkit` appear only in `[dev-dependencies]`, and so does `florastack-core`'s `testutil` feature (which no `default` feature may include), so none of their code ships.
 - Only `apps/florastack` may use a UI toolkit (`egui*`, `eframe`, `winit`, `rfd`). The engine and the libraries stay headless.
 - Every crate inherits the workspace lints with `[lints] workspace = true`, and the binaries named in `branding.toml` must exist.
 - A new crate gets its `RULES` entry and a row in this table in the change that adds it. Don't widen an allowlist to make a build pass: move the code to the right crate instead.
 - External dependency versions live in `[workspace.dependencies]` in the root `Cargo.toml`, and crates use them with `name.workspace = true`.
+
+## Test data and benchmarks
+
+Alignment and stacking are scored, not eyeballed, against three kinds of test data:
+
+- **Synthetic stacks** with exact ground truth: `florastack_core::testutil` (enable the `testutil` feature in `[dev-dependencies]`). `generate` turns a sharp image and a depth map, such as `scene::textured`'s, into frames with depth-dependent blur, focus breathing, sub-pixel shift, rotation, brightness jitter, noise and dust; `StackParams::identity`, `clean` and `noisy_dusty` are the standard sets. Score alignment with `GroundTruth::relative` and `transform_error`, and stacking against `GroundTruth::sharp` with `florastack-metrics`.
+- **Real stacks** in the gitignored `corpus/` folder: `cargo xtask corpus` downloads the ones `corpus/manifest.toml` pins (sha256-verified) and checks the local ones; `corpus/README.md` says how to add either kind. A test that needs one calls `skip!(Corpus, ...)` when it is missing. Never commit corpus files.
+- **Benchmarks**: criterion benches in each crate's `benches/` (each file starts with the `#![allow(...)]` line of the never-crash rules). `cargo xtask bench` runs them and writes `target/bench-summary.json`, which later changes compare against. CI compiles the benches but doesn't run them.
 
 ## Everything is a command
 

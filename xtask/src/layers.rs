@@ -21,6 +21,9 @@ pub struct Rules {
     /// Test-only crates: any crate may list them in `[dev-dependencies]`, none in `[dependencies]` or
     /// `[build-dependencies]`.
     pub dev_only: &'static [&'static str],
+    /// Test-only features of workspace crates, as (crate, feature): enabled only from `[dev-dependencies]`, and never
+    /// by the crate's `default` feature, so that their code doesn't ship.
+    pub dev_only_features: &'static [(&'static str, &'static str)],
     /// External UI toolkit crates; a trailing `*` matches every name with that prefix.
     pub ui_crates: &'static [&'static str],
     /// The only crates that may depend on a UI toolkit.
@@ -64,6 +67,8 @@ pub const RULES: Rules = Rules {
     // The CPU references that the GPU kernels' agreement tests compare against (AGENTS.md, CPU oracle).
     allowed_dev: &[("florastack-gpu", &["florastack-align", "florastack-stack"])],
     dev_only: &["florastack-metrics", "florastack-testkit"],
+    // The synthetic stack generator and test scenes (crates/core/src/testutil).
+    dev_only_features: &[(CORE, "testutil")],
     ui_crates: &["egui*", "eframe", "winit", "rfd"],
     ui_allowed: &["florastack"],
 };
@@ -94,6 +99,8 @@ pub struct Dep {
     pub kind: DepKind,
     /// Whether the dependency is itself a workspace crate.
     pub workspace: bool,
+    /// The features the dependency declaration enables.
+    pub features: Vec<String>,
 }
 
 /// A workspace crate, as far as the rules are concerned.
@@ -105,6 +112,8 @@ pub struct Crate {
     pub inherits_lints: bool,
     /// Names of its binary targets.
     pub bins: Vec<String>,
+    /// What its own `default` feature enables.
+    pub default_features: Vec<String>,
 }
 
 /// A broken rule; its message says how to fix it.
@@ -118,6 +127,10 @@ pub enum Violation {
     NotAllowed { krate: String, dep: String, kind: DepKind, allowed: &'static [&'static str] },
     /// A test-only crate outside `[dev-dependencies]`.
     DevOnly { krate: String, dep: String, kind: DepKind },
+    /// A test-only feature enabled outside `[dev-dependencies]`.
+    DevOnlyFeature { krate: String, dep: String, feature: &'static str, kind: DepKind },
+    /// A test-only feature in a crate's `default` feature.
+    DefaultDevOnlyFeature { krate: String, feature: &'static str },
     /// A UI toolkit used by a crate that may not use one.
     UiToolkit { krate: String, dep: String, allowed: &'static [&'static str] },
     /// A manifest without `[lints] workspace = true`.
@@ -141,6 +154,12 @@ impl fmt::Display for Violation {
             }
             Violation::DevOnly { krate, dep, kind } => {
                 write!(f, "{krate} depends on {dep} in {kind}, but {dep} is test-only: move it to [dev-dependencies]")
+            }
+            Violation::DevOnlyFeature { krate, dep, feature, kind } => {
+                write!(f, "{krate} enables {dep}'s test-only feature `{feature}` in {kind}: enable it in [dev-dependencies] only")
+            }
+            Violation::DefaultDevOnlyFeature { krate, feature } => {
+                write!(f, "{krate}'s default features include its test-only feature `{feature}`: take it out of `default`")
             }
             Violation::UiToolkit { krate, dep, allowed } => {
                 let allowed = allowed.join(", ");
@@ -172,6 +191,18 @@ pub fn check(rules: &Rules, crates: &[Crate], branding: &Branding) -> Vec<Violat
             out.push(Violation::Unregistered { krate: c.name.clone() });
             continue;
         };
+        for &(owner, feature) in rules.dev_only_features {
+            if owner == c.name && c.default_features.iter().any(|f| f == feature) {
+                out.push(Violation::DefaultDevOnlyFeature { krate: c.name.clone(), feature });
+            }
+        }
+        for d in c.deps.iter().filter(|d| d.workspace && d.kind != DepKind::Dev) {
+            for &(owner, feature) in rules.dev_only_features {
+                if owner == d.name && d.features.iter().any(|f| f == feature) {
+                    out.push(Violation::DevOnlyFeature { krate: c.name.clone(), dep: d.name.clone(), feature, kind: d.kind });
+                }
+            }
+        }
         let allowed_dev = lookup(rules.allowed_dev, &c.name).unwrap_or_default();
         let permitted = |dep: &str, kind: DepKind| allowed.contains(&dep) || (kind == DepKind::Dev && allowed_dev.contains(&dep));
         for d in &c.deps {
@@ -231,7 +262,8 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
                 Some("dev") => DepKind::Dev,
                 Some(other) => return Err(format!("cargo metadata: unknown dependency kind {other:?} in {name}")),
             };
-            deps.push(Dep { name: dep.to_owned(), kind, workspace: members.contains(&dep) });
+            let features = strings(&d["features"]);
+            deps.push(Dep { name: dep.to_owned(), kind, workspace: members.contains(&dep), features });
         }
         let bins = p["targets"]
             .as_array()
@@ -243,10 +275,16 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
         let manifest = p["manifest_path"].as_str().ok_or_else(|| format!("cargo metadata: {name} has no manifest_path"))?;
         let text = std::fs::read_to_string(manifest).map_err(|e| format!("cannot read {manifest}: {e}"))?;
         let inherits_lints = inherits_workspace_lints(&text).map_err(|e| format!("{manifest}: {e}"))?;
-        crates.push(Crate { name: name.to_owned(), deps, inherits_lints, bins });
+        let default_features = strings(&p["features"]["default"]);
+        crates.push(Crate { name: name.to_owned(), deps, inherits_lints, bins, default_features });
     }
     crates.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(crates)
+}
+
+/// The strings of a JSON array (none for anything else).
+fn strings(value: &Value) -> Vec<String> {
+    value.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
 }
 
 /// Whether a manifest has `[lints] workspace = true`.
@@ -305,9 +343,10 @@ mod tests {
             .iter()
             .map(|&(name, allowed)| Crate {
                 name: name.to_owned(),
-                deps: allowed.iter().map(|&dep| Dep { name: dep.to_owned(), kind: DepKind::Normal, workspace: true }).collect(),
+                deps: allowed.iter().map(|&dep| Dep { name: dep.to_owned(), kind: DepKind::Normal, workspace: true, features: Vec::new() }).collect(),
                 inherits_lints: true,
                 bins: branding.binary_names().into_iter().filter(|bin| *bin == name).map(str::to_owned).collect(),
+                default_features: Vec::new(),
             })
             .collect()
     }
@@ -317,7 +356,7 @@ mod tests {
     }
 
     fn add_dep(crates: &mut [Crate], krate: &str, dep: &str, kind: DepKind) {
-        get(crates, krate).deps.push(Dep { name: dep.to_owned(), kind, workspace: dep.starts_with("florastack") });
+        get(crates, krate).deps.push(Dep { name: dep.to_owned(), kind, workspace: dep.starts_with("florastack"), features: Vec::new() });
     }
 
     fn violations(crates: &[Crate]) -> Vec<Violation> {
@@ -400,7 +439,13 @@ mod tests {
         let mut ws = workspace();
         ws.retain(|c| c.name != "florastack-gpu");
         get(&mut ws, ENGINE).deps.retain(|d| d.name != "florastack-gpu");
-        ws.push(Crate { name: "florastack-capture".to_owned(), deps: Vec::new(), inherits_lints: true, bins: Vec::new() });
+        ws.push(Crate {
+            name: "florastack-capture".to_owned(),
+            deps: Vec::new(),
+            inherits_lints: true,
+            bins: Vec::new(),
+            default_features: Vec::new(),
+        });
         let v = violations(&ws);
         assert_eq!(v.len(), 2, "{v:?}");
         assert!(v.contains(&Violation::StaleEntry { krate: "florastack-gpu" }), "{v:?}");
@@ -420,6 +465,30 @@ mod tests {
             let v = violations(&ws);
             assert!(matches!(&v[..], [Violation::UiToolkit { krate: k, .. }] if k == krate), "{krate} -> {dep}: {v:?}");
         }
+    }
+
+    #[test]
+    fn test_only_features_are_enabled_from_dev_dependencies_only() {
+        assert_eq!(RULES.dev_only_features, [(CORE, "testutil")]);
+        let with_feature = |kind| Dep { name: CORE.to_owned(), kind, workspace: true, features: vec!["testutil".to_owned()] };
+        let mut ws = workspace();
+        for krate in ["florastack-align", "florastack-metrics", CORE] {
+            get(&mut ws, krate).deps.push(with_feature(DepKind::Dev));
+        }
+        let v = violations(&ws);
+        assert!(v.is_empty(), "{v:?}");
+        for kind in [DepKind::Normal, DepKind::Build] {
+            let mut ws = workspace();
+            get(&mut ws, "florastack-stack").deps.push(with_feature(kind));
+            let v = violations(&ws);
+            assert!(
+                matches!(&v[..], [Violation::DevOnlyFeature { krate, feature: "testutil", kind: k, .. }] if krate == "florastack-stack" && *k == kind),
+                "{v:?}"
+            );
+        }
+        let mut ws = workspace();
+        get(&mut ws, CORE).default_features = vec!["testutil".to_owned()];
+        assert_eq!(violations(&ws), [Violation::DefaultDevOnlyFeature { krate: CORE.to_owned(), feature: "testutil" }]);
     }
 
     #[test]
@@ -457,6 +526,7 @@ mod tests {
             .flat_map(|&(_, deps)| deps)
             .chain(RULES.allowed_dev.iter().flat_map(|(name, deps)| std::iter::once(name).chain(deps.iter())))
             .chain(RULES.dev_only)
+            .chain(RULES.dev_only_features.iter().map(|(owner, _)| owner))
             .chain(RULES.ui_allowed);
         for name in referenced {
             assert!(names.contains(name), "{name} is not a registered crate");
