@@ -15,7 +15,9 @@ workspace = true
 testutil = []
 
 [dependencies]
+rayon.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [build-dependencies]
 # build.rs reads branding.toml into the constants of `florastack_core::branding`.
@@ -23,10 +25,16 @@ serde.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-# The crate itself with `testutil`, for its benches (its unit tests see the module without the feature).
+# The crate itself with `testutil`, for its benches and integration tests (its unit tests see the module without the
+# feature).
 florastack-core = { workspace = true, features = ["testutil"] }
 criterion.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "synth"
+harness = false
+
+[[bench]]
+name = "ops"
 harness = false

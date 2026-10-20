@@ -16,7 +16,7 @@ It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `car
 
 | Crate | Path | Responsibility | May depend on |
 |---|---|---|---|
-| `florastack-core` | `crates/core` | Image buffers (`Image<T>`), pixel formats, geometry (`Affine`), error types and the product identity (`branding`); behind its test-only `testutil` feature, the synthetic stack generator | no FloraStack crate |
+| `florastack-core` | `crates/core` | Image buffers (`Image<T>`, `AnyImage`), pixel formats and their conversions (sample types, sRGB and linear), geometry (`Affine`, `Rect`), the tiled view (`TileGrid`), the tile cache (`TileCache` over a `TileStore`, temporary files by default), the basic operations (blur, resize, Sobel, Laplacian, warps), error types and the product identity (`branding`); behind its test-only `testutil` feature, the synthetic stack generator | no FloraStack crate |
 | `florastack-codecs` | `crates/codecs` | Image files with their metadata and ICC profiles | core |
 | `florastack-raw` | `crates/raw` | RAW decoding (an adapter over LightCraft's decoders) and the develop step to linear RGB | core |
 | `florastack-align` | `crates/align` | Frame alignment, stack ordering and framing, dust and movement handling; CPU reference for GPU kernels | core |
@@ -64,7 +64,7 @@ The registry and the job engine are built in Phase 1 (`docs/ROADMAP.md`).
 
 ## CPU oracle
 
-Every GPU kernel in `florastack-gpu` has a CPU reference implementation in `florastack-stack` or `florastack-align`, and a test that runs both on random and synthetic inputs and asserts that they agree within a documented tolerance. Floating-point results need not be bitwise equal: write the tolerance, and why it is enough, next to the assertion.
+Every GPU kernel in `florastack-gpu` has a CPU reference implementation in `florastack-core` (conversions and the basic operations), `florastack-stack` or `florastack-align`, and a test that runs both on random and synthetic inputs and asserts that they agree within a documented tolerance. Floating-point results need not be bitwise equal: write the tolerance, and why it is enough, next to the assertion.
 
 - Write the CPU version first. It defines what is correct, and it is the fallback when no GPU adapter is usable.
 - A kernel lands with its CPU reference and its agreement test, never before them.

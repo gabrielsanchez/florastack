@@ -1,8 +1,14 @@
-//! Reference image operations for the generator: an exact separable Gaussian blur and a bicubic affine warp, both
-//! with clamp-to-edge borders. Private, simple and unoptimized; the public, fast operations arrive with roadmap step
-//! 1.1, and these can then serve as their test oracles or give way to them.
+//! Numeric helpers for the generator and the scenes, and the tests' oracle for [`crate::ops`]: an exact separable
+//! Gaussian blur and a bicubic affine warp, both with clamp-to-edge borders, written as plain loops.
+//!
+//! The generator used these until roadmap step 1.1 and now uses the public operations (the exact kernel and the
+//! bicubic warp with clamped borders), which are parallel and much faster. The tests below hold the public operations
+//! to these references bit for bit, so the synthetic stacks didn't change when the generator switched, and they keep
+//! the references honest with their own checks.
 
+#[cfg(test)]
 use crate::geometry::Affine;
+#[cfg(test)]
 use crate::image::{Image, ImageError};
 
 /// `v` as an index: NaN and negative values give 0, and the caller clamps the upper end.
@@ -19,6 +25,7 @@ pub(super) fn to_f32(v: f64) -> f32 {
 
 /// The normalized Gaussian kernel of standard deviation `sigma` pixels, with radius `ceil(3 sigma)`: `[1.0]` when
 /// `sigma` is zero, negative or NaN.
+#[cfg(test)]
 pub(super) fn gaussian_kernel(sigma: f64) -> Vec<f32> {
     if sigma.is_nan() || sigma <= 0.0 {
         return vec![1.0];
@@ -30,6 +37,7 @@ pub(super) fn gaussian_kernel(sigma: f64) -> Vec<f32> {
 }
 
 /// `image` blurred with a Gaussian of standard deviation `sigma` pixels (a copy when `sigma` is 0).
+#[cfg(test)]
 pub(super) fn gaussian_blur(image: &Image<f32>, sigma: f64) -> Result<Image<f32>, ImageError> {
     let kernel = gaussian_kernel(sigma);
     if kernel.len() == 1 {
@@ -67,6 +75,7 @@ pub(super) fn gaussian_blur(image: &Image<f32>, sigma: f64) -> Result<Image<f32>
 
 /// The weights of Keys' cubic convolution (a = -0.5) for the four samples around a point a fraction `t` past the
 /// second one. At `t = 0` they are exactly `[0, 1, 0, 0]`.
+#[cfg(test)]
 fn keys_weights(t: f64) -> [f64; 4] {
     const A: f64 = -0.5;
     let near = |d: f64| ((A + 2.0) * d - (A + 3.0)) * d * d + 1.0;
@@ -75,6 +84,7 @@ fn keys_weights(t: f64) -> [f64; 4] {
 }
 
 /// The four sample indices around coordinate `v` on an axis of `len` samples, clamped to the edge, and their weights.
+#[cfg(test)]
 fn taps(v: f64, len: usize) -> ([usize; 4], [f64; 4]) {
     let floor = v.floor();
     let last = (len - 1) as f64;
@@ -86,6 +96,7 @@ fn taps(v: f64, len: usize) -> ([usize; 4], [f64; 4]) {
 /// `inverse(p)`, with the same size as `src`. Sampling is Keys' bicubic convolution (R. G. Keys, "Cubic convolution
 /// interpolation for digital image processing", IEEE Transactions on Acoustics, Speech, and Signal Processing 29(6),
 /// 1981), which reproduces a sample exactly when the point lands on it; outside `src` the edge pixels repeat.
+#[cfg(test)]
 pub(super) fn warp(src: &Image<f32>, inverse: &Affine) -> Result<Image<f32>, ImageError> {
     let (w, h, c) = (src.width(), src.height(), src.channels());
     let rows: Vec<&[f32]> = src.rows().collect();
@@ -111,8 +122,70 @@ pub(super) fn warp(src: &Image<f32>, inverse: &Affine) -> Result<Image<f32>, Ima
 
 #[cfg(test)]
 mod tests {
+    use super::super::rng::Rng;
     use super::*;
     use crate::image::ColorSpace;
+    use crate::ops::{self, BlurMethod, Border, Interpolation};
+
+    /// A `w` x `h` image of random samples in `[-0.5, 1.5)`, with `pad` NaN samples of padding after each row.
+    fn random_image(w: usize, h: usize, c: usize, pad: usize, seed: u64) -> Image<f32> {
+        let mut rng = Rng::new(seed);
+        let mut data = Vec::new();
+        for _ in 0..h {
+            data.extend((0..w * c).map(|_| to_f32(rng.range(-0.5, 1.5))));
+            data.extend(std::iter::repeat_n(f32::NAN, pad));
+        }
+        Image::from_vec_with_stride(w, h, c, w * c + pad, ColorSpace::LINEAR, data).unwrap()
+    }
+
+    fn same_bits(a: &Image<f32>, b: &Image<f32>) -> bool {
+        a.same_shape(b) && a.rows().flatten().zip(b.rows().flatten()).all(|(x, y)| x.to_bits() == y.to_bits())
+    }
+
+    #[test]
+    fn the_public_exact_blur_matches_this_one_bit_for_bit() {
+        // Taller than the public blur's 64-row bands too, with radii whose ring of rows wraps around (2 x 36 + 64 < 150,
+        // 2 x 90 + 64 < 300).
+        let cases = [
+            (37, 23, 3, 0, 0.8),
+            (64, 40, 1, 3, 2.5),
+            (19, 51, 4, 1, 4.0),
+            (300, 7, 2, 0, 7.5),
+            (5, 3, 3, 0, 12.0),
+            (1, 9, 1, 0, 1.0),
+            (13, 200, 3, 2, 2.0),
+            (50, 150, 1, 0, 12.0),
+            (8, 300, 2, 1, 30.0),
+        ];
+        for (i, (w, h, c, pad, sigma)) in cases.into_iter().enumerate() {
+            let image = random_image(w, h, c, pad, i as u64);
+            let expected = gaussian_blur(&image, sigma).unwrap();
+            let mut exact = image.clone();
+            ops::gaussian_blur_in_place(&mut exact, sigma, BlurMethod::Exact).unwrap();
+            assert!(same_bits(&exact, &expected), "{w}x{h}x{c} sigma {sigma}");
+            assert_eq!(ops::gaussian_kernel(sigma), gaussian_kernel(sigma));
+            if sigma <= ops::AUTO_EXACT_MAX_SIGMA {
+                assert!(same_bits(&ops::gaussian_blur(&image, sigma).unwrap(), &expected), "auto is exact up to its threshold");
+            }
+        }
+    }
+
+    #[test]
+    fn the_public_bicubic_warp_matches_this_one_bit_for_bit() {
+        let mut rng = Rng::new(77);
+        for (w, h, c, pad) in [(40, 30, 3, 0), (17, 33, 1, 2), (64, 8, 4, 0), (3, 2, 2, 1)] {
+            let src = random_image(w, h, c, pad, rng.next_u64());
+            for _ in 0..4 {
+                let center = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
+                let shift = (rng.range(-3.0, 3.0), rng.range(-3.0, 3.0));
+                let transform = Affine::similarity(center, rng.range(0.9, 1.1), rng.range(-0.1, 0.1), shift);
+                let inverse = transform.inverse().unwrap();
+                let expected = warp(&src, &inverse).unwrap();
+                let got = ops::warp(&src, &inverse, Interpolation::Bicubic, Border::Clamp).unwrap();
+                assert!(same_bits(&got, &expected), "{w}x{h}x{c}: {transform:?}");
+            }
+        }
+    }
 
     fn ramp(w: usize, h: usize) -> Image<f32> {
         Image::from_fn(w, h, 2, ColorSpace::LINEAR, |x, y, c| (x as f32) * 0.1 + (y as f32) * 0.01 + c as f32).unwrap()

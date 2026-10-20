@@ -29,6 +29,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "1"
+# CPU parallelism (AGENTS.md, Conventions): parallel iterators over rows, tiles and frames.
+rayon = "1.12"
+# Logging in the libraries (AGENTS.md, Conventions); without the default `attributes` feature, which would compile
+# proc macros for #[instrument] that FloraStack doesn't use.
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# Property tests (dev-dependency). Only `std`: the default `fork` and `timeout` features run each case in a child
+# process, which these tests don't need, and pull in rusty-fork and tempfile.
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 # Benchmarks only (dev-dependency): `cargo xtask bench` runs them and summarizes criterion's JSON estimates, so
 # neither the HTML/plot reports (plotters) nor criterion's own rayon parallelism are needed. 0.7 is the newest release
 # in pure Rust: 0.8 depends on `alloca`, which compiles C (AGENTS.md, Pure Rust).
