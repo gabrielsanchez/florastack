@@ -1,7 +1,43 @@
-//! Geometry: [`Affine`], the 2x3 transform that frame alignment estimates and warps apply.
+//! Geometry: [`Affine`], the 2x3 transform that frame alignment estimates and warps apply, and [`Rect`], a rectangle
+//! of whole pixels.
 //!
 //! Coordinates are in pixels with pixel `(x, y)` at the point `(x, y)`: integer coordinates are pixel centers, so the
 //! identity maps every pixel onto itself exactly, and the center of a `w`x`h` image is `((w - 1) / 2, (h - 1) / 2)`.
+//! The image itself covers `[-0.5, w - 0.5] x [-0.5, h - 0.5]`.
+
+/// An axis-aligned rectangle of whole pixels: columns `x .. x + width` and rows `y .. y + height`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Rect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Rect {
+    pub const fn new(x: usize, y: usize, width: usize, height: usize) -> Rect {
+        Rect { x, y, width, height }
+    }
+
+    /// The column just right of the rectangle, `x + width`, or `None` if that overflows.
+    pub const fn right(&self) -> Option<usize> {
+        self.x.checked_add(self.width)
+    }
+
+    /// The row just below the rectangle, `y + height`, or `None` if that overflows.
+    pub const fn bottom(&self) -> Option<usize> {
+        self.y.checked_add(self.height)
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    /// Whether the rectangle lies inside a `width` x `height` image.
+    pub fn fits_in(&self, width: usize, height: usize) -> bool {
+        self.right().is_some_and(|r| r <= width) && self.bottom().is_some_and(|b| b <= height)
+    }
+}
 
 /// A 2D affine transform, `x' = a x + b y + c` and `y' = d x + e y + f`, stored as the rows `[[a, b, c], [d, e, f]]`.
 ///
@@ -82,6 +118,16 @@ mod tests {
 
     fn close(a: (f64, f64), b: (f64, f64)) -> bool {
         (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9
+    }
+
+    #[test]
+    fn rects_know_their_extent() {
+        let r = Rect::new(2, 3, 4, 5);
+        assert_eq!((r.right(), r.bottom()), (Some(6), Some(8)));
+        assert!(r.fits_in(6, 8) && !r.fits_in(5, 8) && !r.fits_in(6, 7));
+        assert!(Rect::new(1, 1, 0, 3).is_empty() && !r.is_empty());
+        assert_eq!(Rect::new(usize::MAX, 0, 2, 1).right(), None);
+        assert!(!Rect::new(usize::MAX, 0, 2, 1).fits_in(usize::MAX, 1));
     }
 
     #[test]

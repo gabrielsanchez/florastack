@@ -1,9 +1,13 @@
 //! Image buffers: [`Image<T>`] holds `u8`, `u16` or `f32` samples with one to four interleaved channels, a row stride
-//! and a [`ColorSpace`] tag.
+//! and a [`ColorSpace`] tag; [`AnyImage`] holds one of the three when the sample type is known only at run time.
 //!
-//! This is the container only. Conversions between sample types and encodings, the tiled view, the disk-backed tile
-//! store and the basic operations (resize, blur, gradients, warps) build on it (roadmap step 1.1). Stacking math runs on
-//! linear `Image<f32>`, with samples nominally in `[0, 1]`; values outside that range are allowed (extended range).
+//! This is the container. Conversions between sample types and encodings ([`crate::convert`]), the tiled view
+//! ([`crate::tile`]), the tile cache ([`crate::store`]) and the basic operations ([`crate::ops`]) build on it. Stacking
+//! math runs on linear `Image<f32>`, with samples nominally in `[0, 1]`; values outside that range are allowed
+//! (extended range).
+//!
+//! Channels are interleaved: gray, gray and alpha, RGB, or RGBA. The alpha channel (the second of two, the fourth of
+//! four) is coverage, never transfer-encoded.
 //!
 //! Construction validates the dimensions with checked arithmetic and reserves memory with `try_reserve_exact`, so a
 //! hostile size returns an [`ImageError`] instead of panicking or aborting. Limits on what a decoder accepts belong to
@@ -13,21 +17,234 @@ use std::collections::TryReserveError;
 use std::fmt;
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
+use crate::geometry::Rect;
+
 /// The most interleaved channels an image may have (gray, gray and alpha, RGB, RGBA).
 pub const MAX_CHANNELS: usize = 4;
 
+/// The sample types, for code that learns which one an image has at run time (decoders, the tile cache).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SampleFormat {
+    U8,
+    U16,
+    F32,
+}
+
+impl SampleFormat {
+    /// The size of one sample in bytes.
+    pub const fn bytes(self) -> usize {
+        match self {
+            SampleFormat::U8 => 1,
+            SampleFormat::U16 => 2,
+            SampleFormat::F32 => 4,
+        }
+    }
+}
+
 /// A sample type an [`Image`] can hold: `u8`, `u16` or `f32`. Sealed: no other type implements it.
-pub trait Sample: Copy + Default + PartialEq + Send + Sync + fmt::Debug + 'static + sealed::Sealed {}
+///
+/// Integer samples are fractions of their largest value: `255u8` and `65535u16` are white, as `1.0f32` is. The
+/// normalizing conversions below are exact both ways for every integer sample.
+pub trait Sample: Copy + Default + PartialEq + Send + Sync + fmt::Debug + 'static + sealed::Sealed {
+    const FORMAT: SampleFormat;
+    /// Nominal white: 255, 65535 or 1.0.
+    const WHITE: Self;
 
-impl Sample for u8 {}
-impl Sample for u16 {}
-impl Sample for f32 {}
+    /// This sample as a fraction of white: `v / 255` or `v / 65535` for the integer types (so white is exactly 1),
+    /// the value itself for `f32`.
+    fn to_normalized(self) -> f32;
 
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for u8 {}
-    impl Sealed for u16 {}
-    impl Sealed for f32 {}
+    /// The sample nearest to `v` times white. The integer types round to nearest and clamp to their range, and NaN
+    /// gives 0; `f32` keeps `v` as it is, extended range included.
+    fn from_normalized(v: f32) -> Self;
+}
+
+impl Sample for u8 {
+    const FORMAT: SampleFormat = SampleFormat::U8;
+    const WHITE: u8 = u8::MAX;
+
+    fn to_normalized(self) -> f32 {
+        // Division, not multiplication by 1/255: it is correctly rounded, so 255 maps to exactly 1.
+        f32::from(self) / 255.0
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A saturating cast is the clamp: NaN gives 0.
+    fn from_normalized(v: f32) -> u8 {
+        (v * 255.0 + 0.5) as u8
+    }
+}
+
+impl Sample for u16 {
+    const FORMAT: SampleFormat = SampleFormat::U16;
+    const WHITE: u16 = u16::MAX;
+
+    fn to_normalized(self) -> f32 {
+        f32::from(self) / 65535.0
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A saturating cast is the clamp: NaN gives 0.
+    fn from_normalized(v: f32) -> u16 {
+        (v * 65535.0 + 0.5) as u16
+    }
+}
+
+impl Sample for f32 {
+    const FORMAT: SampleFormat = SampleFormat::F32;
+    const WHITE: f32 = 1.0;
+
+    fn to_normalized(self) -> f32 {
+        self
+    }
+
+    fn from_normalized(v: f32) -> f32 {
+        v
+    }
+}
+
+/// What the crate needs from a sample type beyond [`Sample`]: wrapping in [`AnyImage`], little-endian bytes for the
+/// tile cache, and blending for the stitched tiles. Unnameable outside the crate, which seals [`Sample`].
+pub(crate) mod sealed {
+    use super::{AnyImage, Image, Sample};
+
+    pub trait Sealed: Sized {
+        fn wrap(image: Image<Self>) -> AnyImage
+        where
+            Self: Sample;
+
+        /// The image inside `any`, or `any` back if it holds another sample type.
+        fn unwrap(any: AnyImage) -> Result<Image<Self>, AnyImage>
+        where
+            Self: Sample;
+
+        fn unwrap_ref(any: &AnyImage) -> Option<&Image<Self>>
+        where
+            Self: Sample;
+
+        fn unwrap_mut(any: &mut AnyImage) -> Option<&mut Image<Self>>
+        where
+            Self: Sample;
+
+        /// Appends `samples` to `out` as little-endian bytes.
+        fn write_le(samples: &[Self], out: &mut Vec<u8>);
+
+        /// Appends the samples of `bytes` (little-endian, a whole number of samples) to `out`.
+        fn read_le(bytes: &[u8], out: &mut Vec<Self>);
+
+        /// `a + t (b - a)`, rounded to nearest for the integer types; exactly `a` when `a == b`.
+        fn lerp(a: Self, b: Self, t: f32) -> Self;
+
+        /// Decodes sRGB-encoded samples to normalized linear `f32` values, every sample alike (alpha is the caller's).
+        fn srgb_decode(samples: &[Self], out: &mut [f32]);
+    }
+
+    impl Sealed for u8 {
+        fn wrap(image: Image<u8>) -> AnyImage {
+            AnyImage::U8(image)
+        }
+
+        fn unwrap(any: AnyImage) -> Result<Image<u8>, AnyImage> {
+            if let AnyImage::U8(image) = any { Ok(image) } else { Err(any) }
+        }
+
+        fn unwrap_ref(any: &AnyImage) -> Option<&Image<u8>> {
+            if let AnyImage::U8(image) = any { Some(image) } else { None }
+        }
+
+        fn unwrap_mut(any: &mut AnyImage) -> Option<&mut Image<u8>> {
+            if let AnyImage::U8(image) = any { Some(image) } else { None }
+        }
+
+        fn write_le(samples: &[u8], out: &mut Vec<u8>) {
+            out.extend_from_slice(samples);
+        }
+
+        fn read_le(bytes: &[u8], out: &mut Vec<u8>) {
+            out.extend_from_slice(bytes);
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Between two u8 values: in range.
+        fn lerp(a: u8, b: u8, t: f32) -> u8 {
+            let a_f = f32::from(a);
+            (a_f + t * (f32::from(b) - a_f) + 0.5) as u8
+        }
+
+        fn srgb_decode(samples: &[u8], out: &mut [f32]) {
+            crate::convert::decode_u8_row(samples, out);
+        }
+    }
+
+    impl Sealed for u16 {
+        fn wrap(image: Image<u16>) -> AnyImage {
+            AnyImage::U16(image)
+        }
+
+        fn unwrap(any: AnyImage) -> Result<Image<u16>, AnyImage> {
+            if let AnyImage::U16(image) = any { Ok(image) } else { Err(any) }
+        }
+
+        fn unwrap_ref(any: &AnyImage) -> Option<&Image<u16>> {
+            if let AnyImage::U16(image) = any { Some(image) } else { None }
+        }
+
+        fn unwrap_mut(any: &mut AnyImage) -> Option<&mut Image<u16>> {
+            if let AnyImage::U16(image) = any { Some(image) } else { None }
+        }
+
+        fn write_le(samples: &[u16], out: &mut Vec<u8>) {
+            out.extend(samples.iter().flat_map(|v| v.to_le_bytes()));
+        }
+
+        fn read_le(bytes: &[u8], out: &mut Vec<u16>) {
+            out.extend(bytes.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)));
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Between two u16 values: in range.
+        fn lerp(a: u16, b: u16, t: f32) -> u16 {
+            let a_f = f32::from(a);
+            (a_f + t * (f32::from(b) - a_f) + 0.5) as u16
+        }
+
+        fn srgb_decode(samples: &[u16], out: &mut [f32]) {
+            crate::convert::decode_u16_row(samples, out);
+        }
+    }
+
+    impl Sealed for f32 {
+        fn wrap(image: Image<f32>) -> AnyImage {
+            AnyImage::F32(image)
+        }
+
+        fn unwrap(any: AnyImage) -> Result<Image<f32>, AnyImage> {
+            if let AnyImage::F32(image) = any { Ok(image) } else { Err(any) }
+        }
+
+        fn unwrap_ref(any: &AnyImage) -> Option<&Image<f32>> {
+            if let AnyImage::F32(image) = any { Some(image) } else { None }
+        }
+
+        fn unwrap_mut(any: &mut AnyImage) -> Option<&mut Image<f32>> {
+            if let AnyImage::F32(image) = any { Some(image) } else { None }
+        }
+
+        fn write_le(samples: &[f32], out: &mut Vec<u8>) {
+            out.extend(samples.iter().flat_map(|v| v.to_le_bytes()));
+        }
+
+        fn read_le(bytes: &[u8], out: &mut Vec<f32>) {
+            out.extend(bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)));
+        }
+
+        #[allow(clippy::float_cmp)] // Equal samples, infinities included, must blend to themselves exactly.
+        fn lerp(a: f32, b: f32, t: f32) -> f32 {
+            if a == b { a } else { a + t * (b - a) }
+        }
+
+        fn srgb_decode(samples: &[f32], out: &mut [f32]) {
+            crate::convert::decode_f32_row(samples, out);
+        }
+    }
 }
 
 /// How sample values relate to light.
@@ -79,6 +296,8 @@ pub enum ImageError {
         #[source]
         source: TryReserveError,
     },
+    #[error("the region {rect:?} is empty or reaches outside the {width}x{height} image")]
+    Region { rect: Rect, width: usize, height: usize },
 }
 
 /// The validated shape of an image.
@@ -261,6 +480,37 @@ impl<T: Sample> Image<T> {
         })
     }
 
+    /// Every row, as a rayon parallel iterator (in order, so `enumerate` gives the row index).
+    pub fn par_rows(&self) -> impl IndexedParallelIterator<Item = &[T]> {
+        let len = self.shape.row_len();
+        self.data.par_chunks(self.shape.stride).take(self.shape.height).map(move |row| row.get(..len).unwrap_or(row))
+    }
+
+    /// Every row, mutably, as a rayon parallel iterator.
+    pub fn par_rows_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [T]> {
+        let len = self.shape.row_len();
+        self.data.par_chunks_mut(self.shape.stride).take(self.shape.height).map(move |row| {
+            let whole = row.len().min(len);
+            &mut row[..whole]
+        })
+    }
+
+    /// A copy of the pixels in `rect`, with packed rows and the same color space.
+    pub fn crop(&self, rect: Rect) -> Result<Image<T>, ImageError> {
+        if rect.is_empty() || !rect.fits_in(self.width(), self.height()) {
+            return Err(ImageError::Region { rect, width: self.width(), height: self.height() });
+        }
+        let c = self.shape.channels;
+        let mut out = Image::new(rect.width, rect.height, c, self.color.clone())?;
+        let columns = rect.x * c..(rect.x + rect.width) * c;
+        for (dst, src) in out.rows_mut().zip(self.rows().skip(rect.y)) {
+            if let Some(src) = src.get(columns.clone()) {
+                dst.copy_from_slice(src);
+            }
+        }
+        Ok(out)
+    }
+
     /// The samples of pixel `(x, y)`, or `None` outside the image.
     pub fn pixel(&self, x: usize, y: usize) -> Option<&[T]> {
         if x >= self.shape.width {
@@ -315,6 +565,90 @@ impl<T: Sample> fmt::Debug for Image<T> {
             .field("stride", &self.shape.stride)
             .field("color", &self.color)
             .finish_non_exhaustive()
+    }
+}
+
+/// An image whose sample type is known only at run time: what a decoder returns, and what the tile cache holds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AnyImage {
+    U8(Image<u8>),
+    U16(Image<u16>),
+    F32(Image<f32>),
+}
+
+impl AnyImage {
+    pub fn from_image<T: Sample>(image: Image<T>) -> AnyImage {
+        T::wrap(image)
+    }
+
+    /// The image inside, if its samples are `T`; otherwise `self` back.
+    pub fn into_image<T: Sample>(self) -> Result<Image<T>, AnyImage> {
+        T::unwrap(self)
+    }
+
+    /// The image inside, if its samples are `T`.
+    pub fn as_image<T: Sample>(&self) -> Option<&Image<T>> {
+        T::unwrap_ref(self)
+    }
+
+    /// The image inside, mutably, if its samples are `T`.
+    pub fn as_image_mut<T: Sample>(&mut self) -> Option<&mut Image<T>> {
+        T::unwrap_mut(self)
+    }
+
+    pub fn format(&self) -> SampleFormat {
+        match self {
+            AnyImage::U8(_) => SampleFormat::U8,
+            AnyImage::U16(_) => SampleFormat::U16,
+            AnyImage::F32(_) => SampleFormat::F32,
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        match self {
+            AnyImage::U8(i) => i.width(),
+            AnyImage::U16(i) => i.width(),
+            AnyImage::F32(i) => i.width(),
+        }
+    }
+
+    pub fn height(&self) -> usize {
+        match self {
+            AnyImage::U8(i) => i.height(),
+            AnyImage::U16(i) => i.height(),
+            AnyImage::F32(i) => i.height(),
+        }
+    }
+
+    pub fn channels(&self) -> usize {
+        match self {
+            AnyImage::U8(i) => i.channels(),
+            AnyImage::U16(i) => i.channels(),
+            AnyImage::F32(i) => i.channels(),
+        }
+    }
+
+    pub fn color_space(&self) -> &ColorSpace {
+        match self {
+            AnyImage::U8(i) => i.color_space(),
+            AnyImage::U16(i) => i.color_space(),
+            AnyImage::F32(i) => i.color_space(),
+        }
+    }
+
+    /// The memory the buffer holds, in bytes (row padding included).
+    pub fn buffer_bytes(&self) -> usize {
+        match self {
+            AnyImage::U8(i) => i.as_raw().len(),
+            AnyImage::U16(i) => i.as_raw().len() * 2,
+            AnyImage::F32(i) => i.as_raw().len() * 4,
+        }
+    }
+}
+
+impl<T: Sample> From<Image<T>> for AnyImage {
+    fn from(image: Image<T>) -> AnyImage {
+        T::wrap(image)
     }
 }
 
@@ -380,6 +714,94 @@ mod tests {
             row.fill(0.5);
         }
         assert!(image.as_raw().iter().all(|&v| v.to_bits() == 0.5f32.to_bits()));
+    }
+
+    #[test]
+    fn normalizing_is_exact_for_every_integer_sample() {
+        for v in 0..=u8::MAX {
+            let n = v.to_normalized();
+            assert!((0.0..=1.0).contains(&n));
+            assert_eq!(u8::from_normalized(n), v);
+        }
+        for v in 0..=u16::MAX {
+            assert_eq!(u16::from_normalized(v.to_normalized()), v);
+        }
+        assert_eq!((u8::WHITE.to_normalized(), u16::WHITE.to_normalized(), f32::WHITE), (1.0, 1.0, 1.0));
+        assert_eq!((u8::from_normalized(-0.5), u8::from_normalized(7.0), u8::from_normalized(f32::NAN)), (0, 255, 0));
+        assert_eq!((u16::from_normalized(f32::INFINITY), u16::from_normalized(f32::NEG_INFINITY)), (65535, 0));
+        assert_eq!(f32::from_normalized(-2.5), -2.5, "f32 keeps extended range");
+        assert_eq!(u8::from_normalized(0.5), 128, "ties round up");
+        assert_eq!([u8::FORMAT.bytes(), u16::FORMAT.bytes(), f32::FORMAT.bytes()], [1, 2, 4]);
+    }
+
+    #[test]
+    fn little_endian_bytes_round_trip() {
+        use sealed::Sealed;
+        let mut bytes = Vec::new();
+        u16::write_le(&[1, 0xabcd], &mut bytes);
+        assert_eq!(bytes, [1, 0, 0xcd, 0xab]);
+        let mut back = Vec::new();
+        u16::read_le(&bytes, &mut back);
+        assert_eq!(back, [1, 0xabcd]);
+        let floats = [0.0, -1.5, f32::MAX, f32::MIN_POSITIVE];
+        let mut bytes = Vec::new();
+        f32::write_le(&floats, &mut bytes);
+        let mut back = Vec::new();
+        f32::read_le(&bytes, &mut back);
+        assert_eq!(back, floats);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Blending equal samples must give them back exactly.
+    fn lerp_keeps_equal_samples_and_rounds_integers() {
+        use sealed::Sealed;
+        assert_eq!(u8::lerp(0, 255, 0.5), 128);
+        assert_eq!(u16::lerp(100, 200, 0.25), 125);
+        assert_eq!(f32::lerp(1.0, 3.0, 0.25), 1.5);
+        for t in [0.0, 0.3, 1.0] {
+            assert_eq!(u8::lerp(77, 77, t), 77);
+            assert_eq!(f32::lerp(f32::INFINITY, f32::INFINITY, t), f32::INFINITY);
+            assert_eq!(f32::lerp(0.1, 0.1, t), 0.1);
+        }
+    }
+
+    #[test]
+    fn crop_copies_a_region_and_rejects_bad_ones() {
+        let image = Image::from_fn(5, 4, 2, ColorSpace::SRGB, |x, y, c| u16::try_from(100 * y + 10 * x + c).unwrap()).unwrap();
+        let crop = image.crop(Rect::new(1, 2, 3, 2)).unwrap();
+        assert_eq!((crop.width(), crop.height(), crop.channels(), crop.stride()), (3, 2, 2, 6));
+        assert_eq!(crop.pixel(0, 0), Some(&[210, 211][..]));
+        assert_eq!(crop.pixel(2, 1), Some(&[330, 331][..]));
+        assert_eq!(crop.color_space(), image.color_space());
+        assert_eq!(image.crop(Rect::new(0, 0, 5, 4)).unwrap(), image);
+        for bad in [Rect::new(3, 0, 3, 1), Rect::new(0, 0, 0, 1), Rect::new(0, 4, 1, 1), Rect::new(usize::MAX, 0, 2, 1)] {
+            assert!(matches!(image.crop(bad), Err(ImageError::Region { .. })), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn parallel_rows_match_the_sequential_ones() {
+        let data: Vec<u8> = (0..27).collect();
+        let mut image = Image::from_vec_with_stride(3, 4, 2, 7, ColorSpace::LINEAR, data).unwrap();
+        let sequential: Vec<Vec<u8>> = image.rows().map(<[u8]>::to_vec).collect();
+        let parallel: Vec<Vec<u8>> = image.par_rows().map(<[u8]>::to_vec).collect();
+        assert_eq!(sequential, parallel);
+        image.par_rows_mut().enumerate().for_each(|(y, row)| row.fill(u8::try_from(y).unwrap()));
+        assert_eq!(image.get(2, 3, 1), Some(3));
+        assert_eq!(image.as_raw()[6], 6, "the padding is left alone");
+    }
+
+    #[test]
+    fn any_image_wraps_and_unwraps_by_sample_type() {
+        let image = Image::<u16>::new(3, 2, 1, ColorSpace::LINEAR).unwrap();
+        let mut any = AnyImage::from(image.clone());
+        assert_eq!((any.format(), any.width(), any.height(), any.channels(), any.buffer_bytes()), (SampleFormat::U16, 3, 2, 1, 12));
+        assert_eq!(any.as_image::<u16>(), Some(&image));
+        assert!(any.as_image::<f32>().is_none() && any.as_image_mut::<u8>().is_none());
+        any.as_image_mut::<u16>().unwrap().pixel_mut(0, 0).unwrap()[0] = 9;
+        let any = any.into_image::<f32>().unwrap_err();
+        assert_eq!(any.into_image::<u16>().unwrap().get(0, 0, 0), Some(9));
+        assert_eq!(AnyImage::from_image(Image::<f32>::new(1, 1, 4, ColorSpace::SRGB).unwrap()).color_space(), &ColorSpace::SRGB);
     }
 
     #[test]

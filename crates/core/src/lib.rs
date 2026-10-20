@@ -1,18 +1,35 @@
 //! Foundation types shared by every FloraStack crate: image buffers, pixel formats (`u8`, `u16` and `f32` samples with
-//! one to four channels), geometry and error types, plus the product identity in [`branding`]. It may depend on no other
-//! FloraStack crate, so that every crate can depend on it; `cargo xtask check-layers` enforces this.
+//! one to four channels), geometry and error types, the basic image operations, and the product identity in
+//! [`branding`]. It may depend on no other FloraStack crate, so that every crate can depend on it; `cargo xtask
+//! check-layers` enforces this.
 //!
-//! [`Image`] is the image buffer every crate passes around and [`Affine`] the 2x3 transform that alignment estimates
-//! and warps apply. Behind the `testutil` feature, which only `[dev-dependencies]` may enable, the [`testutil`]
-//! module generates synthetic focus stacks with known ground truth for the alignment and stacking tests.
+//! - [`image`]: [`Image`], the buffer every crate passes around, with its [`ColorSpace`] tag, and [`AnyImage`] for a
+//!   sample type known only at run time.
+//! - [`convert`]: conversions between sample types and between sRGB-encoded and linear samples. Stacking math runs on
+//!   linear `Image<f32>`.
+//! - [`geometry`]: [`Affine`], the 2x3 transform that alignment estimates and warps apply, and [`Rect`].
+//! - [`ops`]: Gaussian blur, Lanczos3 resize, Sobel and Laplacian, and bilinear and bicubic affine warps, the CPU
+//!   reference for the GPU kernels to come.
+//! - [`tile`]: [`TileGrid`], overlapping tiles stitched back with feathered seams, so that processing can bound its
+//!   memory.
+//! - [`store`]: [`TileCache`], tiles in memory up to a budget and spilled to a [`TileStore`] (temporary files) beyond it.
+//!
+//! Behind the `testutil` feature, which only `[dev-dependencies]` may enable, the [`testutil`] module generates
+//! synthetic focus stacks with known ground truth for the alignment and stacking tests.
 
+pub mod convert;
 pub mod geometry;
 pub mod image;
+pub mod ops;
+pub mod store;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
+pub mod tile;
 
-pub use geometry::Affine;
-pub use image::{ColorSpace, Encoding, Image, ImageError, Sample};
+pub use geometry::{Affine, Rect};
+pub use image::{AnyImage, ColorSpace, Encoding, Image, ImageError, Sample, SampleFormat};
+pub use store::{CacheStats, MemoryStore, StoreError, TempFileStore, TileCache, TileKey, TileStore};
+pub use tile::{Tile, TileError, TileGrid};
 
 /// FloraStack's product identity: display name, binary names, project-folder extension and app ID.
 ///

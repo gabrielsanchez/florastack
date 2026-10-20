@@ -15,8 +15,9 @@
 //!   edges for the halo metric and thin near structures over a far background.
 //! - [`rng`] is the small seeded generator behind both, so a test sees the same stack on every platform and run.
 //!
-//! The blur and the warp the generator uses are private, exact and unoptimized reference implementations; the public
-//! image operations arrive with roadmap step 1.1.
+//! The generator blurs with the exact Gaussian kernel and warps with the bicubic filter of [`crate::ops`]. The plain,
+//! unoptimized versions of both that it used before step 1.1 remain as the tests' oracle, which the public operations
+//! match bit for bit.
 
 mod ops;
 pub mod rng;

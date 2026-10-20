@@ -23,7 +23,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] GitHub Actions CI: fmt, Clippy, check-layers and the tests on Ubuntu, macOS (arm64) and Windows, with cargo caching
 - [x] Dependency policy job: `cargo deny check` with the license policy in `deny.toml`, and `cargo audit`
 - [x] `cargo xtask ci`: runs what CI runs and prints a summary that lists the tests skipped for want of hardware or corpus files (recorded with `florastack-testkit`'s `skip!`)
-- [ ] First CI run on GitHub green on all three operating systems
+- [x] First CI run on GitHub green on all three operating systems (PR #1, 2026-10-20)
 
 ### 0.3 Test corpus, golden images and benchmarks
 
@@ -41,12 +41,12 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 ### 1.1 Image buffers and tiling
 
 - [x] `Image<T>` over u8, u16 and f32 with 1 to 4 channels, a row stride and a color-space tag (linear or sRGB-encoded, optional ICC profile), done in 0.3; the rest of 1.1 builds on it
-- [ ] Conversions between sample types and between encoded and linear, vectorized and parallel with rayon; stacking math in linear f32
-- [ ] Tiled view: overlapping tiles stitched back with feathered seams
-- [ ] Disk-backed `TileStore`: temp files, LRU eviction and a RAM budget, so 500+ frames at 60 MP never need to be resident, with plain file I/O
-- [ ] Basic ops: Lanczos3 resize, separable Gaussian blur with a running-sum approximation for large radii, Sobel, Laplacian, and bilinear and bicubic affine warps
-- [ ] Property tests (proptest) for conversions and tile round trips; criterion benches for blur and warp on a 24 MP image
-- [ ] The synthetic generator's private exact blur and bicubic warp (`crates/core/src/testutil/ops.rs`) used as oracles for the new ops, or replaced by them where the ops are exact enough
+- [x] Conversions between sample types and between encoded and linear, vectorized and parallel with rayon; stacking math in linear f32 (`florastack_core::convert`: exact round trips for every `u8` and `u16` value, sRGB through tables or a branch-free power function)
+- [x] Tiled view: overlapping tiles stitched back with feathered seams (`TileGrid`, with `stitch_with` holding two rows of tiles at a time)
+- [x] Disk-backed tile cache: `TileCache` with LRU eviction and a RAM budget over a `TileStore` (`TempFileStore`: temp files, plain file I/O), so 500+ frames at 60 MP never need to be resident
+- [x] Basic ops: Lanczos3 resize, separable Gaussian blur with a running-sum approximation for large radii, Sobel, Laplacian, and bilinear and bicubic affine warps (`florastack_core::ops`)
+- [x] Property tests (proptest) for conversions and tile round trips; criterion benches for blur and warp on a 24 MP image
+- [x] The synthetic generator's private exact blur and bicubic warp (`crates/core/src/testutil/ops.rs`) replaced in the generator by the public ops, which match them bit for bit, and kept as the tests' oracle
 
 ### 1.2 LightCraft dependency, codecs, metadata and color *(plan first)*
 
@@ -57,6 +57,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Embedded ICC profiles kept (sRGB assumed without one), with output in the input profile or a wide working space
 - [ ] EXIF orientation honored or ignored by option
 - [ ] Tests: round trip per format and bit depth, metadata, orientation; PngSuite and TIFF fixtures fetched by `cargo xtask corpus`
+- [ ] Images whose ICC profile has another curve than sRGB's are linearized through the profile (`florastack_core::convert` knows linear and sRGB only, and carries the profile over unchanged)
 - [ ] `cargo xtask corpus`: archive entries (PngSuite ships as one `.tgz`) and a place for format fixtures beside the stacks
 
 ### 1.3 RAW import through LightCraft
@@ -76,6 +77,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Reopened projects can be retouched at once, with no recomputation
 - [ ] Partial TOML presets that layer
 - [ ] Orphan cleanup: old unnamed temporary projects moved to the OS trash, never deleted
+- [ ] Tile folders that a crashed run left behind (`TempFileStore`, named after the GUI binary with `-tiles-`) removed at startup
 - [ ] Tests: save and load round trip, migration from a v0 fixture, partial preset layering
 
 ### 1.5 Command registry and job engine *(plan first)*
@@ -178,7 +180,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 - [ ] florastack-gpu kernels (WGSL on wgpu): format conversion, Gaussian and Laplacian pyramids, focus measures, the alignment warp, pyramid selection and the depth-map statistics
 - [ ] Streaming on the GPU: one frame uploaded at a time, accumulators kept on the GPU, tiling beyond a VRAM budget
-- [ ] An agreement test per kernel against its CPU reference in florastack-stack or florastack-align, with documented tolerances
+- [ ] An agreement test per kernel against its CPU reference in florastack-core (conversions, blur, resize, gradients, warps), florastack-stack or florastack-align, with documented tolerances
 - [ ] GPU chosen at startup when an adapter passes a self-test, otherwise the CPU with a logged reason; a preference forces the CPU
 - [ ] Decoding frame N+1 while frame N is processed
 - [ ] Agreement tests in CI on software adapters (lavapipe on Linux, WARP on Windows); on macOS only with a Metal adapter, otherwise reported as skipped

@@ -21,10 +21,11 @@
 //! gain, and the dust spots: alignment can be scored with [`GroundTruth::relative`] and [`transform_error`], and
 //! stacking against the sharp image with florastack-metrics. Everything is deterministic for a given seed.
 
-use super::ops::{gaussian_blur, to_f32, to_index, warp};
+use super::ops::{to_f32, to_index};
 use super::rng::Rng;
 use crate::geometry::Affine;
 use crate::image::{Image, ImageError};
+use crate::ops::{BlurMethod, Border, Interpolation, OpError, gaussian_blur_in_place, warp};
 
 /// The most frames one stack may have.
 pub const MAX_FRAMES: usize = 10_000;
@@ -204,6 +205,8 @@ pub enum SynthError {
     Levels { sigma: f32, step: f32 },
     #[error(transparent)]
     Image(#[from] ImageError),
+    #[error(transparent)]
+    Op(#[from] OpError),
 }
 
 /// The truth about one frame.
@@ -326,9 +329,14 @@ pub fn generate(sharp: &Image<f32>, depth: &Image<f32>, params: &StackParams) ->
     if level_count > MAX_LEVELS {
         return Err(SynthError::Levels { sigma: sigma_needed, step: params.blur_step });
     }
+    // The exact kernel, so that the stack doesn't change when the fast approximation for large radii does.
     let levels = (0..level_count)
-        .map(|l| if l == 0 { Ok(base.clone()) } else { gaussian_blur(&base, l as f64 * f64::from(params.blur_step)) })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|l| {
+            let mut level = base.clone();
+            gaussian_blur_in_place(&mut level, l as f64 * f64::from(params.blur_step), BlurMethod::Exact)?;
+            Ok(level)
+        })
+        .collect::<Result<Vec<_>, SynthError>>()?;
 
     let mut frames = Vec::with_capacity(n);
     for (i, truth) in truths.iter().enumerate() {
@@ -336,7 +344,7 @@ pub fn generate(sharp: &Image<f32>, depth: &Image<f32>, params: &StackParams) ->
         if !truth.transform.is_identity() {
             // A similarity transform with a scale in [0.5, 1.5] is invertible.
             let inverse = truth.transform.inverse().unwrap_or(Affine::IDENTITY);
-            frame = warp(&frame, &inverse)?;
+            frame = warp(&frame, &inverse, Interpolation::Bicubic, Border::Clamp)?;
         }
         if !is_one(truth.gain) {
             for v in frame.rows_mut().flatten() {
