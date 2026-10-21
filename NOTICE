@@ -10,7 +10,7 @@ developer tooling. ATTRIBUTION.md records the source of each item and what it is
 
 - xtask/src/sha256.rs is adapted from PhotoCraft (https://github.com/storytold/photocraft), file
   xtask/src/sha256.rs, and the download flow of xtask/src/corpus/ follows its xtask/src/corpus.rs
-  and xtask/src/pinned.rs.
+  and xtask/src/pinned.rs, the archive flow included (as its PngSuite fetcher checks an archive).
   Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
   Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
   are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).
@@ -19,3 +19,23 @@ developer tooling. ATTRIBUTION.md records the source of each item and what it is
   Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
   Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
   are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).
+
+Third-party libraries in the apps
+
+The apps are built with third-party crates under their own permissive licenses. Cargo.lock lists
+every one, and the release packages will carry each license text (docs/ROADMAP.md, 7.1). These
+need a mention here:
+
+- LightCraft's crates lightcraft-tiff, lightcraft-codecs, lightcraft-meta, lightcraft-color and
+  lightcraft-raw (https://github.com/storytold/lightcraft, commit
+  a2a41383c4fd62fa85a46ccd00998639221f2d3c, release 0.10.0), which florastack-codecs uses.
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+  Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
+  are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).
+  lightcraft-raw holds camera colour matrices derived from the camera spectral sensitivities,
+  training reflectances and model alias list of rawtoaces-data
+  (https://github.com/AcademySoftwareFoundation/rawtoaces-data, v1.1.0), an Academy Software
+  Foundation project licensed under the Apache License 2.0, and from the CIE 1931 colour-matching
+  functions it ships (CIE, CC-BY-4.0). The matrices were fitted by the LightCraft contributors.
+- jpeg-encoder (https://github.com/vstroebel/jpeg-encoder), the JPEG encoder inside
+  lightcraft-codecs: this software is based in part on the work of the Independent JPEG Group.

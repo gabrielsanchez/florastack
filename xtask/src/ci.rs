@@ -43,6 +43,7 @@ pub const STEPS: &[Step] = &[
     Step { name: "fmt", args: &["fmt", "--all", "--check"], tool: None },
     Step { name: "clippy", args: &["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"], tool: None },
     Step { name: "check-layers", args: &["xtask", "check-layers"], tool: None },
+    Step { name: "fixtures", args: &["xtask", "corpus", "--fixtures"], tool: None },
     Step { name: TEST_STEP, args: &["test", "--workspace", "--locked"], tool: None },
     Step { name: "deny", args: &["deny", "check"], tool: Some("cargo-deny") },
     Step { name: "audit", args: &["audit"], tool: Some("cargo-audit") },
@@ -287,7 +288,7 @@ fn group(skips: &[Skip]) -> Vec<Group<'_>> {
 fn hint(need: &str) -> &'static str {
     match need {
         "gpu" => "a GPU adapter that passes the self-test",
-        "corpus" => "files in the gitignored corpus/ folder",
+        "corpus" => "files in the gitignored corpus/ folder, which `cargo xtask corpus` fetches",
         _ => "what the reasons name",
     }
 }
@@ -373,11 +374,12 @@ mod tests {
         list.extend((0..7).map(|i| skip("gpu", "no Metal adapter", &format!("kernel_{i}"))));
         list.push(skip("gpu", "the adapter failed the self-test", "main"));
         let text = summary(&steps, &Skips { list, unreadable: 0 }, Duration::from_secs(125), "target/ci/skips.jsonl");
-        assert!(text.contains("CI summary: all 6 steps passed in 2m 05s"), "{text}");
+        assert!(text.contains("CI summary: all 7 steps passed in 2m 05s"), "{text}");
         assert!(text.contains("  ok       clippy          1.2 s  cargo clippy --workspace --all-targets --locked -- -D warnings\n"), "{text}");
         assert!(text.contains("Skipped tests: 9, which passed without running their checks (records in target/ci/skips.jsonl):"), "{text}");
         let gpu = text.find("  gpu (8): needs a GPU adapter that passes the self-test\n").expect("the gpu group");
-        let corpus = text.find("  corpus (1): needs files in the gitignored corpus/ folder\n").expect("the corpus group");
+        let corpus =
+            text.find("  corpus (1): needs files in the gitignored corpus/ folder, which `cargo xtask corpus` fetches\n").expect("the corpus group");
         assert!(gpu < corpus, "the larger group comes first: {text}");
         assert!(text.contains("    no Metal adapter (7):\n      agreement::kernel_0  crates/gpu/tests/agreement.rs:9\n"), "{text}");
         assert!(text.contains("      and 2 more\n"), "{text}");

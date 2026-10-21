@@ -1,7 +1,7 @@
-# FloraStack CI: formatting, Clippy, the crate layering check and the tests on Linux, macOS and Windows, plus the
-# dependency policy (cargo deny with deny.toml, and cargo audit). `cargo xtask ci` runs the same cargo commands
-# locally; a test in xtask/src/ci.rs keeps its list and this file's `run:` lines the same, so keep every cargo
-# command on a single `run:` line.
+# FloraStack CI: formatting, Clippy, the crate layering check, the test fixtures and the tests on Linux, macOS and
+# Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit). `cargo xtask ci` runs the same
+# cargo commands locally; a test in xtask/src/ci.rs keeps its list and this file's `run:` lines the same, so keep
+# every cargo command on a single `run:` line.
 #
 # The toolchain comes from rust-toolchain.toml. Third-party actions are pinned to a full commit SHA, with the
 # release in a comment.
@@ -56,6 +56,12 @@ jobs:
 
       - name: Crate layering
         run: cargo xtask check-layers
+
+      # The format test files corpus/manifest.toml lists (PngSuite, and TIFF, WebP and OpenEXR files: about 3 MB),
+      # downloaded into the gitignored corpus/fixtures/ and checked against their SHA-256. The tests that need them
+      # read them there; run locally without them, those tests are skipped.
+      - name: Fetch test fixtures
+        run: cargo xtask corpus --fixtures
 
       - name: Test
         run: cargo test --workspace --locked

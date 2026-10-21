@@ -319,11 +319,13 @@ pub fn run(meta: &Value) -> Result<(), String> {
         println!("  {:<width$}  {deps}", c.name);
     }
     println!(
-        "branding: {} ({}), project folders <name>{}, binaries {}",
+        "branding: {} ({}), project folders <name>{}, binaries {}, XMP namespace {} ({}:)",
         branding.display_name,
         branding.app_id,
         branding.project_extension,
-        branding.binary_names().join(", ")
+        branding.binary_names().join(", "),
+        branding.xmp.namespace,
+        branding.xmp.prefix
     );
     if branding.app_id.contains("OWNER") {
         println!("note: the app ID still contains the OWNER placeholder; replace it in branding.toml before a release");

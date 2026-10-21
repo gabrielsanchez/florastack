@@ -13,8 +13,9 @@
 //!   extended range survives; NaN stays NaN. Every `u8` and `u16` value survives decoding to linear `f32` and encoding
 //!   back exactly.
 //! - The alpha channel (the second of two, the fourth of four) is only normalized, never transfer-encoded. The ICC
-//!   profile is carried over unchanged: it describes the primaries, and a profile whose curve isn't sRGB's needs the
-//!   color management of the codecs crate.
+//!   profile is carried over unchanged: it describes the primaries. A file whose profile has another curve than
+//!   sRGB's or a linear one never reaches these conversions encoded: `florastack-codecs` linearizes it through the
+//!   profile as it reads it, and encodes through the profile's curve as it writes.
 //!
 //! Rows are converted in parallel with rayon; each sample's result depends on that sample alone, so the output doesn't
 //! depend on scheduling.
