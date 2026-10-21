@@ -18,3 +18,7 @@ florastack-stack.workspace = true
 florastack-gpu.workspace = true
 florastack-project.workspace = true
 florastack-retouch.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+florastack-testkit.workspace = true

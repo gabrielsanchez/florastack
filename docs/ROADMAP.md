@@ -68,14 +68,20 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 1.3 RAW import through LightCraft
 
-- [ ] `RawDecoder` trait in florastack-raw, implemented with LightCraft's raw crate
-- [ ] LightCraft's coverage (DNG, CR2, CR3, ARW, NEF, RAF Bayer and X-Trans, RW2/RWL, PEF, uncompressed ORF and SRW), with a clear error suggesting DNG or 16-bit TIFF for anything else
-- [ ] `RawDevelop` to linear, scene-referred f32 RGB: white balance, fast and high-quality demosaic (X-Trans included), highlight reconstruction, exposure, chromatic aberration and light noise reduction, with no tone curve or look
-- [ ] Lens distortion correction off by default
-- [ ] One `DevelopSettings` per stack, stored in the project
-- [ ] 16-bit TIFF and DNG imported unchanged
-- [ ] Tests: one file per vendor, identical settings give identical output, preview and final demosaic agree, output stays linear (gray ramp)
-- [ ] Decide on `lightcraft-raw`'s `jxl` feature (JPEG XL compressed DNGs, DNG 1.7), off since 1.2
+- [x] `RawDecoder` trait in florastack-raw, implemented with LightCraft's raw crate (`LightCraftRaw`), decoding into plain `RawFrame` data (normalized samples, the color filter array, the DNG color model) that another decoder could produce
+- [x] LightCraft's coverage (DNG, CR2, CR3, ARW, NEF, RAF Bayer and X-Trans, RW2/RWL, PEF, uncompressed ORF and SRW), with a clear error suggesting DNG or 16-bit TIFF for anything else (`RawError::Unsupported`)
+- [x] `RawDevelop` to linear, scene-referred f32 RGB (Rec. 2020): white balance (as shot, auto, temperature and tint), fast and high-quality demosaic (X-Trans included), highlight reconstruction, exposure, lateral chromatic aberration and light noise reduction, with no tone curve or look; LightCraft's develop code from its raw and pipeline crates
+- [x] Lens distortion correction off by default (`DevelopSettings::lens_distortion`; the file's vignetting correction still applies)
+- [x] One `DevelopSettings` per stack, resolved once on a reference frame (`RawDevelop::new`, `Resolved`) so that every frame gets the same white and corrections, with serde for the project file and partial presets; storing it in the project is 1.4's (below)
+- [x] 16-bit TIFF and DNG imported unchanged: demosaiced (`LinearRaw`) DNG files by florastack-raw, TIFF and the other image files by florastack-codecs, the choice made in `florastack_engine::frames` (no layering change)
+- [x] Tests: one file per format (twelve CC0 files from raw.pixls.us, the `raw` fixture set, cached in CI), identical settings give identical output, preview and final demosaic agree on smooth regions, output stays linear (a gray step wedge)
+- [x] `lightcraft-raw`'s `jxl` feature turned on: JPEG XL compressed DNGs (DNG 1.7) through jxl-oxide, pure Rust
+- [ ] Camera color: eight of the ten pinned non-DNG cameras (all but the Canon EOS R6 and the Fujifilm X-S10) have no color matrix in LightCraft's low-level crates (`ColorSource::Fallback`, camera RGB taken for sRGB, flagged `DevelopWarning::ApproximateColor`); LightCraft's per-file camera-look fits and bundled profiles live in its engine crate. Find a permissible source of matrices for the popular bodies, or ask LightCraft to move its fits into a low-level crate
+- [ ] More samples: a lossless CRX CR3 (the pinned one is C-RAW), and RWL, NRW, ERF, MEF and 3FR or FFF files, which decode through paths the pinned files don't reach
+- [ ] Reduced-size development straight from the mosaic, for thumbnails, the filmstrip (2.3) and quarter-scale previews (3.1): `Quality::Preview` demosaics the whole frame
+- [ ] `RawDecoder::decode` checks the size from the headers before decoding, and LightCraft's header probe unpacks the samples of uncompressed ORF and PEF files to read them: those files are decoded twice
+- [ ] A truncated RAW file, such as one a camera is still writing, is a `Malformed` error like a damaged one: the watch folder (4.2) must wait until a file's size settles
+- [ ] `cargo check -p florastack-raw --target wasm32-unknown-unknown`, with LightCraft's pipeline, develop and raster crates (7.3)
 
 ### 1.4 Project model
 
@@ -86,6 +92,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Orphan cleanup: old unnamed temporary projects moved to the OS trash, never deleted
 - [ ] Tile folders that a crashed run left behind (`TempFileStore`, named after the GUI binary with `-tiles-`) removed at startup
 - [ ] Tests: save and load round trip, migration from a v0 fixture, partial preset layering
+- [ ] The stack's `DevelopSettings` and its `Resolved` in the project: florastack-project may depend only on florastack-core, so either give it florastack-raw in `RULES` (with the reasoning) or keep both as serialized data that the engine reads
 
 ### 1.5 Command registry and job engine *(plan first)*
 
