@@ -1,13 +1,13 @@
 # Test corpus
 
-Real focus stacks for testing and scoring FloraStack, and format fixtures for testing its image codecs. Two files in this folder are tracked: [`manifest.toml`](manifest.toml), which pins the stacks and fixtures to download, and this README. Everything else here is gitignored: downloads, local stacks and anything you put next to them. Never commit images to the repository.
+Real focus stacks for testing and scoring FloraStack, and format fixtures for testing its image codecs and its RAW importer. Two files in this folder are tracked: [`manifest.toml`](manifest.toml), which pins the stacks and fixtures to download, and this README. Everything else here is gitignored: downloads, local stacks and anything you put next to them. Never commit images to the repository.
 
 ```text
 corpus/
 ├── manifest.toml           tracked: stacks and fixtures to download, each file pinned by sha256
 ├── README.md               tracked: this file
 ├── stacks/<name>/          downloaded by `cargo xtask corpus`
-├── fixtures/<name>/        downloaded by `cargo xtask corpus`: files from other writers, for the codec tests
+├── fixtures/<name>/        downloaded by `cargo xtask corpus`: files from other writers, for the codec and RAW tests
 └── local/<name>/           your own stacks, each with a stack.toml
     ├── stack.toml
     └── IMG_0001.CR3 ...
@@ -16,7 +16,7 @@ corpus/
 ```sh
 cargo xtask corpus               # download every stack and fixture in the manifest that is missing or fails its check, then list them
 cargo xtask corpus bee-head      # only that stack (or fixture set)
-cargo xtask corpus --fixtures    # only the format fixtures, which is what the codec tests need (CI runs this)
+cargo xtask corpus --fixtures    # only the format fixtures, which is what the codec and RAW tests need (CI runs this)
 cargo xtask corpus --check       # download nothing; fail if a pinned file is missing or wrong
 cargo xtask corpus --hash DIR    # print the [[stack.files]] entries for the files in DIR
 cargo xtask corpus --hash --inline DIR   # the same as one-line entries, for a fixture's files or an archive's members
@@ -42,7 +42,7 @@ To replace a placeholder, delete its `placeholder = true` line and fill it in th
 
 ## Format fixtures
 
-The codec tests (`crates/codecs/tests/fixtures.rs`) read files that other software wrote, because a round trip through FloraStack's own writer can't catch a misreading that the writer shares. Each `[[fixture]]` in the manifest is one set:
+The codec tests (`crates/codecs/tests/fixtures.rs`) read files that other software wrote, because a round trip through FloraStack's own writer can't catch a misreading that the writer shares, and the RAW tests (`crates/raw/tests/corpus.rs`) read what cameras wrote. Each `[[fixture]]` in the manifest is one set:
 
 | Set | Source | License | What it covers |
 |---|---|---|---|
@@ -50,6 +50,7 @@ The codec tests (`crates/codecs/tests/fixtures.rs`) read files that other softwa
 | `tiff` | [image-tiff's test images](https://github.com/image-rs/image-tiff/tree/3302936b08e2260d4c66f40f51170efbb1fded4c/tests/images) | MIT | 8, 16 and 32-bit float TIFFs written by libtiff: LZW, Deflate and PackBits, predictors, strips and tiles, BigTIFF, both byte orders, alpha |
 | `webp` | [image-webp's test files](https://github.com/image-rs/image-webp/tree/f4d80bd965df2c81e65b6f43c1f70e0750bd4b0f/tests) | MIT OR Apache-2.0 | Lossy, lossless and palette WebP, with the PNGs libwebp decodes them to |
 | `openexr` | [openexr-images](https://github.com/AcademySoftwareFoundation/openexr-images/tree/e38ffb0790f62f05a6f083a6fa4cac150b3b7452) | BSD-3-Clause | Gray ramps, every half value, Rec. 709 and XYZ chromaticities, and fuzzer-found damaged files |
+| `raw` | [raw.pixls.us](https://raw.pixls.us/), by its contributors | CC0-1.0 (each file's own mark in the site's listing) | One camera RAW file per format florastack-raw decodes, the smallest suitable CC0 sample of each: DNG (a camera's, and one demosaiced by Adobe DNG Converter), CR2, CR3, ARW, NEF, RAF (X-Trans and Bayer), RW2, PEF, ORF and SRW. About 107 MB, nearly all of the fixtures together; CI keeps the fixtures in a cache between runs |
 
 A set lists its files one by one (`[[fixture.files]]`, like a stack's), or, when its source ships one archive, as PngSuite does, an `[fixture.archive]`: the archive's URL, sha256 and size, and the `members` to install from it. `cargo xtask corpus` checks the archive before extracting it with the system's `tar` in the staging folder, then checks every listed member again and installs only those. Pin files by commit (a `raw.githubusercontent.com/<owner>/<repo>/<commit>/...` URL), never by branch, so that they can't change under the hash.
 

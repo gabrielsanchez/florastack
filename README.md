@@ -19,7 +19,7 @@ cargo xtask corpus                                      # download the sample st
 cargo xtask bench                                       # criterion benchmarks, summarized in target/bench-summary.json
 ```
 
-`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures` before the tests, so that the codec tests have their files. [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks.
+`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures` before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks.
 
 ## Contributing
 

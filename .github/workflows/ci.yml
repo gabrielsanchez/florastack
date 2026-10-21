@@ -57,8 +57,20 @@ jobs:
       - name: Crate layering
         run: cargo xtask check-layers
 
-      # The format test files corpus/manifest.toml lists (PngSuite, and TIFF, WebP and OpenEXR files: about 3 MB),
-      # downloaded into the gitignored corpus/fixtures/ and checked against their SHA-256. The tests that need them
+      # The test files corpus/manifest.toml pins: PngSuite and TIFF, WebP and OpenEXR files for the codecs (about
+      # 3 MB) and one CC0 camera RAW file per format for florastack-raw (about 107 MB, from raw.pixls.us). They are
+      # cached between runs, one cache for all three systems (the files are the same everywhere), so that a run only
+      # downloads what a change to the manifest added and the hosts see each file about once; the fetch below checks
+      # every file's SHA-256 all the same, and replaces any that fails.
+      - name: Cache test fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: corpus/fixtures
+          key: corpus-fixtures-${{ hashFiles('corpus/manifest.toml') }}
+          restore-keys: corpus-fixtures-
+          enableCrossOsArchive: true
+
+      # Downloaded into the gitignored corpus/fixtures/ and checked against their SHA-256. The tests that need them
       # read them there; run locally without them, those tests are skipped.
       - name: Fetch test fixtures
         run: cargo xtask corpus --fixtures

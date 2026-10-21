@@ -629,3 +629,99 @@ name = "damaged-10.exr"
 url = "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr-images/e38ffb0790f62f05a6f083a6fa4cac150b3b7452/Damaged/openexr_2.5.1_null_deref_error"
 sha256 = "5408a07e06e34578309182aeeff59231fc95b7f0527624f34fe6beb8a47f0591"
 size = 421
+
+# Camera RAW files for florastack-raw's tests (crates/raw/tests/corpus.rs): one per format it decodes, the smallest
+# suitable CC0 file of each on raw.pixls.us (about 107 MB in all, most of it the two RAF files and the SRW file, which
+# no smaller CC0 sample comes in). Each file is marked CC0 in the site's repository listing (json/getrepository.php),
+# checked for every file listed here when it was pinned (2026-10-20). CI keeps the set in a cache between runs.
+
+[[fixture]]
+name = "raw"
+description = "One RAW file per decoded format: DNG (a camera's, and one Adobe DNG Converter demosaiced), Canon CR2 and CR3 (C-RAW), Sony ARW, Nikon NEF (lossy compressed), Fujifilm RAF (X-Trans compressed, Bayer uncompressed), Panasonic RW2, Pentax PEF, Olympus ORF and Samsung SRW"
+source = "https://raw.pixls.us/"
+license = "CC0-1.0"
+attribution = "the raw.pixls.us contributors"
+
+# Sony ILCE-7S, 14bit 14bit compressed (3:2) (raw.pixls.us file 1582, CC0)
+[[fixture.files]]
+name = "arw-sony-ilce-7s.arw"
+url = "https://raw.pixls.us/getfile.php/1582/nice/Sony%20-%20ILCE-7S%20-%2014bit%2014bit%20compressed%20%283:2%29.ARW"
+sha256 = "a35ebb2fbec929daa5beb20d1ce5c15a8aac7b1a7a231455387f3df8a7442e07"
+size = 6160384
+
+# Canon EOS Digital Rebel XT, RAW (3:2) (raw.pixls.us file 1230, CC0)
+[[fixture.files]]
+name = "cr2-canon-eos-digital-rebel-xt.cr2"
+url = "https://raw.pixls.us/getfile.php/1230/nice/Canon%20-%20EOS%20Digital%20Rebel%20XT%20-%20RAW%20%283:2%29.CR2"
+sha256 = "4b47ba27c0090efa091aaf99babc76d9a3e6f6f121b443d6c58c3ce7275cd770"
+size = 7456886
+
+# Canon EOS R6, 3:2 (raw.pixls.us file 4659, CC0)
+[[fixture.files]]
+name = "cr3-canon-eos-r6.cr3"
+url = "https://raw.pixls.us/getfile.php/4659/nice/Canon%20-%20EOS%20R6%20-%203:2.CR3"
+sha256 = "74abb0a113d075ad9887a058082f40dd2a938c4813a08474d82356f11a027778"
+size = 5273174
+
+# Adobe DNG Converter Canon EOS 5D Mark III, Lossy JPEG compression, rgb (3:2) (raw.pixls.us file 1033, CC0)
+[[fixture.files]]
+name = "dng-adobe-converter-linear.dng"
+url = "https://raw.pixls.us/getfile.php/1033/nice/Adobe%20DNG%20Converter%20-%20Canon%20EOS%205D%20Mark%20III%20-%20Lossy%20JPEG%20compression%2C%20rgb%20%283:2%29.DNG"
+sha256 = "b22f1e36331f679abb8b13e433b9bbde3988723adf10fee7aa0dda6381016a98"
+size = 2484836
+
+# Canon EOS 5D Mark III, 14bit 14bit (2.3471882640587) (raw.pixls.us file 2204, CC0)
+[[fixture.files]]
+name = "dng-canon-eos-5d-mark-iii.dng"
+url = "https://raw.pixls.us/getfile.php/2204/nice/Canon%20-%20EOS%205D%20Mark%20III%20-%2014bit%2014bit%20%282.3471882640587%29.dng"
+sha256 = "1d77dcc6cdb839b10c1948f0b4471984ab48cf15e973fb77520584cee72b603e"
+size = 1538165
+
+# Nikon D2H, 12bit 12bit compressed (Lossy (type 1)) (3:2) (raw.pixls.us file 5227, CC0)
+[[fixture.files]]
+name = "nef-nikon-d2h.nef"
+url = "https://raw.pixls.us/getfile.php/5227/nice/Nikon%20-%20D2H%20-%2012bit%2012bit%20compressed%20%28Lossy%20%28type%201%29%29%20%283:2%29.NEF"
+sha256 = "155edb938f884ea7372ce98d4ff5f965c3e413b43b95bc9923da6e92082cf914"
+size = 3236017
+
+# Olympus E-10, 16bit (4:3) (raw.pixls.us file 5424, CC0)
+[[fixture.files]]
+name = "orf-olympus-e-10.orf"
+url = "https://raw.pixls.us/getfile.php/5424/nice/Olympus%20-%20E-10%20-%2016bit%20%284:3%29.ORF"
+sha256 = "2bfdade72439017a60a47aad1e5bbcb1aca36f2be7a21e94a4257a678fb6f4da"
+size = 7614592
+
+# Pentax K10D, 12bit 12bit compressed (3:2) (raw.pixls.us file 2239, CC0)
+[[fixture.files]]
+name = "pef-pentax-k10d.pef"
+url = "https://raw.pixls.us/getfile.php/2239/nice/Pentax%20-%20K10D%20-%2012bit%2012bit%20compressed%20%283:2%29.PEF"
+sha256 = "e35ae4154a468be3154f5f462e884ba5941f010d3e8f23d347fbec14809f44d3"
+size = 9561139
+
+# Fujifilm FinePix X100, 12bit 12bit uncompressed (3:2) (raw.pixls.us file 2392, CC0)
+[[fixture.files]]
+name = "raf-fujifilm-finepix-x100-bayer.raf"
+url = "https://raw.pixls.us/getfile.php/2392/nice/Fujifilm%20-%20FinePix%20X100%20-%2012bit%2012bit%20uncompressed%20%283:2%29.RAF"
+sha256 = "1f4aea4fa43dd314f8b90954d7823655d4906d3e468a9ea014652b872a68db16"
+size = 19940464
+
+# Fujifilm X-S10, 14bit 14bit compressed (3:2) (raw.pixls.us file 4190, CC0)
+[[fixture.files]]
+name = "raf-fujifilm-x-s10-xtrans.raf"
+url = "https://raw.pixls.us/getfile.php/4190/nice/Fujifilm%20-%20X-S10%20-%2014bit%2014bit%20compressed%20%283:2%29.RAF"
+sha256 = "9419d1408ebf850395e5dd563beb96309466546252caf541466034c9cb7e9724"
+size = 18675216
+
+# Panasonic DMC-LX7, 1:1 (raw.pixls.us file 7008, CC0)
+[[fixture.files]]
+name = "rw2-panasonic-dmc-lx7.rw2"
+url = "https://raw.pixls.us/getfile.php/7008/nice/Panasonic%20-%20DMC-LX7%20-%201:1.RW2"
+sha256 = "d142a23aca836053ed53e9ce3cb3ed2d434541d734d71a94a6eefadcd08bd31b"
+size = 3249664
+
+# Samsung EX1, 14bit (4:3) (raw.pixls.us file 1204, CC0)
+[[fixture.files]]
+name = "srw-samsung-ex1.srw"
+url = "https://raw.pixls.us/getfile.php/1204/nice/Samsung%20-%20EX1%20-%2014bit%20%284:3%29.SRW"
+sha256 = "a084890fd9d7995ceb746c18ecf5be48c95baf14286d5c0c480cc3daa25f3e37"
+size = 21699313

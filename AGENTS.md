@@ -10,7 +10,7 @@ The toolchain is pinned in `rust-toolchain.toml`, and the README lists the build
 cargo xtask ci
 ```
 
-It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `cargo fmt --check`, Clippy with warnings as errors, `cargo xtask check-layers`, `cargo xtask corpus --fixtures` (which downloads the format test files, about 3 MB, unless they are already there), the tests, `cargo deny check` and `cargo audit`. It stops at the first failure and ends with a summary that lists the tests skipped for want of a GPU or corpus files. It needs cargo-deny and cargo-audit: `cargo install --locked cargo-deny cargo-audit`.
+It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `cargo fmt --check`, Clippy with warnings as errors, `cargo xtask check-layers`, `cargo xtask corpus --fixtures` (which downloads the test files, about 110 MB, nearly all of it camera RAW samples, unless they are already there), the tests, `cargo deny check` and `cargo audit`. It stops at the first failure and ends with a summary that lists the tests skipped for want of a GPU or corpus files. It needs cargo-deny and cargo-audit: `cargo install --locked cargo-deny cargo-audit`.
 
 ## Crate map
 
@@ -18,13 +18,13 @@ It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `car
 |---|---|---|---|
 | `florastack-core` | `crates/core` | Image buffers (`Image<T>`, `AnyImage`), pixel formats and their conversions (sample types, sRGB and linear), geometry (`Affine`, `Rect`), the tiled view (`TileGrid`), the tile cache (`TileCache` over a `TileStore`, temporary files by default), the basic operations (blur, resize, Sobel, Laplacian, warps), EXIF orientation (`Orientation`, `Image::oriented`), error types and the product identity (`branding`, including the XMP namespace); behind its test-only `testutil` feature, the synthetic stack generator | no FloraStack crate |
 | `florastack-codecs` | `crates/codecs` | Image files: reading JPEG, PNG, TIFF, OpenEXR, WebP and BMP, and writing JPEG, PNG, TIFF, OpenEXR and linear DNG, with their EXIF, IPTC and XMP metadata, ICC profiles and orientation; built on LightCraft's tiff, codecs, meta and color crates, and raw for the DNG writer's lossless JPEG (`docs/lightcraft.md`), none of whose types appear in its API | core |
-| `florastack-raw` | `crates/raw` | RAW decoding (an adapter over LightCraft's decoders) and the develop step to linear RGB | core |
+| `florastack-raw` | `crates/raw` | RAW decoding behind its `RawDecoder` trait (LightCraft's decoders: DNG, CR2, CR3, NEF, ARW, RAF, RW2, PEF, uncompressed ORF and SRW, and a few more) into plain `RawFrame` data, and the develop step to linear Rec. 2020 RGB with one `DevelopSettings` per stack, resolved once on a reference frame (`RawDevelop`); built on LightCraft's raw, pipeline, develop, raster, codecs and color crates (`docs/lightcraft.md`), none of whose types appear in its API | core |
 | `florastack-align` | `crates/align` | Frame alignment, stack ordering and framing, dust and movement handling; CPU reference for GPU kernels | core |
 | `florastack-stack` | `crates/stack` | Stacking methods (weighted average, pyramid, depth map); CPU reference for GPU kernels | core |
 | `florastack-gpu` | `crates/gpu` | wgpu compute (WGSL) versions of the hot paths | core, plus align and stack as dev-dependencies for the agreement tests |
 | `florastack-project` | `crates/project` | The project model, project folders and presets | core |
 | `florastack-retouch` | `crates/retouch` | Retouching brushes and stroke layers | core, project |
-| `florastack-engine` | `crates/engine` | The command registry, jobs and orchestration; re-exports what the apps need | every library crate above |
+| `florastack-engine` | `crates/engine` | The command registry, jobs and orchestration, such as reading a stack's frames (`frames`: camera RAW and DNG files to florastack-raw, 16-bit TIFF and other image files to florastack-codecs); re-exports what the apps need | every library crate above |
 | `florastack-metrics` | `crates/metrics` | Image-quality metrics for tests and benchmarks: PSNR, SSIM, halos, flat-region noise and color shift (CIEDE2000) | core; other crates use it as a dev-dependency only |
 | `florastack-testkit` | `crates/testkit` | Test tooling: `skip!`, which records a test that can't run here | nothing; other crates use it as a dev-dependency only |
 | `florastack` | `apps/florastack` | The egui desktop app | engine only |
@@ -49,7 +49,7 @@ Alignment and stacking are scored, not eyeballed, against three kinds of test da
 
 - **Synthetic stacks** with exact ground truth: `florastack_core::testutil` (enable the `testutil` feature in `[dev-dependencies]`). `generate` turns a sharp image and a depth map, such as `scene::textured`'s, into frames with depth-dependent blur, focus breathing, sub-pixel shift, rotation, brightness jitter, noise and dust; `StackParams::identity`, `clean` and `noisy_dusty` are the standard sets. Score alignment with `GroundTruth::relative` and `transform_error`, and stacking against `GroundTruth::sharp` with `florastack-metrics`.
 - **Real stacks** in the gitignored `corpus/` folder: `cargo xtask corpus` downloads the ones `corpus/manifest.toml` pins (sha256-verified) and checks the local ones; `corpus/README.md` says how to add either kind. A test that needs one calls `skip!(Corpus, ...)` when it is missing. Never commit corpus files.
-- **Format fixtures**: files written by other software (PngSuite, and TIFF, WebP and OpenEXR test files) for the codec tests. The same manifest pins them, `cargo xtask corpus --fixtures` downloads them into `corpus/fixtures/<set>/` (CI does so before the tests), and tests find them with `florastack_testkit::fixture` and `fixtures`, calling `skip!(Corpus, ...)` when a set is missing.
+- **Format fixtures**: files written by other software (PngSuite, and TIFF, WebP and OpenEXR test files) for the codec tests, and one camera RAW file per format florastack-raw decodes (CC0, from raw.pixls.us) for the RAW tests. The same manifest pins them, `cargo xtask corpus --fixtures` downloads them into `corpus/fixtures/<set>/` (CI does so before the tests), and tests find them with `florastack_testkit::fixture` and `fixtures`, calling `skip!(Corpus, ...)` when a set is missing.
 - **Benchmarks**: criterion benches in each crate's `benches/` (each file starts with the `#![allow(...)]` line of the never-crash rules). `cargo xtask bench` runs them and writes `target/bench-summary.json`, which later changes compare against. CI compiles the benches but doesn't run them.
 
 ## Everything is a command
@@ -103,7 +103,7 @@ A malformed file, a hostile parameter or a full disk must produce an error the u
 - **Product identity**: names come from `branding.toml` through `florastack_core::branding`, which the engine re-exports. Never hard-code the display name, binary names, project-folder extension or app ID.
 - **Tests that can't run here**, for want of a GPU adapter or a corpus file, call `florastack_testkit::skip!` and return instead of passing silently, so that `cargo xtask ci` lists them.
 - **Pure Rust**: prefer pure-Rust crates. A dependency that needs a C or C++ library (a `-sys` crate, a `cc` or `cmake` build step, or a system library) is a design decision to discuss before adding it. `unsafe` code inside third-party crates is accepted (codecs and SIMD routines use it); FloraStack's own `unsafe` follows the rules in Never crash above.
-- **LightCraft**: FloraStack uses LightCraft's low-level crates (`lightcraft-tiff`, `-codecs`, `-meta`, `-color` and `-raw`) from its git repository, all pinned to one commit in `[workspace.dependencies]`. Their types stay inside `florastack-codecs` and `florastack-raw`, behind FloraStack's own types and traits. `docs/lightcraft.md` says how to move the pin.
+- **LightCraft**: FloraStack uses LightCraft's low-level crates (`lightcraft-tiff`, `-codecs`, `-meta`, `-color` and `-raw`, and for the RAW develop step `-pipeline`, `-develop` and `-raster`, never its engine or UI) from its git repository, all pinned to one commit in `[workspace.dependencies]`. Their types stay inside `florastack-codecs` and `florastack-raw`, behind FloraStack's own types and traits. `docs/lightcraft.md` says how to move the pin.
 
 ## Per-change checklist
 

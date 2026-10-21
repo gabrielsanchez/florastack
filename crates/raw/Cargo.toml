@@ -11,3 +11,24 @@ workspace = true
 
 [dependencies]
 florastack-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rayon.workspace = true
+# The decoders, demosaicing, highlight reconstruction and the DNG color model, with JPEG XL compressed DNGs (DNG 1.7)
+# through jxl-oxide, pure Rust like the rest (docs/lightcraft.md).
+lightcraft-raw = { workspace = true, features = ["jxl"] }
+lightcraft-color.workspace = true
+# The linear Rec. 2020 ICC profile that developed frames are tagged with: the same bytes florastack-codecs writes for
+# that space.
+lightcraft-codecs.workspace = true
+lightcraft-raster.workspace = true
+lightcraft-pipeline.workspace = true
+lightcraft-develop.workspace = true
+
+[dev-dependencies]
+florastack-testkit.workspace = true
+proptest.workspace = true
+# The settings' serde round trips, as a project file (JSON) and a preset (TOML) store them.
+serde_json.workspace = true
+toml.workspace = true

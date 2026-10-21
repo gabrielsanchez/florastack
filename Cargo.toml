@@ -51,8 +51,16 @@ lightcraft-tiff = { git = "https://github.com/storytold/lightcraft", rev = "a2a4
 lightcraft-codecs = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c", default-features = false, features = ["parallel"] }
 lightcraft-meta = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
 lightcraft-color = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
-# Without the default `jxl` feature (JPEG XL compressed DNGs); the RAW importer decides on it (roadmap 1.3).
+# Without the default `jxl` feature here: florastack-raw turns it on for JPEG XL compressed DNGs (DNG 1.7), which
+# florastack-codecs, using only the lossless-JPEG encoder, doesn't need.
 lightcraft-raw = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c", default-features = false }
+# The develop code florastack-raw uses besides lightcraft-raw's own (docs/lightcraft.md): noise reduction, lateral
+# chromatic-aberration estimation and automatic white balance from the develop pipeline (whose tone curves, filmic
+# shoulder and looks it never calls), the edit model that pipeline's noise-reduction parameters are read from, and
+# the raster image and resampler they work on.
+lightcraft-pipeline = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-develop = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
 
 # Image codecs that florastack-codecs uses directly, at the versions LightCraft already brings in (ATTRIBUTION.md says
 # what each one does).
