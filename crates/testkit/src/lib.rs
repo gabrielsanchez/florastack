@@ -24,14 +24,47 @@
 //! its checks (the CPU half, say) records the part it couldn't run the same way.
 //!
 //! Adapted from LightCraft's `lightcraft-testkit` (MIT OR Apache-2.0; see ATTRIBUTION.md and NOTICE).
+//!
+//! # Corpus files
+//!
+//! [`corpus_dir`] is the gitignored `corpus/` folder at the workspace root, and [`fixture`] finds a format fixture
+//! that `cargo xtask corpus` fetched into `corpus/fixtures/<set>/`. A test that needs one skips without it:
+//!
+//! ```no_run
+//! let Some(path) = florastack_testkit::fixture("pngsuite", "basn0g16.png") else {
+//!     florastack_testkit::skip!(Corpus, "the PngSuite fixtures are missing: run `cargo xtask corpus`");
+//!     return;
+//! };
+//! # let _ = path;
+//! ```
 
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The environment variable naming the file that [`skip!`] appends its records to, one JSON object per line.
 pub const SKIP_LOG_ENV: &str = "FLORASTACK_SKIP_LOG";
+
+/// The test corpus: the gitignored `corpus/` folder at the workspace root, two levels above this crate.
+pub fn corpus_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("corpus")
+}
+
+/// The file `name` of the format fixture set `set` (`corpus/fixtures/<set>/<name>`), if `cargo xtask corpus` has
+/// fetched it.
+pub fn fixture(set: &str, name: &str) -> Option<PathBuf> {
+    let path = corpus_dir().join("fixtures").join(set).join(name);
+    path.is_file().then_some(path)
+}
+
+/// Every file of the fixture set `set`, in name order; empty if the set hasn't been fetched.
+pub fn fixtures(set: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(corpus_dir().join("fixtures").join(set)) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_file()).collect();
+    files.sort();
+    files
+}
 
 /// What a skipped test needed and didn't find.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -13,6 +13,7 @@ pub struct Branding {
     pub project_extension: String,
     pub app_id: String,
     pub binaries: Binaries,
+    pub xmp: Xmp,
 }
 
 /// Executable names of the apps.
@@ -21,6 +22,14 @@ pub struct Branding {
 pub struct Binaries {
     pub gui: String,
     pub cli: String,
+}
+
+/// The XMP namespace of the properties FloraStack writes into its output files.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Xmp {
+    pub namespace: String,
+    pub prefix: String,
 }
 
 impl Branding {
@@ -56,14 +65,20 @@ mod tests {
         let branding = repository();
         assert!(branding.project_extension.starts_with('.'), "the project extension includes its dot");
         assert_ne!(branding.binaries.gui, branding.binaries.cli);
+        // An XML namespace name: an absolute URI, and a prefix that is an XML name without a colon.
+        assert!(branding.xmp.namespace.starts_with("https://") && branding.xmp.namespace.ends_with('/'), "{}", branding.xmp.namespace);
+        let prefix = &branding.xmp.prefix;
+        assert!(prefix.starts_with(|c: char| c.is_ascii_lowercase()) && prefix.chars().all(|c| c.is_ascii_alphanumeric()), "{prefix}");
     }
 
     #[test]
     fn unknown_and_missing_keys_are_rejected() {
-        let valid = "display_name = \"A\"\nproject_extension = \".a\"\napp_id = \"io.github.x.A\"\n\n[binaries]\ngui = \"a\"\ncli = \"a-cli\"\n";
+        let valid = "display_name = \"A\"\nproject_extension = \".a\"\napp_id = \"io.github.x.A\"\n\n[binaries]\ngui = \"a\"\ncli = \"a-cli\"\n\n\
+                     [xmp]\nnamespace = \"https://example.org/a/\"\nprefix = \"a\"\n";
         assert!(parse(valid).is_ok());
         assert!(parse(&format!("version = 1\n{valid}")).is_err(), "unknown top-level key");
-        assert!(parse(&format!("{valid}web = \"a-web\"\n")).is_err(), "unknown binary");
+        assert!(parse(&valid.replace("cli = \"a-cli\"\n", "cli = \"a-cli\"\nweb = \"a-web\"\n")).is_err(), "unknown binary");
         assert!(parse(&valid.replace("app_id = \"io.github.x.A\"\n", "")).is_err(), "missing key");
+        assert!(parse(&valid.replace("prefix = \"a\"\n", "")).is_err(), "missing XMP prefix");
     }
 }

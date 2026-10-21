@@ -42,6 +42,37 @@ proptest = { version = "1.12", default-features = false, features = ["std"] }
 # in pure Rust: 0.8 depends on `alloca`, which compiles C (AGENTS.md, Pure Rust).
 criterion ={ version = "0.7", default-features = false, features = ["cargo_bench_support"] }
 
+# LightCraft's low-level crates (MIT OR Apache-2.0, pure Rust). They aren't published on crates.io, so they come from
+# git, every one at the same commit: "Release 0.10.0" on main. docs/lightcraft.md says how to move the pin; deny.toml
+# allows this one git source and requires a `rev`. FloraStack keeps their types out of its public APIs.
+lightcraft-tiff = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+# Without the default `jxl` and `avif` features, which FloraStack doesn't use: `avif` brings in rav1e and, through it,
+# libfuzzer-sys, which compiles C++ with `cc`.
+lightcraft-codecs = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c", default-features = false, features = ["parallel"] }
+lightcraft-meta = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-color = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+# Without the default `jxl` feature (JPEG XL compressed DNGs); the RAW importer decides on it (roadmap 1.3).
+lightcraft-raw = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c", default-features = false }
+
+# Image codecs that florastack-codecs uses directly, at the versions LightCraft already brings in (ATTRIBUTION.md says
+# what each one does).
+png = "0.18"
+tiff = "0.11"
+zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
+zune-core = { version = "0.5", default-features = false, features = ["std"] }
+image-webp = "0.2"
+# The BMP decoder only; LightCraft's codecs enable image's other formats for themselves.
+image = { version = "0.25", default-features = false, features = ["bmp"] }
+# Exactly 1.74.0: 1.74.1 added lossy DWA compression through `pulp`, which pulls in the unmaintained `paste`
+# (RUSTSEC-2024-0436). Without the default `rayon` feature; florastack-codecs turns it on for native targets only.
+exr = { version = "=1.74.0", default-features = false }
+# Deflate and LZW for the TIFF writer, as the tiff crate and LightCraft use them.
+miniz_oxide = "0.8"
+weezl = "0.1"
+# The ICC profiles LightCraft's codecs don't write: gray ones, ones built from a file's chromaticities, and the linear
+# twin of an input profile. The same version LightCraft uses.
+moxcms = { version = "0.9", default-features = false }
+
 [workspace.lints.rust]
 # No unsafe code. A module that truly needs it opts in with #[allow(unsafe_code)] and is listed in
 # AGENTS.md; `deny` rather than `forbid` keeps that possible.

@@ -8,6 +8,8 @@
 //! - [`convert`]: conversions between sample types and between sRGB-encoded and linear samples. Stacking math runs on
 //!   linear `Image<f32>`.
 //! - [`geometry`]: [`Affine`], the 2x3 transform that alignment estimates and warps apply, and [`Rect`].
+//! - [`orientation`]: [`Orientation`], the EXIF and TIFF orientation tag, and [`Image::oriented`], which turns stored
+//!   pixels upright.
 //! - [`ops`]: Gaussian blur, Lanczos3 resize, Sobel and Laplacian, and bilinear and bicubic affine warps, the CPU
 //!   reference for the GPU kernels to come.
 //! - [`tile`]: [`TileGrid`], overlapping tiles stitched back with feathered seams, so that processing can bound its
@@ -21,6 +23,7 @@ pub mod convert;
 pub mod geometry;
 pub mod image;
 pub mod ops;
+pub mod orientation;
 pub mod store;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
@@ -28,10 +31,12 @@ pub mod tile;
 
 pub use geometry::{Affine, Rect};
 pub use image::{AnyImage, ColorSpace, Encoding, Image, ImageError, Sample, SampleFormat};
+pub use orientation::Orientation;
 pub use store::{CacheStats, MemoryStore, StoreError, TempFileStore, TileCache, TileKey, TileStore};
 pub use tile::{Tile, TileError, TileGrid};
 
-/// FloraStack's product identity: display name, binary names, project-folder extension and app ID.
+/// FloraStack's product identity: display name, binary names, project-folder extension, app ID and the XMP namespace of
+/// its output files.
 ///
 /// Generated at build time from `branding.toml` at the repository root, the one place these values are defined.
 pub mod branding {

@@ -10,14 +10,14 @@ The toolchain is pinned in `rust-toolchain.toml`, and the README lists the build
 cargo xtask ci
 ```
 
-It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `cargo fmt --check`, Clippy with warnings as errors, `cargo xtask check-layers`, the tests, `cargo deny check` and `cargo audit`. It stops at the first failure and ends with a summary that lists the tests skipped for want of a GPU or corpus files. It needs cargo-deny and cargo-audit: `cargo install --locked cargo-deny cargo-audit`.
+It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `cargo fmt --check`, Clippy with warnings as errors, `cargo xtask check-layers`, `cargo xtask corpus --fixtures` (which downloads the format test files, about 3 MB, unless they are already there), the tests, `cargo deny check` and `cargo audit`. It stops at the first failure and ends with a summary that lists the tests skipped for want of a GPU or corpus files. It needs cargo-deny and cargo-audit: `cargo install --locked cargo-deny cargo-audit`.
 
 ## Crate map
 
 | Crate | Path | Responsibility | May depend on |
 |---|---|---|---|
-| `florastack-core` | `crates/core` | Image buffers (`Image<T>`, `AnyImage`), pixel formats and their conversions (sample types, sRGB and linear), geometry (`Affine`, `Rect`), the tiled view (`TileGrid`), the tile cache (`TileCache` over a `TileStore`, temporary files by default), the basic operations (blur, resize, Sobel, Laplacian, warps), error types and the product identity (`branding`); behind its test-only `testutil` feature, the synthetic stack generator | no FloraStack crate |
-| `florastack-codecs` | `crates/codecs` | Image files with their metadata and ICC profiles | core |
+| `florastack-core` | `crates/core` | Image buffers (`Image<T>`, `AnyImage`), pixel formats and their conversions (sample types, sRGB and linear), geometry (`Affine`, `Rect`), the tiled view (`TileGrid`), the tile cache (`TileCache` over a `TileStore`, temporary files by default), the basic operations (blur, resize, Sobel, Laplacian, warps), EXIF orientation (`Orientation`, `Image::oriented`), error types and the product identity (`branding`, including the XMP namespace); behind its test-only `testutil` feature, the synthetic stack generator | no FloraStack crate |
+| `florastack-codecs` | `crates/codecs` | Image files: reading JPEG, PNG, TIFF, OpenEXR, WebP and BMP, and writing JPEG, PNG, TIFF, OpenEXR and linear DNG, with their EXIF, IPTC and XMP metadata, ICC profiles and orientation; built on LightCraft's tiff, codecs, meta and color crates, and raw for the DNG writer's lossless JPEG (`docs/lightcraft.md`), none of whose types appear in its API | core |
 | `florastack-raw` | `crates/raw` | RAW decoding (an adapter over LightCraft's decoders) and the develop step to linear RGB | core |
 | `florastack-align` | `crates/align` | Frame alignment, stack ordering and framing, dust and movement handling; CPU reference for GPU kernels | core |
 | `florastack-stack` | `crates/stack` | Stacking methods (weighted average, pyramid, depth map); CPU reference for GPU kernels | core |
@@ -49,6 +49,7 @@ Alignment and stacking are scored, not eyeballed, against three kinds of test da
 
 - **Synthetic stacks** with exact ground truth: `florastack_core::testutil` (enable the `testutil` feature in `[dev-dependencies]`). `generate` turns a sharp image and a depth map, such as `scene::textured`'s, into frames with depth-dependent blur, focus breathing, sub-pixel shift, rotation, brightness jitter, noise and dust; `StackParams::identity`, `clean` and `noisy_dusty` are the standard sets. Score alignment with `GroundTruth::relative` and `transform_error`, and stacking against `GroundTruth::sharp` with `florastack-metrics`.
 - **Real stacks** in the gitignored `corpus/` folder: `cargo xtask corpus` downloads the ones `corpus/manifest.toml` pins (sha256-verified) and checks the local ones; `corpus/README.md` says how to add either kind. A test that needs one calls `skip!(Corpus, ...)` when it is missing. Never commit corpus files.
+- **Format fixtures**: files written by other software (PngSuite, and TIFF, WebP and OpenEXR test files) for the codec tests. The same manifest pins them, `cargo xtask corpus --fixtures` downloads them into `corpus/fixtures/<set>/` (CI does so before the tests), and tests find them with `florastack_testkit::fixture` and `fixtures`, calling `skip!(Corpus, ...)` when a set is missing.
 - **Benchmarks**: criterion benches in each crate's `benches/` (each file starts with the `#![allow(...)]` line of the never-crash rules). `cargo xtask bench` runs them and writes `target/bench-summary.json`, which later changes compare against. CI compiles the benches but doesn't run them.
 
 ## Everything is a command
@@ -78,7 +79,7 @@ FloraStack's code is either original or taken from sources whose licenses allow 
 - **Proprietary stackers** (Helicon Focus, Zerene Stacker): never use their code, shaders or assets, and don't decompile, disassemble or otherwise reverse-engineer them. Learning from their public documentation and comparing their output with ours is fine; don't commit their output to the repository.
 - **GPL and LGPL image projects**: do not read or copy code from enfuse/enblend, CombineZP, darktable, RawTherapee, LibRaw, dcraw or rawler/rawloader, not even to see how something is done. Work from the papers they build on instead.
 - **Allowed sources**: published papers, cited in the doc comment of the code that implements them, and permissively licensed code such as focus-stack (MIT), PhotoCraft and LightCraft (MIT OR Apache-2.0). Code adapted from such a project gets a row in `ATTRIBUTION.md`, with its copyright line in `NOTICE`, in the same commit, and a comment at the adapted code that names its source.
-- **Dependencies** must be permissively licensed. `cargo deny check` enforces the policy in `deny.toml`: MIT, Apache-2.0, the BSD licenses, ISC, Zlib, 0BSD, BSL-1.0, CC0-1.0, Unicode-3.0 and MPL-2.0 are allowed, and GPL, LGPL and AGPL are denied. The licenses of egui's bundled fonts (OFL-1.1 and the Ubuntu Font Licence) are allowed for that font crate alone.
+- **Dependencies** must be permissively licensed. `cargo deny check` enforces the policy in `deny.toml`: MIT, Apache-2.0, the BSD licenses, ISC, Zlib, 0BSD, BSL-1.0, CC0-1.0, Unicode-3.0 and MPL-2.0 are allowed, and GPL, LGPL and AGPL are denied. The licenses of egui's bundled fonts (OFL-1.1 and the Ubuntu Font Licence) are allowed for that font crate alone, and the Independent JPEG Group's license for `jpeg-encoder` alone (its credit line is in `NOTICE`). Crates come from crates.io, except LightCraft's, which come from its git repository pinned to one commit (`docs/lightcraft.md`).
 - The camera control planned for Phase 6 talks to libgphoto2 (LGPL-2.1) as a separately installed shared library loaded at run time, never as a crate, so that users can replace it.
 
 ## Never crash
@@ -101,7 +102,8 @@ A malformed file, a hostile parameter or a full disk must produce an error the u
 - **Style**: `rustfmt.toml` (lines up to 150 columns) and Clippy pedantic, with the few exceptions documented in the root `Cargo.toml`. Allow a lint locally, with a comment that says why, rather than contorting the code.
 - **Product identity**: names come from `branding.toml` through `florastack_core::branding`, which the engine re-exports. Never hard-code the display name, binary names, project-folder extension or app ID.
 - **Tests that can't run here**, for want of a GPU adapter or a corpus file, call `florastack_testkit::skip!` and return instead of passing silently, so that `cargo xtask ci` lists them.
-- **Pure Rust**: prefer pure-Rust crates. A dependency that needs a C library or `unsafe` code is a design decision to discuss first.
+- **Pure Rust**: prefer pure-Rust crates. A dependency that needs a C or C++ library (a `-sys` crate, a `cc` or `cmake` build step, or a system library) is a design decision to discuss before adding it. `unsafe` code inside third-party crates is accepted (codecs and SIMD routines use it); FloraStack's own `unsafe` follows the rules in Never crash above.
+- **LightCraft**: FloraStack uses LightCraft's low-level crates (`lightcraft-tiff`, `-codecs`, `-meta`, `-color` and `-raw`) from its git repository, all pinned to one commit in `[workspace.dependencies]`. Their types stay inside `florastack-codecs` and `florastack-raw`, behind FloraStack's own types and traits. `docs/lightcraft.md` says how to move the pin.
 
 ## Per-change checklist
 
@@ -117,9 +119,9 @@ Before you commit:
 
 - `ATTRIBUTION.md` and `NOTICE`, for code, data or assets taken from elsewhere;
 - this file's crate map and `RULES` in `xtask/src/layers.rs`, for a new crate or a change to which crate may depend on which;
-- `deny.toml`, for a new git source or a justified exception;
+- `deny.toml`, for a new git source or a justified exception, and `.cargo/audit.toml` with it for an ignored advisory;
 - the README, when building or running FloraStack changes.
 
 ## CI
 
-`.github/workflows/ci.yml` runs the `check` job (formatting, Clippy, check-layers and the tests) on `ubuntu-latest`, `macos-latest` (arm64) and `windows-latest`, and the `dependencies` job (`cargo deny check` and `cargo audit`) on Linux. `cargo xtask ci` runs the same commands, and a test in `xtask/src/ci.rs` fails when the two lists differ, so change them together. Third-party actions are pinned to a full commit SHA, and the toolchain always comes from `rust-toolchain.toml`.
+`.github/workflows/ci.yml` runs the `check` job (formatting, Clippy, check-layers, fetching the format fixtures and the tests) on `ubuntu-latest`, `macos-latest` (arm64) and `windows-latest`, and the `dependencies` job (`cargo deny check` and `cargo audit`) on Linux. `cargo xtask ci` runs the same commands, and a test in `xtask/src/ci.rs` fails when the two lists differ, so change them together. Third-party actions are pinned to a full commit SHA, and the toolchain always comes from `rust-toolchain.toml`.

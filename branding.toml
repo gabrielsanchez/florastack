@@ -20,3 +20,10 @@ app_id = "io.github.gabrielsanchez.FloraStack"
 [binaries]
 gui = "florastack"
 cli = "florastack-cli"
+
+# The XMP namespace of the properties FloraStack writes into its output files, such as the stack's frame count
+# (`florastack:FrameCount`). It identifies a file format, not the product: never change it once files that carry it
+# are out, or FloraStack stops recognizing them. The URI needn't resolve.
+[xmp]
+namespace = "https://gabrielsanchez.github.io/florastack/ns/1.0/"
+prefix = "florastack"

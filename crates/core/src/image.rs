@@ -258,7 +258,9 @@ pub enum Encoding {
 }
 
 /// The color-space tag of an image: its transfer encoding and, when the file had one, its ICC profile. Without a
-/// profile the primaries and white point are those of sRGB (Rec. 709 primaries, D65 white).
+/// profile the primaries and white point are those of sRGB (Rec. 709 primaries, D65 white). The encoding always says
+/// how the samples are encoded, whatever curve the profile has: the codecs linearize files whose profile curve is
+/// neither sRGB's nor linear, so the profile then only describes the primaries.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ColorSpace {
     pub encoding: Encoding,

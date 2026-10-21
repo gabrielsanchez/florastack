@@ -50,15 +50,21 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 1.2 LightCraft dependency, codecs, metadata and color *(plan first)*
 
-- [ ] LightCraft's low-level crates (tiff, codecs, meta, color, raw) as a pinned dependency, kept out of public APIs behind FloraStack's own traits; ATTRIBUTION.md and `docs/lightcraft.md` on bumping the pin
-- [ ] Read JPEG, PNG 8/16, TIFF 8/16/32f (uncompressed, LZW and Deflate, including compressed 16-bit), OpenEXR, WebP and BMP
-- [ ] Write JPEG with a quality setting, PNG 8/16, TIFF 8/16/32f with compression options, OpenEXR, and linear 16-bit DNG
-- [ ] EXIF, IPTC and XMP read and carried over from a chosen source frame, with the software tag and the frame count in XMP
-- [ ] Embedded ICC profiles kept (sRGB assumed without one), with output in the input profile or a wide working space
-- [ ] EXIF orientation honored or ignored by option
-- [ ] Tests: round trip per format and bit depth, metadata, orientation; PngSuite and TIFF fixtures fetched by `cargo xtask corpus`
-- [ ] Images whose ICC profile has another curve than sRGB's are linearized through the profile (`florastack_core::convert` knows linear and sRGB only, and carries the profile over unchanged)
-- [ ] `cargo xtask corpus`: archive entries (PngSuite ships as one `.tgz`) and a place for format fixtures beside the stacks
+- [x] LightCraft's low-level crates (tiff, codecs, meta, color, raw) as a pinned dependency, kept out of public APIs behind FloraStack's own traits; ATTRIBUTION.md and `docs/lightcraft.md` on bumping the pin
+- [x] Read JPEG, PNG 8/16, TIFF 8/16/32f (uncompressed, LZW and Deflate, including compressed 16-bit), OpenEXR, WebP and BMP
+- [x] Write JPEG with a quality setting, PNG 8/16, TIFF 8/16/32f with compression options, OpenEXR, and linear 16-bit DNG
+- [x] EXIF, IPTC and XMP read and carried over from a chosen source frame, with the software tag and the frame count in XMP
+- [x] Embedded ICC profiles kept (sRGB assumed without one), with output in the input profile or a wide working space (ProPhoto RGB by default, or Rec. 2020)
+- [x] EXIF orientation honored or ignored by option (or forced), with `Orientation` and `Image::oriented` in florastack-core
+- [x] Tests: round trip per format and bit depth, metadata, orientation; PngSuite, TIFF, WebP and OpenEXR fixtures fetched by `cargo xtask corpus`, and by CI before the tests
+- [x] Images whose ICC profile has another curve than sRGB's are linearized through the profile (`florastack_core::convert` knows linear and sRGB only, and carries the profile over unchanged)
+- [x] `cargo xtask corpus`: archive entries (PngSuite ships as one `.tgz`) and a place for format fixtures beside the stacks
+- [ ] Open a linear DNG written by FloraStack in Lightroom Classic or Adobe Camera Raw, and check it with the DNG SDK's `dng_validate`: the tests read it back with LightCraft's RAW decoder only, and the DNG specification couldn't be downloaded while the writer was built
+- [ ] Move the LightCraft pin to a commit with quick-xml 0.41 or later (storytold/lightcraft#1464) and drop the two advisory ignores in `deny.toml` and `.cargo/audit.toml`
+- [ ] 12-bit TIFF: the tiff crate (0.11.3) rejects 12-bit samples with an "unsupported" error; read them once it supports them (the scaling to 16 bits is in place and tested)
+- [ ] Streaming TIFF and DNG writers that take the image a band of rows at a time, so that large outputs are never whole in memory
+- [ ] Float DNG and a preview IFD in the DNG writer
+- [ ] Revisit the `exr = "=1.74.0"` pin once exr no longer pulls in `paste` (RUSTSEC-2024-0436) through `pulp`: 1.74.0 can't read DWA-compressed files, which fail with an "unsupported" error that suggests ZIP or PIZ
 
 ### 1.3 RAW import through LightCraft
 
@@ -69,6 +75,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] One `DevelopSettings` per stack, stored in the project
 - [ ] 16-bit TIFF and DNG imported unchanged
 - [ ] Tests: one file per vendor, identical settings give identical output, preview and final demosaic agree, output stays linear (gray ramp)
+- [ ] Decide on `lightcraft-raw`'s `jxl` feature (JPEG XL compressed DNGs, DNG 1.7), off since 1.2
 
 ### 1.4 Project model
 
@@ -270,6 +277,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Windows x64 and arm64 (.msi and .zip), a macOS universal .dmg (signed and notarized when secrets are set), Linux x86_64 and aarch64 (AppImage, .deb, .rpm, Flatpak, tarball), CLI archives, Python wheels and SHA256SUMS.txt
 - [ ] gphoto in the Linux and macOS builds only: libgphoto2 bundled in the macOS app and the Flatpak, a distro dependency in .deb and .rpm, with instructions for swapping it
 - [ ] Artifacts from `cargo xtask dist --target <host>` install locally; the workflow runs on a test tag in a fork
+- [ ] Third-party notices in every package: the license text of each crate compiled into the apps, generated from `Cargo.lock`, next to `NOTICE`
 
 ### 7.2 Documentation and onboarding
 
@@ -284,6 +292,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] OPFS-backed `TileStore`, capture disabled, and a clear message when a stack needs more memory than the browser has
 - [ ] Cross-origin isolation headers (COOP and COEP) in the Dockerfile's server config and documented for other hosts; `cargo xtask web`
 - [ ] A headless browser test stacks a 20-frame synthetic stack
+- [ ] `cargo check -p florastack-codecs --target wasm32-unknown-unknown` in CI (exr is single-threaded there, and a decoder panic aborts instead of becoming an error)
 
 ### After the last step
 

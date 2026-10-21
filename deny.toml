@@ -9,8 +9,15 @@ all-features = true
 
 [advisories]
 # Vulnerable, unmaintained and unsound crates fail the check. Ignore an advisory only with a reason, in the same
-# change that needs it: { id = "RUSTSEC-0000-0000", reason = "..." }.
-ignore = []
+# change that needs it: { id = "RUSTSEC-0000-0000", reason = "..." }. cargo audit reads the same ids from
+# .cargo/audit.toml: keep the two lists the same.
+ignore = [
+    # quick-xml 0.38, through lightcraft-meta at the pinned LightCraft commit. Neither advisory reaches it: it reads
+    # attributes with `with_checks(false)` only and never uses `NsReader` (checked at the pin). Fixed in quick-xml
+    # 0.41: drop both entries when the pin moves past storytold/lightcraft#1464 (docs/lightcraft.md).
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 via lightcraft-meta, which never checks for duplicate attributes (with_checks(false)); fixed upstream in lightcraft#1464" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 via lightcraft-meta, which never uses NsReader; fixed upstream in lightcraft#1464" },
+]
 
 [licenses]
 # Permissive licenses, plus MPL-2.0: its copyleft covers only the MPL-licensed files themselves, it is common in
@@ -38,8 +45,12 @@ confidence-threshold = 0.8
 include-dev = true
 # Font licenses, allowed only for the crate that bundles egui's default fonts: OFL-1.1 (Noto Emoji) and the Ubuntu
 # Font Licence (Ubuntu-Light). The desktop app adds egui in Phase 5; until then the exception matches nothing.
+# The Independent JPEG Group's license, for jpeg-encoder alone (through LightCraft's codecs and raw crates): it is
+# permissive, and asks only that binary distributions say "this software is based in part on the work of the
+# Independent JPEG Group", which NOTICE does.
 exceptions = [
     { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
+    { crate = "jpeg-encoder", allow = ["IJG"] },
 ]
 unused-license-exception = "allow"
 
@@ -52,9 +63,11 @@ ignore = false
 multiple-versions = "warn"
 
 [sources]
-# Crates come from crates.io only. A git dependency (such as a pinned LightCraft commit) is added to allow-git in
-# the same change that adds the dependency.
+# Crates come from crates.io, and from the git sources listed here, each added in the same change that adds the
+# dependency. LightCraft's crates aren't published, so they come from its repository, pinned to one commit
+# (docs/lightcraft.md); a git dependency must name a `rev`, never a branch or a tag.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = ["https://github.com/storytold/lightcraft"]
+required-git-spec = "rev"

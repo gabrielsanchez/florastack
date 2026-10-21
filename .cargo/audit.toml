@@ -1,0 +1,6 @@
+# cargo audit's configuration (CI and `cargo xtask ci` run it). Ignore an advisory only with the same id and reason
+# as deny.toml's [advisories] ignore list, in the same change.
+[advisories]
+# quick-xml 0.38 through lightcraft-meta, unreachable from its code (deny.toml has the reasons). Drop both when the
+# LightCraft pin moves past storytold/lightcraft#1464, which bumps quick-xml to 0.41.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]

@@ -1,5 +1,6 @@
-//! The schemas of `corpus/manifest.toml` (stacks to download) and of a local stack's `stack.toml`, and the checks
-//! that keep a manifest entry from writing outside its folder or installing unverified bytes.
+//! The schemas of `corpus/manifest.toml` (stacks and format fixtures to download) and of a local stack's
+//! `stack.toml`, and the checks that keep a manifest entry from writing outside its folder or installing unverified
+//! bytes.
 
 use std::collections::BTreeSet;
 
@@ -73,6 +74,51 @@ pub struct Manifest {
     pub version: u32,
     #[serde(default, rename = "stack")]
     pub stacks: Vec<RemoteStack>,
+    #[serde(default, rename = "fixture")]
+    pub fixtures: Vec<Fixture>,
+}
+
+/// A `[[fixture]]`: files of one format from other writers, for the codec tests, downloaded into
+/// `corpus/fixtures/<name>/` one by one (`files`) or as one archive (`archive`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fixture {
+    /// The folder name: lower-case letters, digits and dashes.
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// The page the files come from.
+    pub source: String,
+    /// Their license (an SPDX identifier where there is one).
+    pub license: String,
+    /// Whom to credit, as the license asks.
+    pub attribution: Option<String>,
+    /// Files downloaded one by one.
+    #[serde(default)]
+    pub files: Vec<RemoteFile>,
+    /// Or one archive, from which the listed members are installed.
+    pub archive: Option<Archive>,
+}
+
+/// A `[fixture.archive]`: a gzip-compressed tar file, checked before it is extracted.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Archive {
+    pub url: String,
+    pub sha256: String,
+    pub size: Option<u64>,
+    /// The files to install from it, each checked again; the rest of the archive is left out.
+    pub members: Vec<Member>,
+}
+
+/// One file of an archive: installed as `name`, found at `path` inside the archive (`name` when there is none).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Member {
+    pub name: String,
+    pub path: Option<String>,
+    pub sha256: String,
+    pub size: Option<u64>,
 }
 
 /// A `[[stack]]` of the manifest: downloaded into `corpus/stacks/<name>/`.
@@ -155,6 +201,11 @@ pub fn is_file_name(name: &str) -> bool {
         && !device
 }
 
+/// A path inside an archive that stays inside the extraction folder: `/`-separated file names, none of them `..`.
+pub fn is_member_path(path: &str) -> bool {
+    path.split('/').all(is_file_name)
+}
+
 fn is_sha256(hex: &str) -> bool {
     hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
@@ -214,7 +265,81 @@ impl Manifest {
                 problem(format!("the ground-truth reference `{reference}` is not one of its files"));
             }
         }
+        let mut fixture_names = BTreeSet::new();
+        for fixture in &self.fixtures {
+            if !fixture_names.insert(fixture.name.as_str()) {
+                out.push(format!("fixture `{}`: the name is used twice", fixture.name));
+            }
+            fixture_problems(fixture, &mut out);
+        }
         out
+    }
+}
+
+/// Everything wrong with one fixture entry, added to `out`.
+fn fixture_problems(fixture: &Fixture, out: &mut Vec<String>) {
+    let mut problem = |what: String| out.push(format!("fixture `{}`: {what}", fixture.name));
+    if !is_stack_name(&fixture.name) {
+        problem("the name must be 1 to 64 lower-case letters, digits and dashes".to_owned());
+    }
+    for (field, value) in [("source", &fixture.source), ("license", &fixture.license)] {
+        if value.trim().is_empty() {
+            problem(format!("`{field}` is required (every fixture records where it comes from and its license)"));
+        }
+    }
+    match (&fixture.archive, fixture.files.is_empty()) {
+        (None, true) => problem("no files: list them under [[fixture.files]], or give an [fixture.archive] and its members".to_owned()),
+        (Some(_), false) => problem("both files and an archive: give one or the other".to_owned()),
+        _ => {}
+    }
+    let mut names = BTreeSet::new();
+    for file in &fixture.files {
+        if !is_file_name(&file.name) {
+            problem(format!("file `{}`: names are 1 to 128 letters, digits, `.`, `_`, `-` and `+`", file.name));
+        }
+        if !names.insert(file.name.to_ascii_lowercase()) {
+            problem(format!("file `{}` is listed twice", file.name));
+        }
+        if !is_url(&file.url) {
+            problem(format!("file `{}`: the url must start with https://, http:// or file://", file.name));
+        }
+        if !is_sha256(&file.sha256) {
+            problem(format!("file `{}`: sha256 must be 64 lower-case hex digits", file.name));
+        }
+        if file.size.is_some_and(|size| size == 0 || size > MAX_FILE_BYTES) {
+            problem(format!("file `{}`: size must be 1 to {MAX_FILE_BYTES} bytes", file.name));
+        }
+    }
+    if let Some(archive) = &fixture.archive {
+        if !is_url(&archive.url) {
+            problem("the archive url must start with https://, http:// or file://".to_owned());
+        }
+        if !is_sha256(&archive.sha256) {
+            problem("the archive sha256 must be 64 lower-case hex digits".to_owned());
+        }
+        if archive.size.is_some_and(|size| size == 0 || size > MAX_FILE_BYTES) {
+            problem(format!("the archive size must be 1 to {MAX_FILE_BYTES} bytes"));
+        }
+        if archive.members.is_empty() {
+            problem("the archive lists no members to install".to_owned());
+        }
+        for member in &archive.members {
+            if !is_file_name(&member.name) {
+                problem(format!("member `{}`: names are 1 to 128 letters, digits, `.`, `_`, `-` and `+`", member.name));
+            }
+            if !names.insert(member.name.to_ascii_lowercase()) {
+                problem(format!("member `{}` is listed twice", member.name));
+            }
+            if member.path.as_deref().is_some_and(|path| !is_member_path(path)) {
+                problem(format!("member `{}`: its path must stay inside the archive (no `..`, no leading `/`)", member.name));
+            }
+            if !is_sha256(&member.sha256) {
+                problem(format!("member `{}`: sha256 must be 64 lower-case hex digits", member.name));
+            }
+            if member.size.is_some_and(|size| size == 0 || size > MAX_FILE_BYTES) {
+                problem(format!("member `{}`: size must be 1 to {MAX_FILE_BYTES} bytes", member.name));
+            }
+        }
     }
 }
 
@@ -279,6 +404,67 @@ mod tests {
         }
         assert!(!problems.contains("stack `twice`: no files"), "placeholders need no files:\n{problems}");
         assert!(parse("version = 2\n").unwrap().problems()[0].contains("version is 2"));
+    }
+
+    #[test]
+    fn fixtures_are_checked_like_stacks() {
+        let m = manifest(&format!(
+            "[[fixture]]
+name = \"ok\"
+source = \"https://example.org\"
+license = \"MIT\"
+             [[fixture.files]]
+name = \"a.tif\"
+url = \"https://example.org/a.tif\"
+sha256 = \"{HASH}\"
+             [[fixture]]
+name = \"Bad\"
+source = \"\"
+license = \"MIT\"
+             [[fixture]]
+name = \"both\"
+source = \"s\"
+license = \"MIT\"
+             [[fixture.files]]
+name = \"x.png\"
+url = \"https://example.org/x\"
+sha256 = \"{HASH}\"
+             [fixture.archive]
+url = \"https://example.org/a.tgz\"
+sha256 = \"{HASH}\"
+             members = [{{ name = \"x.png\", sha256 = \"{HASH}\" }}]
+             [[fixture]]
+name = \"archive\"
+source = \"s\"
+license = \"MIT\"
+             [fixture.archive]
+url = \"ftp://example.org/a.tgz\"
+sha256 = \"{HASH}\"
+             members = [{{ name = \"m.png\", path = \"../m.png\", sha256 = \"{HASH}\" }}, {{ name = \"M.PNG\", sha256 = \"{HASH}\" }}]
+"
+        ));
+        let problems = m.problems().join(
+            "
+",
+        );
+        for expected in [
+            "fixture `Bad`: the name must be",
+            "fixture `Bad`: `source` is required",
+            "fixture `Bad`: no files",
+            "fixture `both`: both files and an archive",
+            "fixture `both`: member `x.png` is listed twice",
+            "fixture `archive`: the archive url must start with",
+            "fixture `archive`: member `m.png`: its path must stay inside the archive",
+            "fixture `archive`: member `M.PNG` is listed twice",
+        ] {
+            assert!(
+                problems.contains(expected),
+                "missing {expected:?} in:
+{problems}"
+            );
+        }
+        assert!(!problems.contains("fixture `ok`"), "{problems}");
+        assert!(is_member_path("PngSuite/basn0g01.png") && !is_member_path("/etc/passwd") && !is_member_path("a/../b") && !is_member_path(""));
     }
 
     #[test]
