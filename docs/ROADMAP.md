@@ -114,7 +114,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Preview jobs' pixels to the UI (3.1, 5.2): job results are JSON, which carries no images; keep them in memory for the viewer to read
 - [ ] Per-command capabilities for the control channel and MCP (6.4): `CommandInfo::effects` says what each command may change, and untrusted clients need a gate
 - [ ] The browser build's executor, over a Web Worker pool, and a `project.close` that doesn't block (7.3): `Engine::wait` is native only, and closing waits for cancelled jobs to stop
-- [ ] Typed preference groups for align, stack and output as their crates define settings (2.1, 3.1, 5.4); until then `preset.apply` refuses presets that set them
+- [ ] Typed preference groups for stack and output as their crates define settings (3.1, 5.4); until then `preset.apply` refuses presets that set them (align's is typed since 2.1: `preset.apply` checks it with florastack-align's `AlignSettings`)
 - [ ] A byte budget for the undo history (long retouch sessions, 5.3): it keeps the last 1000 steps, whatever their size
 - [ ] `project.checkFrames`: the frames that are missing or changed when a project is reopened (5.1)
 - [ ] Command titles and help texts through Fluent (5.1): the registry's English texts are the fallback
@@ -128,12 +128,18 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 2.1 Frame alignment *(plan first)*
 
-- [ ] Per-frame shift, scale, rotation and brightness gain relative to a master frame, each term switchable
-- [ ] Coarse-to-fine ECC on gradient-magnitude pyramids with a phase-correlation first guess; frames chained to their neighbors, optionally refined against the master
-- [ ] Limits per term; alignments that hit a limit or score low are flagged, and so are false matches on repeating patterns
-- [ ] Brightness gain from robust statistics of low-pass content
-- [ ] Synthetic-stack accuracy tests: mean error at most 0.1 px on clean stacks and 0.3 px on noisy, dusty ones
-- [ ] Bench timing for a 100-frame 24 MP stack
+- [x] Per-frame shift, scale, rotation and brightness gain relative to a master frame, each term switchable (`StackAligner`, which takes the frames one at a time and holds three prepared frames whatever the stack's length, and `align_frames`; `AlignSettings` with serde and a JSON schema; a term that is off stays exactly 0 or 1)
+- [x] Coarse-to-fine ECC with a phase-correlation first guess, on band-passed luminance rather than gradient magnitudes: a linear band-pass keeps a symmetric defocus from shifting detail, and the gradient magnitude's apparent motion between frames focused apart was about twice as large. ECC gets a defocus term (the template's Laplacian, projected out) and Tukey weights; frames are chained to their neighbors, optionally refined against the master (which helps shallow stacks: 0.004 to 0.008 px instead of 0.008 to 0.019 without defocus, and hurts deep ones); frames above 2048 px are aligned at that size
+- [x] Limits per term (shift in percent of the frame, scale change, rotation); alignments that hit a limit, score low or find no match are flagged and, by default, rejected, the chain going around them; repeating patterns are flagged from the peaks of the plain correlation, and the whitened one picks the period nearest the expected shift
+- [x] Brightness gain from robust statistics of low-pass content: the median ratio to the master on a 64-pixel low-pass, within 0.04% of the truth without defocus
+- [x] Synthetic-stack accuracy tests (`crates/align/tests/accuracy.rs`, 16 frames, three seeds, master first or in the middle), per stack: at most 0.3 px on noisy, dusty stacks (measured 0.18 to 0.21), as planned; at most 0.15 px on clean stacks (measured 0.09 to 0.12) instead of 0.1, because defocus alone moves the synthetic content by 0.06 to 0.12 px (the test's documentation explains why); and at most 0.05 px on stacks moved but not defocused (measured 0.008 to 0.019), which measures the aligner itself
+- [x] Bench timing for a 100-frame 24 MP stack: `cargo xtask bench -p florastack-align`, `align/stack/100x6000x4000` 27.0 s on a 4-core VM (0.27 s per frame, 60% of it preparing the frame); `align/pair/*` shows shifts alone about 6% faster than every term
+- [ ] `align.run`: the engine command (a job) that reads and develops each frame, aligns the stack with `StackAligner` and stores each frame's `Alignment` and the `AlignmentRun` through a new `Edit`, with the per-frame flags kept in the project (the model has no field for them yet); the apps then get `AlignSettings` from the engine
+- [ ] Alignment checked on the real corpus stacks once they are in (an engine test: florastack-align can't read files)
+- [ ] Reach 0.1 px on the clean synthetic set by modeling defocus that varies across the frame: one global Laplacian term leaves the uneven blur of receding surfaces and the depth edges
+- [ ] The generator's defocus (`florastack_core::testutil`) blurs each pixel with its own depth's blur, by gathering: it doesn't conserve light near depth edges, and it moves depth edges with focus more than a lens does. Spreading each scene point with its own blur instead (scatter) would be closer to real optics; the stacking tests of Phase 3 will meet the same frames
+- [ ] Prepare frame n + 1 while frame n is aligned (with 4.3's decoding of the next frame): preparing a 24 MP frame takes 0.16 s of its 0.27 s, mostly reading it and making the band-pass levels
+- [ ] A frame rejected for a low score against its neighbor stays rejected even when refining against the master matches it well
 
 ### 2.2 Ordering, framing and edge handling
 

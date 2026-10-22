@@ -411,7 +411,15 @@ dependencies = [
 name = "florastack-align"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "florastack-core",
+ "rayon",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

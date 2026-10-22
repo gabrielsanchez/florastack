@@ -130,3 +130,12 @@ unreachable = "warn"
 unimplemented = "warn"
 # Every unsafe block needs a `// SAFETY:` comment. unsafe itself is denied above, except in the modules AGENTS.md lists.
 undocumented_unsafe_blocks = "warn"
+
+# Unoptimized builds run pixel loops 10 to 50 times slower, which would make the alignment accuracy tests on synthetic
+# stacks take minutes. The crates that do the pixel work are optimized in the dev profile, which the test profile
+# inherits; debug assertions and overflow checks stay on, as everywhere in dev and test builds.
+[profile.dev.package.florastack-core]
+opt-level = 2
+
+[profile.dev.package.florastack-align]
+opt-level = 2
