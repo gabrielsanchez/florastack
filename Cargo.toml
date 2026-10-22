@@ -42,6 +42,11 @@ rayon = "1.12"
 # Logging in the libraries (AGENTS.md, Conventions); without the default `attributes` feature, which would compile
 # proc macros for #[instrument] that FloraStack doesn't use.
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# JSON schemas (draft 2020-12) of the command registry's parameters and results (florastack-engine), derived next to
+# the serde derives of the types they describe (in florastack-project, -raw and -codecs too), for the CLI's
+# `commands`, the MCP server's tool definitions and the generated command reference. Pure Rust, MIT; no optional
+# integrations (chrono, uuid, url...).
+schemars = { version = "1.2", default-features = false, features = ["derive", "std"] }
 # Property tests (dev-dependency). Only `std`: the default `fork` and `timeout` features run each case in a child
 # process, which these tests don't need, and pull in rusty-fork and tempfile.
 proptest = { version = "1.12", default-features = false, features = ["std"] }

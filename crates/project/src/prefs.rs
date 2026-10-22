@@ -32,8 +32,9 @@ use serde_json::{Map, Value};
 
 use crate::error::{PresetError, Problem, ProjectError};
 
-/// A group of preferences.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A group of preferences, named in presets, project files and command parameters as [`Group::name`] says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum Group {
     /// How RAW frames are developed (florastack-raw's `DevelopSettings`).
     Develop,
@@ -94,6 +95,12 @@ impl Preferences {
             Group::Stack => &self.stack,
             Group::Output => &self.output,
         }
+    }
+
+    /// Replaces a group's table, after checking that its values can be preferences, and returns the old one.
+    pub(crate) fn replace_group(&mut self, group: Group, table: Table) -> Result<Table, Problem> {
+        check_table(group.name(), &table, 0).map_err(|(key, reason)| Problem::Preference { key, reason })?;
+        Ok(std::mem::replace(self.group_mut(group), table))
     }
 
     fn group_mut(&mut self, group: Group) -> &mut Table {
@@ -324,6 +331,15 @@ mod tests {
 
     fn prefs(text: &str) -> Preferences {
         Preset::parse(text).unwrap().preferences
+    }
+
+    #[test]
+    fn groups_are_named_alike_everywhere() {
+        for group in Group::ALL {
+            assert_eq!(serde_json::to_value(group).unwrap(), Value::from(group.name()));
+            assert_eq!(serde_json::from_value::<Group>(Value::from(group.name())).unwrap(), group);
+        }
+        assert!(serde_json::from_value::<Group>(Value::from("Develop")).is_err());
     }
 
     #[test]

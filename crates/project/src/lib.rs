@@ -5,11 +5,13 @@
 //! projects. It may depend only on `florastack-core`.
 //!
 //! - [`model`]: [`Project`] and its parts ([`Frame`], [`Alignment`], [`Output`], [`RetouchLayer`], ...).
+//! - [`edit`]: [`Edit`], a change to a project as a value; [`Project::apply`] makes it and returns the edit that undoes
+//!   it, which the engine's undo history keeps.
 //! - [`folder`]: [`ProjectFolder`], the `<name>.florastack/` folder with `project.json`, `cache/` and `previews/`,
 //!   its lock, atomic saves and the cache's files.
 //! - [`schema`]: the format of `project.json`, its versions and the migrations from older ones.
-//! - [`cache`]: [`CacheRef`], how project.json refers to a cache file (path, size, content hash), and
-//!   [`CacheWriter`], which writes one.
+//! - [`cache`]: [`CacheRef`], how project.json refers to a cache file (path, size, content hash), [`CacheWriter`],
+//!   which writes one, and [`CacheDir`], which reads and writes them from any thread.
 //! - [`prefs`]: [`Preferences`] by [`Group`], and TOML [`Preset`] files that hold any subset of them and layer.
 //! - [`orphans`]: finding old unnamed temporary projects and moving them to the [`Trash`] ([`trash`]).
 //!
@@ -36,6 +38,7 @@
 //! file's size and hash are checked before its bytes are used.
 
 pub mod cache;
+pub mod edit;
 pub mod error;
 pub mod folder;
 mod fsutil;
@@ -47,7 +50,8 @@ pub mod schema;
 pub mod time;
 pub mod trash;
 
-pub use cache::{Area, CachePath, CacheRef, CacheWriter};
+pub use cache::{Area, CacheDir, CachePath, CacheRef, CacheWriter};
+pub use edit::{Aspects, Edit, EditError};
 pub use error::{CacheProblem, MigrationError, PresetError, Problem, ProjectError, SchemaError};
 pub use folder::{FrameState, ProjectFolder, folder_name};
 pub use hash::ContentHash;

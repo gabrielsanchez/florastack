@@ -17,7 +17,7 @@ use crate::error::CodecError;
 /// | WebP | lossy and lossless, the first frame of an animation | no |
 /// | BMP | the formats of Windows and OS/2 | no |
 /// | DNG | no: the RAW importer reads it | linear 16-bit |
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum Format {
     Jpeg,
     Png,

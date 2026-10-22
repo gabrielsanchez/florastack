@@ -19,8 +19,15 @@ florastack-gpu.workspace = true
 florastack-project.workspace = true
 florastack-retouch.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The JSON schemas of the commands' parameters and results.
+schemars.workspace = true
+# The preview lane's thread pool (jobs::executor).
+rayon.workspace = true
 
 [dev-dependencies]
 florastack-testkit.workspace = true
-# The pinned JSON shapes of the types a project stores.
-serde_json.workspace = true
+# Arbitrary JSON thrown at every command.
+proptest.workspace = true

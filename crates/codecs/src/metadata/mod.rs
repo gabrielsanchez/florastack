@@ -81,7 +81,7 @@ impl Metadata {
 
 /// What the metadata says about a photo, for listing frames: the camera, the lens, the exposure and the people's
 /// fields.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ExifSummary {
     pub make: Option<String>,
     pub model: Option<String>,

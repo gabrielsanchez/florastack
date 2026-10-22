@@ -8,17 +8,18 @@
 //! `<stem>-<first 16 hex digits of its hash>.<extension>`, so that a file is never changed once it has a name: a new
 //! version of an aligned frame or an output is a new file, and the old one stays valid until the project no longer
 //! refers to it. A crash leaves at worst a temporary or unreferenced file behind, never a damaged referenced one.
-//! Reading a file back checks its size and hash against its reference.
+//! Reading a file back checks its size and hash against its reference. [`CacheDir`] reads and writes them, from any
+//! thread.
 
 use std::fmt;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::error::ProjectError;
+use crate::error::{CacheProblem, ProjectError};
 use crate::hash::{ContentHash, Hasher};
 
 /// Which folder of the project a cache file is in.
@@ -151,6 +152,111 @@ fn check_stem(stem: &str) -> Result<(), ProjectError> {
 fn check_extension(extension: &str) -> Result<(), ProjectError> {
     let ok = (1..=8).contains(&extension.len()) && extension.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
     if ok { Ok(()) } else { Err(ProjectError::CacheName { name: extension.to_owned() }) }
+}
+
+/// The cache of a project folder: where its files are read and written. A `ProjectFolder` has one
+/// (`ProjectFolder::cache_dir`), and a clone of it can be sent to a worker thread, which then writes and reads cache
+/// files while the folder itself, with its lock and its project file, stays with the thread that owns it. Writing new
+/// files never disturbs anyone: a file is never changed once it has its name. A read-only folder's handle refuses to
+/// write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CacheDir {
+    root: PathBuf,
+    read_only: bool,
+}
+
+impl CacheDir {
+    pub(crate) fn new(root: PathBuf, read_only: bool) -> CacheDir {
+        CacheDir { root, read_only }
+    }
+
+    /// The project folder.
+    pub fn path(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub(crate) fn writable(&self) -> Result<(), ProjectError> {
+        if self.read_only { Err(ProjectError::ReadOnly { path: self.root.clone() }) } else { Ok(()) }
+    }
+
+    /// A writer for a new cache file in `area`, named after `stem` (such as `output-7` or `frame-3-aligned`) and
+    /// `extension` (such as `tiff`), which the encoder chooses.
+    pub fn writer(&self, area: Area, stem: &str, extension: &str) -> Result<CacheWriter, ProjectError> {
+        self.writable()?;
+        CacheWriter::create(&self.root, area, stem, extension)
+    }
+
+    /// Stores `bytes` as a new cache file (see [`CacheDir::writer`]).
+    pub fn store(&self, area: Area, stem: &str, extension: &str, bytes: &[u8], key: Option<String>) -> Result<CacheRef, ProjectError> {
+        let mut writer = self.writer(area, stem, extension)?;
+        writer.write_all(bytes).map_err(|source| ProjectError::Write { path: self.root.join(area.dir()), source })?;
+        writer.commit(key)
+    }
+
+    /// Opens a cache file after checking that it is there with the size of its reference.
+    fn open_cached(&self, reference: &CacheRef) -> Result<(File, PathBuf), ProjectError> {
+        let path = reference.path.resolve(&self.root);
+        let problem = |source| ProjectError::Cache { path: path.clone(), source };
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Err(problem(CacheProblem::Missing)),
+            Err(source) => return Err(ProjectError::Read { path, source }),
+        };
+        let meta = file.metadata().map_err(|source| ProjectError::Read { path: path.clone(), source })?;
+        if !meta.is_file() {
+            return Err(problem(CacheProblem::NotAFile));
+        }
+        if meta.len() != reference.size {
+            return Err(problem(CacheProblem::Size { expected: reference.size, found: meta.len() }));
+        }
+        Ok((file, path))
+    }
+
+    /// Checks that a cache file is there with the size of its reference, without reading it.
+    pub fn check_size(&self, reference: &CacheRef) -> Result<(), ProjectError> {
+        self.open_cached(reference).map(drop)
+    }
+
+    /// Reads a cache file whole, after checking its size and hash against its reference.
+    pub fn read(&self, reference: &CacheRef) -> Result<Vec<u8>, ProjectError> {
+        let (file, path) = self.open_cached(reference)?;
+        // The file's real size, checked above: a reference can't make this allocate more than the file holds.
+        let mut bytes = Vec::with_capacity(usize::try_from(reference.size).unwrap_or(0));
+        file.take(reference.size.saturating_add(1)).read_to_end(&mut bytes).map_err(|source| ProjectError::Read { path: path.clone(), source })?;
+        let found = bytes.len() as u64;
+        if found != reference.size {
+            return Err(ProjectError::Cache { path, source: CacheProblem::Size { expected: reference.size, found } });
+        }
+        let hash = ContentHash::of(&bytes);
+        if hash != reference.hash {
+            return Err(ProjectError::Cache { path, source: CacheProblem::Hash { expected: reference.hash, found: hash } });
+        }
+        Ok(bytes)
+    }
+
+    /// Checks a cache file's size and hash without keeping its bytes.
+    pub fn verify(&self, reference: &CacheRef) -> Result<(), ProjectError> {
+        let (file, path) = self.open_cached(reference)?;
+        let (hash, found) = ContentHash::of_reader(file.take(reference.size.saturating_add(1)))
+            .map_err(|source| ProjectError::Read { path: path.clone(), source })?;
+        if found != reference.size {
+            return Err(ProjectError::Cache { path, source: CacheProblem::Size { expected: reference.size, found } });
+        }
+        if hash != reference.hash {
+            return Err(ProjectError::Cache { path, source: CacheProblem::Hash { expected: reference.hash, found: hash } });
+        }
+        Ok(())
+    }
+}
+
+impl AsRef<CacheDir> for CacheDir {
+    fn as_ref(&self) -> &CacheDir {
+        self
+    }
 }
 
 /// The suffix of the temporary files that cache files are written to before they get their names.

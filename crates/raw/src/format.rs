@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// [`RawFormat::is_decoded`] says which ones the built-in decoder reads; within those, a few coding variants are
 /// still unsupported (compressed Olympus ORF and Samsung SRW, Nikon's High Efficiency NEF), and they fail with
 /// [`crate::RawError::Unsupported`], as the formats it only recognizes do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RawFormat {
     /// Adobe's Digital Negative, written by many cameras and phones and by raw converters.

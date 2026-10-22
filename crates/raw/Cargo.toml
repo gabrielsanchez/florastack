@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 florastack-core.workspace = true
 serde.workspace = true
+# The JSON schemas of the develop settings, which commands take as parameters.
+schemars.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 rayon.workspace = true
