@@ -53,7 +53,7 @@ pub use folder::{FrameState, ProjectFolder, folder_name};
 pub use hash::ContentHash;
 pub use model::{
     Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, Input, LayerId, MapName, Maps, NewOutput, Output, OutputId, Project, RetouchLayer,
-    from_data, to_data,
+    TRUSTED_AGE, from_data, to_data,
 };
 pub use orphans::{Orphan, Orphans};
 pub use prefs::{Group, Preferences, Preset, Table};

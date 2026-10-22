@@ -99,6 +99,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Save As: naming a temporary project and moving it out of the temporary-projects folder (5.1)
 - [ ] Frames found again when a project moves to another machine (the stored paths are absolute; a relative path is resolved from the folder that holds the project folder)
 - [ ] Retouch strokes: `project.json` is capped at 64 MiB, so long stroke lists may have to move into cache files (5.3)
+- [ ] Re-arm the quick frame check: a frame hashed within `TRUSTED_AGE` (3 s) of its last modification keeps no modification time, so that a same-size rewrite can't pass for unchanged, and every check hashes it again; store its time once a later check finds it unchanged and settled (frames from tethered capture and the watch folder, 4.2 and 6.1, are all this kind)
 - [ ] `cargo check -p florastack-project --target wasm32-unknown-unknown` in CI (it builds and passes Clippy locally), and a project-folder backend over the browser's origin-private storage (7.3)
 
 ### 1.5 Command registry and job engine *(plan first)*

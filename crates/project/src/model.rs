@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use florastack_core::Affine;
 use serde::de::DeserializeOwned;
@@ -158,7 +159,8 @@ pub struct Frame {
     pub path: String,
     /// Its size in bytes when it was added.
     pub size: u64,
-    /// Its modification time when it was hashed, which tells a quick check whether to hash it again.
+    /// Its modification time when it was hashed, which tells a quick check whether to hash it again. It is kept only
+    /// when it was already old enough then to be trusted ([`FrameFile`]); without it, every check hashes the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified: Option<Timestamp>,
     pub hash: ContentHash,
@@ -191,23 +193,38 @@ impl Frame {
 pub struct FrameFile {
     pub path: String,
     pub size: u64,
+    /// The file's modification time, if it was at least [`TRUSTED_AGE`] old when the file was hashed: a quick check may
+    /// then take an unchanged size and time for unchanged contents.
     pub modified: Option<Timestamp>,
     pub hash: ContentHash,
+}
+
+/// How old a file's modification time must be, when the file is hashed, for a later quick check to trust it. A file
+/// rewritten with the same size soon after it was hashed can keep the same modification time, so a recent time can't
+/// tell the rewrite apart (git calls it a racy timestamp): [`Timestamp`] keeps milliseconds, and FAT, which many
+/// memory cards use, records times in 2-second steps. The extra second covers clock differences on network shares.
+pub const TRUSTED_AGE: Duration = Duration::from_secs(3);
+
+/// `modified`, if it is at least [`TRUSTED_AGE`] old now, just after the file was hashed. A time in the future (a
+/// camera clock set ahead, say) isn't trusted either.
+fn trusted_modified(modified: Option<SystemTime>) -> Option<Timestamp> {
+    let modified = modified?;
+    let age = SystemTime::now().duration_since(modified).ok()?;
+    (age >= TRUSTED_AGE).then(|| Timestamp::from_system_time(modified))
 }
 
 impl FrameFile {
     /// The file at `path` whose bytes have been read already (to read its metadata too): hashes them, and takes the
     /// modification time from the file system. `path` is made absolute, relative to the current directory.
+    ///
+    /// The time is read after the bytes, so a file changed in between has a new, untrusted time
+    /// ([`FrameFile::modified`]), and later checks hash it and find that it changed.
     pub fn from_bytes(path: &Path, bytes: &[u8]) -> Result<FrameFile, ProjectError> {
         let absolute = std::path::absolute(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
         let text = absolute.to_str().ok_or_else(|| ProjectError::Path { path: absolute.clone() })?.to_owned();
         let meta = std::fs::metadata(&absolute).map_err(|source| ProjectError::Read { path: absolute.clone(), source })?;
-        Ok(FrameFile {
-            path: text,
-            size: bytes.len() as u64,
-            modified: meta.modified().ok().map(Timestamp::from_system_time),
-            hash: ContentHash::of(bytes),
-        })
+        let hash = ContentHash::of(bytes);
+        Ok(FrameFile { path: text, size: bytes.len() as u64, modified: trusted_modified(meta.modified().ok()), hash })
     }
 
     /// Reads and hashes the file at `path`, which is made absolute (relative to the current directory).
@@ -218,7 +235,7 @@ impl FrameFile {
         let file = std::fs::File::open(&absolute).map_err(read)?;
         let meta = file.metadata().map_err(read)?;
         let (hash, size) = ContentHash::of_reader(file).map_err(read)?;
-        Ok(FrameFile { path: text, size, modified: meta.modified().ok().map(Timestamp::from_system_time), hash })
+        Ok(FrameFile { path: text, size, modified: trusted_modified(meta.modified().ok()), hash })
     }
 }
 

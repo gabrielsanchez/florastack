@@ -11,7 +11,7 @@ use common::TempDir;
 use florastack_core::Affine;
 use florastack_project::{
     Alignment, AlignmentRun, Area, CacheProblem, Develop, FrameFile, FrameState, Group, Input, MapName, Maps, NewOutput, Preset, ProjectError,
-    ProjectFolder, Value, schema,
+    ProjectFolder, Timestamp, Value, schema,
 };
 use serde_json::json;
 
@@ -250,4 +250,39 @@ fn frame_files_are_checked_for_changes() {
     // A relative path is relative to the folder holding the project folder.
     project.frame_mut(id).unwrap().path = "IMG_1.tif".into();
     assert_eq!(folder.frame_path(project.frame(id).unwrap()), dir.path().join("IMG_1.tif"));
+}
+
+/// Regression test (macOS CI): a file rewritten with the same size right after it was added kept the same modification
+/// time to the millisecond, so the quick check took it for unchanged. FAT memory cards, with their 2-second times, make
+/// that likely too. A just-written file keeps no modification time, so every check hashes it.
+#[test]
+fn a_file_rewritten_right_after_it_was_added_is_seen_as_changed() {
+    let dir = TempDir::new("racy");
+    let (folder, mut project) = ProjectFolder::create(dir.path(), "Racy").unwrap();
+    let photo = dir.path().join("IMG_2.tif");
+    std::fs::write(&photo, b"pixels").unwrap();
+    let written = std::fs::metadata(&photo).unwrap().modified().unwrap();
+    let file = FrameFile::read(&photo).unwrap();
+    assert_eq!(file.modified, None, "too recent to be trusted");
+    let id = project.add_frame(file, None);
+    // The worst case, made certain: the same size and the same modification time as when it was added.
+    std::fs::write(&photo, b"PIXELS").unwrap();
+    std::fs::File::options().write(true).open(&photo).unwrap().set_modified(written).unwrap();
+    assert_eq!(folder.check_frame(project.frame(id).unwrap()).unwrap(), FrameState::Changed);
+}
+
+#[test]
+fn an_older_file_keeps_its_modification_time_for_quick_checks() {
+    let dir = TempDir::new("settled");
+    let (folder, mut project) = ProjectFolder::create(dir.path(), "Settled").unwrap();
+    let photo = dir.path().join("IMG_3.tif");
+    std::fs::write(&photo, b"pixels").unwrap();
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options().write(true).open(&photo).unwrap().set_modified(an_hour_ago).unwrap();
+    let file = FrameFile::read(&photo).unwrap();
+    assert_eq!(file.modified, Some(Timestamp::from_system_time(an_hour_ago)));
+    let id = project.add_frame(file, None);
+    assert_eq!(folder.check_frame(project.frame(id).unwrap()).unwrap(), FrameState::Unchanged);
+    std::fs::write(&photo, b"PIXELS").unwrap();
+    assert_eq!(folder.check_frame(project.frame(id).unwrap()).unwrap(), FrameState::Changed, "a new time: hashed again");
 }
