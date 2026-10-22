@@ -7,6 +7,8 @@
 //! - [`TileStore`] is where the evicted tiles go, as plain bytes by key. [`TempFileStore`] keeps one file per tile in a
 //!   temporary folder of its own, with ordinary file I/O, and removes the folder when it is dropped; [`MemoryStore`]
 //!   keeps them in memory, for tests. The browser build can implement the trait over the origin-private file system.
+//!   A run that crashes can't remove its folder, so each folder holds a lock file for as long as its store lives, and
+//!   [`TempFileStore::remove_abandoned`] removes, at the next startup, the folders whose lock nobody holds.
 //!
 //! Only the samples go to the store, little-endian with packed rows; each tile's shape and color space (with its ICC
 //! profile, shared) stay in the cache. Every failure is an error the caller can act on, and the cache stays
@@ -17,9 +19,10 @@ use std::fmt;
 use std::io::{ErrorKind, Read as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::image::{AnyImage, ColorSpace, Image, ImageError, Sample, SampleFormat};
+use crate::lock::{LockFile, LockState};
 
 /// A tile's name in a cache or store: which image (a frame, an accumulator, a pyramid level: the caller's numbering)
 /// and which tile of it.
@@ -77,6 +80,18 @@ pub enum StoreError {
     Lost { key: TileKey },
     #[error("{key} holds {stored:?} samples, not {requested:?}")]
     SampleFormat { key: TileKey, stored: SampleFormat, requested: SampleFormat },
+    #[error("cannot lock the tile folder {}", .path.display())]
+    Lock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot list the folder {} to find tile folders left behind", .path.display())]
+    List {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Image(#[from] ImageError),
 }
@@ -147,15 +162,30 @@ impl TileStore for MemoryStore {
 /// A [`TileStore`] of temporary files: one file per tile in a folder of its own, created for it and removed with
 /// everything in it when the store is dropped (or by [`TempFileStore::close`], which reports failure). Plain file
 /// I/O, nothing mapped.
+///
+/// The folder is named after the desktop app's binary with `-tiles-` (`florastack-tiles-<pid>-...`), and holds a lock
+/// file, [`TempFileStore::LOCK_FILE`], locked for as long as the store lives. A run that crashes leaves its folder
+/// behind with the lock released, and [`TempFileStore::remove_abandoned`] removes it at the next startup.
 #[derive(Debug)]
 pub struct TempFileStore {
     dir: PathBuf,
     sizes: HashMap<TileKey, u64>,
     total: u64,
     removed: bool,
+    /// The folder's lock, held until the folder is removed.
+    lock: Option<LockFile>,
 }
 
+/// A tile folder younger than this is never removed as abandoned: the folder may be between its creation and its
+/// lock, or its run may have crashed a moment ago (it goes at the next startup).
+const ABANDONED_AFTER: Duration = Duration::from_secs(60);
+/// A tile folder without a lock file (from a build before the lock existed) is removed only when it is this old.
+const UNLOCKED_ABANDONED_AFTER: Duration = Duration::from_hours(24);
+
 impl TempFileStore {
+    /// The name of the lock file in each tile folder.
+    pub const LOCK_FILE: &'static str = ".lock";
+
     /// A store in a new folder in the system's temporary directory.
     pub fn new() -> Result<TempFileStore, StoreError> {
         TempFileStore::in_dir(&std::env::temp_dir())
@@ -169,16 +199,36 @@ impl TempFileStore {
         // `create_dir` fails when the folder exists, so a name taken by another process is skipped, never shared.
         for _ in 0..64 {
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let name = format!("{}-tiles-{}-{nanos:08x}-{n}", crate::branding::GUI_BINARY, std::process::id());
+            let name = format!("{}{}-{nanos:08x}-{n}", Self::prefix(), std::process::id());
             let dir = parent.join(name);
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(TempFileStore { dir, sizes: HashMap::new(), total: 0, removed: false }),
+                Ok(()) => {
+                    let lock = match LockFile::try_acquire(&dir.join(Self::LOCK_FILE)) {
+                        Ok(Some(lock)) => lock,
+                        // Nobody else knows the folder yet, so its lock is free: a file that can't be locked means a
+                        // file system without locks, on which no later run could tell that the folder is in use.
+                        Ok(None) => {
+                            let _ = std::fs::remove_dir_all(&dir);
+                            return Err(StoreError::Lock { path: dir, source: std::io::Error::from(ErrorKind::WouldBlock) });
+                        }
+                        Err(source) => {
+                            let _ = std::fs::remove_dir_all(&dir);
+                            return Err(StoreError::Lock { path: dir, source });
+                        }
+                    };
+                    return Ok(TempFileStore { dir, sizes: HashMap::new(), total: 0, removed: false, lock: Some(lock) });
+                }
                 Err(e) if e.kind() == ErrorKind::AlreadyExists => last_error = Some(e),
                 Err(source) => return Err(StoreError::CreateDir { path: parent.to_path_buf(), source }),
             }
         }
         let source = last_error.unwrap_or_else(|| std::io::Error::from(ErrorKind::AlreadyExists));
         Err(StoreError::CreateDir { path: parent.to_path_buf(), source })
+    }
+
+    /// The start of every tile folder's name: the desktop app's binary name, then `-tiles-`.
+    fn prefix() -> String {
+        format!("{}-tiles-", crate::branding::GUI_BINARY)
     }
 
     /// The store's folder.
@@ -198,11 +248,66 @@ impl TempFileStore {
     /// Removes the folder and its files now, reporting a failure that dropping the store would only log.
     pub fn close(mut self) -> Result<(), StoreError> {
         self.removed = true;
+        // The lock file must be closed before its folder can be removed on Windows.
+        self.lock = None;
         match std::fs::remove_dir_all(&self.dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
             Err(source) => Err(StoreError::Remove { key: None, path: self.dir.clone(), source }),
         }
+    }
+
+    /// Removes the tile folders in `parent` that crashed runs left behind, and returns them, for the engine to call
+    /// at startup on every folder it keeps tile stores in. A folder is removed when its name is a tile folder's,
+    /// nobody holds its lock and it hasn't changed for a minute; one without a lock file (made before tile folders had
+    /// one) only once it is a day old. Tile folders hold nothing but spilled tiles, which no run can use again, so
+    /// they are deleted, as their store would have done, rather than moved to the trash. A folder that can't be
+    /// removed is logged and skipped; only a `parent` that can't be listed is an error.
+    pub fn remove_abandoned(parent: &Path) -> Result<Vec<PathBuf>, StoreError> {
+        TempFileStore::remove_abandoned_at(parent, SystemTime::now())
+    }
+
+    /// [`TempFileStore::remove_abandoned`] as if the time were `now`.
+    fn remove_abandoned_at(parent: &Path, now: SystemTime) -> Result<Vec<PathBuf>, StoreError> {
+        let entries = std::fs::read_dir(parent).map_err(|source| StoreError::List { path: parent.to_path_buf(), source })?;
+        let prefix = Self::prefix();
+        let mut removed = Vec::new();
+        for entry in entries.flatten() {
+            if !entry.file_name().to_str().is_some_and(|name| name.starts_with(&prefix)) {
+                continue;
+            }
+            let dir = entry.path();
+            // Never through a symbolic link: only real folders are tile folders.
+            let Ok(meta) = std::fs::symlink_metadata(&dir) else { continue };
+            if !meta.is_dir() {
+                continue;
+            }
+            let age = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).unwrap_or(Duration::ZERO);
+            if age < ABANDONED_AFTER {
+                continue;
+            }
+            let abandoned = match LockFile::probe(&dir.join(Self::LOCK_FILE)) {
+                Ok(LockState::Free) => true,
+                Ok(LockState::Missing) => age >= UNLOCKED_ABANDONED_AFTER,
+                Ok(LockState::Held) => false,
+                Err(e) => {
+                    tracing::warn!("cannot tell whether the tile folder {} is in use, so it stays: {e}", dir.display());
+                    false
+                }
+            };
+            if !abandoned {
+                continue;
+            }
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {
+                    tracing::info!("removed the tile folder {}, which a crashed run left behind", dir.display());
+                    removed.push(dir);
+                }
+                Err(e) => tracing::warn!("cannot remove the tile folder {} that a crashed run left behind: {e}", dir.display()),
+            }
+        }
+        removed.sort();
+        Ok(removed)
     }
 
     fn file(&self, key: TileKey) -> PathBuf {
@@ -257,6 +362,8 @@ impl Drop for TempFileStore {
         if self.removed {
             return;
         }
+        // The lock file must be closed before its folder can be removed on Windows.
+        self.lock = None;
         match std::fs::remove_dir_all(&self.dir) {
             Ok(()) => {}
             Err(e) if e.kind() == ErrorKind::NotFound => {}
@@ -773,6 +880,11 @@ mod tests {
         parent
     }
 
+    /// The number of tile files in a store's folder.
+    fn tile_files(dir: &Path) -> usize {
+        std::fs::read_dir(dir).unwrap().filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "tile")).count()
+    }
+
     #[test]
     fn temporary_files_hold_the_tiles_and_go_away_with_the_store() {
         let parent = test_parent("store");
@@ -782,12 +894,13 @@ mod tests {
         for n in 0..4 {
             cache.put(key(n), tile(u16::try_from(n).unwrap())).unwrap();
         }
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+        assert_eq!(tile_files(&dir), 3);
+        assert!(dir.join(TempFileStore::LOCK_FILE).is_file(), "the folder holds its lock");
         assert_eq!(cache.store().stored_bytes(), 3 * TILE_BYTES as u64);
         // Reading tile 1 back evicts tile 3 to a file of its own; taking tile 2 deletes its file.
         assert_eq!(cache.get::<f32>(key(1)).unwrap(), Some(&tile(1)));
         assert_eq!(cache.take::<f32>(key(2)).unwrap(), Some(tile(2)));
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+        assert_eq!(tile_files(&dir), 3);
         drop(cache);
         assert!(!dir.exists(), "dropping the store removes its folder");
         let store = TempFileStore::in_dir(&parent).unwrap();
@@ -806,7 +919,7 @@ mod tests {
         let mut cache = TileCache::new(TempFileStore::in_dir(&parent).unwrap(), 0);
         cache.put(key(0), tile(0)).unwrap();
         cache.put(key(1), tile(1)).unwrap();
-        let file = std::fs::read_dir(cache.store().path()).unwrap().next().unwrap().unwrap().path();
+        let file = cache.store().file(key(0));
         std::fs::write(&file, [0u8; 3]).unwrap();
         let e = cache.get::<f32>(key(0)).unwrap_err();
         assert!(matches!(e, StoreError::Damaged { expected: TILE_BYTES, got: 3, .. }), "{e}");
@@ -820,5 +933,42 @@ mod tests {
         assert!(matches!(TempFileStore::in_dir(&parent.join("missing").join("deeper")), Err(StoreError::CreateDir { .. })));
         drop(cache);
         std::fs::remove_dir(&parent).unwrap();
+    }
+
+    #[test]
+    fn tile_folders_left_behind_are_removed_and_live_ones_kept() {
+        let parent = test_parent("abandoned");
+        let later = SystemTime::now() + Duration::from_hours(2);
+        // A live store: its lock is held.
+        let mut live = TempFileStore::in_dir(&parent).unwrap();
+        live.write(key(0), &[1, 2, 3]).unwrap();
+        // A crashed run's folder: a lock file nobody holds, and a tile.
+        let crashed = parent.join(format!("{}999999-0-0", TempFileStore::prefix()));
+        std::fs::create_dir(&crashed).unwrap();
+        std::fs::write(crashed.join(TempFileStore::LOCK_FILE), b"").unwrap();
+        std::fs::write(crashed.join("0-0.tile"), [0u8; 16]).unwrap();
+        // A folder from before tile folders had a lock, and other things that aren't tile folders.
+        let unlocked = parent.join(format!("{}999998-0-0", TempFileStore::prefix()));
+        std::fs::create_dir(&unlocked).unwrap();
+        let other = parent.join("photos");
+        std::fs::create_dir(&other).unwrap();
+        let file = parent.join(format!("{}999997-0-0", TempFileStore::prefix()));
+        std::fs::write(&file, b"a file, not a folder").unwrap();
+
+        // Just now: everything is too young to be judged.
+        assert_eq!(TempFileStore::remove_abandoned(&parent).unwrap(), Vec::<PathBuf>::new());
+        assert!(crashed.is_dir());
+        // Two hours later: the crashed run's folder goes; the live one, the unlocked one (not a day old yet) and the
+        // rest stay.
+        assert_eq!(TempFileStore::remove_abandoned_at(&parent, later).unwrap(), std::slice::from_ref(&crashed));
+        assert!(!crashed.exists() && live.path().is_dir() && unlocked.is_dir() && other.is_dir() && file.is_file());
+        assert!(live.read(key(0), &mut Vec::new()).unwrap(), "the live store still works");
+        // Two days later, the unlocked folder goes too.
+        let much_later = SystemTime::now() + Duration::from_hours(48);
+        assert_eq!(TempFileStore::remove_abandoned_at(&parent, much_later).unwrap(), std::slice::from_ref(&unlocked));
+        assert!(live.path().is_dir());
+        drop(live);
+        assert!(matches!(TempFileStore::remove_abandoned(&parent.join("missing")), Err(StoreError::List { .. })));
+        std::fs::remove_dir_all(&parent).unwrap();
     }
 }

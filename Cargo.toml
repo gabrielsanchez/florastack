@@ -29,6 +29,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "1"
+# Content hashes of frames and cache files (florastack-project): SHA-256, so that users can check them with any
+# tool. RustCrypto's pure-Rust implementation; `oid` and `alloc` aren't needed.
+sha2 = { version = "0.11", default-features = false }
+# Moving old temporary projects to the operating system's trash (florastack-project's orphan cleanup, native
+# targets only), never deleting them: the Recycle Bin through the shell's IFileOperation on Windows (the `windows`
+# crate), NSFileManager on macOS (objc2) and the freedesktop.org trash specification on Linux and the BSDs (libc).
+# No C code is compiled; those are the operating systems' own libraries. ATTRIBUTION.md has the details.
+trash = "5.2"
 # CPU parallelism (AGENTS.md, Conventions): parallel iterators over rows, tiles and frames.
 rayon = "1.12"
 # Logging in the libraries (AGENTS.md, Conventions); without the default `attributes` feature, which would compile

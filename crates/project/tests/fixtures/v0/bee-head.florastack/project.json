@@ -1,0 +1,77 @@
+{
+  "format": "florastack-project",
+  "version": 0,
+  "name": "Bee head",
+  "created": 1792500000,
+  "develop": {
+    "white_balance": "auto",
+    "exposure": 0.5
+  },
+  "frames": [
+    {
+      "file": "/photos/bee/IMG_0001.CR3",
+      "bytes": 25165824,
+      "sha256": "0F3C9A6D1E2B4F5A8C7D9E0F1A2B3C4D5E6F708192A3B4C5D6E7F8091A2B3C4D",
+      "exif": {
+        "make": "Canon",
+        "model": "Canon EOS R5",
+        "lens": "RF100mm F2.8 L MACRO IS USM",
+        "software": null,
+        "capture_time": "2026-10-20T09:15:00",
+        "exposure_time": 0.004,
+        "f_number": 5.6,
+        "iso": 200,
+        "focal_length": 100.0,
+        "focal_length_35mm": null,
+        "artist": null,
+        "copyright": null,
+        "title": null,
+        "caption": null,
+        "keywords": [],
+        "gps": null
+      },
+      "align": {
+        "matrix": [1, 0, 0, 0, 1, 0],
+        "gain": 1,
+        "score": 1
+      }
+    },
+    {
+      "file": "/photos/bee/IMG_0002.CR3",
+      "bytes": 25165312,
+      "sha256": "1f3c9a6d1e2b4f5a8c7d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+      "skip": true
+    },
+    {
+      "file": "/photos/bee/IMG_0003.CR3",
+      "bytes": 25166080,
+      "sha256": "2f3c9a6d1e2b4f5a8c7d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+      "skip": false,
+      "align": {
+        "matrix": [1.0021, -0.0004, -1.25, 0.0004, 1.0021, 0.75],
+        "gain": 0.985,
+        "score": 0.931
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "method": "pyramid",
+      "params": {
+        "grit_suppression": 0.5
+      },
+      "created": 1792500300,
+      "file": "cache/output-1.tiff",
+      "bytes": 130,
+      "sha256": "81f7f03b0c5f9472a6e6c06c536dc1ef558cc367fe643a88f9622266bdd8e259",
+      "strokes": [
+        {
+          "brush": "details",
+          "size": 40.0,
+          "source": { "frame": 3 },
+          "points": [[100.0, 120.0, 1.0], [104.0, 122.5, 0.9]]
+        }
+      ]
+    }
+  ]
+}

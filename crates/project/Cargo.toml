@@ -11,3 +11,19 @@ workspace = true
 
 [dependencies]
 florastack-core.workspace = true
+serde.workspace = true
+# `float_roundtrip`: floats read back exactly as they were written (alignment transforms, gains), at some cost in
+# parsing speed that a project file doesn't notice.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+toml.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+
+# The system trash for orphan cleanup, on native targets only: the browser build (roadmap 7.3) has no trash, and
+# keeps temporary projects in its origin-private storage.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+trash.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
