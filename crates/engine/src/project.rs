@@ -4,9 +4,10 @@
 //!
 //! - the develop settings, a preference group ([`develop_settings`], [`set_develop_settings`]), and the stack's
 //!   development resolved with them ([`store_develop`], [`develop`]), florastack-raw's types;
-//! - each frame's EXIF summary ([`add_frame`], [`exif`]), florastack-codecs';
+//! - each frame's EXIF summary ([`add_frame`], [`read_frame_file`], [`exif`]), florastack-codecs';
 //! - the cache's images, written losslessly as Deflate-compressed TIFF at their own sample type, color space and
-//!   range ([`write_image`], [`read_image`]), and previews, small sRGB JPEGs ([`write_preview`]).
+//!   range ([`write_image`], [`read_image`]), and previews, small sRGB JPEGs ([`write_preview`]). They take a
+//!   project folder or its [`CacheDir`], which a job's worker can hold.
 //!
 //! The shapes these types take in a project file are pinned by this module's tests: a change to one must raise the
 //! project format version and add a migration (`florastack_project::schema`).
@@ -19,8 +20,10 @@ use florastack_codecs::{
 };
 use florastack_core::ops::{OpError, resize};
 use florastack_core::{AnyImage, Image, SampleFormat};
-use florastack_project::{Area, CacheRef, Develop, Frame, FrameFile, FrameId, Group, Project, ProjectError, ProjectFolder, from_data, to_data};
+use florastack_project::{Area, CacheDir, CacheRef, Develop, Frame, FrameFile, FrameId, Group, Project, ProjectError, Value, from_data, to_data};
 use florastack_raw::{DevelopSettings, RawDevelop, RawError, Resolved};
+
+use crate::frames::{FrameError, FrameSource};
 
 /// Why project data can't be read or written.
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +36,8 @@ pub enum ProjectDataError {
     Raw(#[from] RawError),
     #[error(transparent)]
     Op(#[from] OpError),
+    #[error(transparent)]
+    Frame(#[from] FrameError),
 }
 
 /// The develop settings the preferences hold, every key they don't set at its default, checked.
@@ -73,11 +78,35 @@ pub fn develop(project: &Project) -> Result<Option<RawDevelop>, ProjectDataError
 /// Adds the file at `path` to the project as a frame: reads it once, hashes it and keeps its metadata summary.
 pub fn add_frame(project: &mut Project, path: &Path) -> Result<FrameId, ProjectDataError> {
     let bytes = std::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
-    let file = FrameFile::from_bytes(path, &bytes)?;
-    let summary = florastack_codecs::read_metadata(&bytes).summary().clone();
+    let (file, exif) = frame_file(path, &bytes)?;
     drop(bytes);
-    let exif = if summary == ExifSummary::default() { None } else { Some(to_data("EXIF summary", &summary)?) };
     Ok(project.add_frame(file, exif))
+}
+
+/// A file read to become a frame ([`read_frame_file`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameRead {
+    pub file: FrameFile,
+    /// Its EXIF summary, as the project stores it.
+    pub exif: Option<Value>,
+    /// Which crate reads it.
+    pub source: FrameSource,
+}
+
+/// Reads the file at `path` once, to add it as a frame: checks that it is a camera RAW or image file FloraStack reads
+/// (from its bytes, not its name), hashes it and takes its metadata summary.
+pub fn read_frame_file(path: &Path) -> Result<FrameRead, ProjectDataError> {
+    let bytes = std::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+    let source = crate::frames::source(&bytes)?;
+    let (file, exif) = frame_file(path, &bytes)?;
+    Ok(FrameRead { file, exif, source })
+}
+
+fn frame_file(path: &Path, bytes: &[u8]) -> Result<(FrameFile, Option<Value>), ProjectDataError> {
+    let file = FrameFile::from_bytes(path, bytes)?;
+    let summary = florastack_codecs::read_metadata(bytes).summary().clone();
+    let exif = if summary == ExifSummary::default() { None } else { Some(to_data("EXIF summary", &summary)?) };
+    Ok((file, exif))
 }
 
 /// A frame's EXIF summary, if it has one.
@@ -98,14 +127,14 @@ fn lossless(format: SampleFormat) -> OutputSpec {
 
 /// Writes `image` into the project's cache, losslessly, as a file named after `stem` (`output-7`, `frame-3-aligned`),
 /// and returns its reference for the project, with `key` (what it was made from).
-pub fn write_image(folder: &ProjectFolder, stem: &str, image: &AnyImage, key: Option<String>) -> Result<CacheRef, ProjectDataError> {
+pub fn write_image(folder: &impl AsRef<CacheDir>, stem: &str, image: &AnyImage, key: Option<String>) -> Result<CacheRef, ProjectDataError> {
     let encoded = florastack_codecs::write(image, &lossless(image.format()), &OutputMetadata::default())?;
-    Ok(folder.store(Area::Cache, stem, "tiff", &encoded.bytes, key)?)
+    Ok(folder.as_ref().store(Area::Cache, stem, "tiff", &encoded.bytes, key)?)
 }
 
 /// Reads an image from the project's cache, after checking the file against its reference.
-pub fn read_image(folder: &ProjectFolder, reference: &CacheRef) -> Result<AnyImage, ProjectDataError> {
-    let bytes = folder.read(reference)?;
+pub fn read_image(folder: &impl AsRef<CacheDir>, reference: &CacheRef) -> Result<AnyImage, ProjectDataError> {
+    let bytes = folder.as_ref().read(reference)?;
     // Cache files are written upright; their pixels are used as stored.
     let options = ReadOptions { orientation: OrientationPolicy::Ignore, ..ReadOptions::default() };
     Ok(florastack_codecs::read(&bytes, &options)?.image)
@@ -115,7 +144,7 @@ pub fn read_image(folder: &ProjectFolder, reference: &CacheRef) -> Result<AnyIma
 pub const PREVIEW_SIDE: usize = 512;
 
 /// Writes a preview of a linear image into `previews/`: at most [`PREVIEW_SIDE`] pixels on its long side, an sRGB JPEG.
-pub fn write_preview(folder: &ProjectFolder, stem: &str, image: &Image<f32>) -> Result<CacheRef, ProjectDataError> {
+pub fn write_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f32>) -> Result<CacheRef, ProjectDataError> {
     let (w, h) = (image.width(), image.height());
     let long = w.max(h);
     let small;
@@ -133,5 +162,5 @@ pub fn write_preview(folder: &ProjectFolder, stem: &str, image: &Image<f32>) -> 
         extended_range: false,
     };
     let encoded = florastack_codecs::write(&AnyImage::F32(image.clone()), &spec, &OutputMetadata::default())?;
-    Ok(folder.store(Area::Previews, stem, "jpg", &encoded.bytes, None)?)
+    Ok(folder.as_ref().store(Area::Previews, stem, "jpg", &encoded.bytes, None)?)
 }

@@ -42,9 +42,9 @@ pub fn from_data<T: DeserializeOwned>(what: &'static str, data: &Value) -> Resul
 macro_rules! id_type {
     ($(#[$doc:meta])* $name:ident, $what:literal) => {
         $(#[$doc])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
         #[serde(transparent)]
-        pub struct $name(u64);
+        pub struct $name(pub(crate) u64);
 
         impl $name {
             /// The number in the project file.
@@ -154,7 +154,7 @@ pub struct Alignment {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Frame {
-    id: FrameId,
+    pub(crate) id: FrameId,
     /// The file: an absolute path, or one relative to the folder that holds the project folder.
     pub path: String,
     /// Its size in bytes when it was added.
@@ -277,7 +277,7 @@ pub enum Input {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetouchLayer {
-    id: LayerId,
+    pub(crate) id: LayerId,
     pub name: String,
     pub visible: bool,
     #[serde(default)]
@@ -294,7 +294,7 @@ impl RetouchLayer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
-    id: OutputId,
+    pub(crate) id: OutputId,
     pub name: String,
     /// The stacking method's name in the command registry, such as `pyramid` or `depth-map`.
     pub method: String,
@@ -355,11 +355,11 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     software: Option<String>,
     /// The name the user gave the project; `None` for a temporary project that hasn't been named.
-    name: Option<String>,
+    pub(crate) name: Option<String>,
     created: Timestamp,
     modified: Timestamp,
     /// The next id to give out; ids are never reused.
-    next_id: u64,
+    pub(crate) next_id: u64,
     /// The input frames, in the user's order.
     #[serde(default)]
     pub frames: Vec<Frame>,
@@ -384,7 +384,7 @@ pub const MAX_NAME_CHARS: usize = 200;
 const MAX_PATH_BYTES: usize = 32 * 1024;
 
 /// Checks a name for a project, an output or a layer.
-fn check_name(what: &'static str, name: &str) -> Result<(), Problem> {
+pub(crate) fn check_name(what: &'static str, name: &str) -> Result<(), Problem> {
     if name.trim().is_empty() {
         return Err(Problem::Text { what, reason: "is empty" });
     }
@@ -568,9 +568,7 @@ impl Project {
         };
         for f in &self.frames {
             id(f.id.0)?;
-            if f.path.is_empty() || f.path.len() > MAX_PATH_BYTES || f.path.contains('\0') {
-                return Err(Problem::Text { what: "frame path", reason: "is empty, too long or holds a NUL character" });
-            }
+            check_frame_path(&f.path)?;
             if let Some(a) = &f.alignment {
                 let finite = a.transform.m.iter().flatten().all(|v| v.is_finite()) && a.brightness_gain.is_finite() && a.quality.is_finite();
                 if !finite {
@@ -600,6 +598,14 @@ impl Project {
         }
         self.preferences.validate()
     }
+}
+
+/// Checks a frame's stored path.
+pub(crate) fn check_frame_path(path: &str) -> Result<(), Problem> {
+    if path.is_empty() || path.len() > MAX_PATH_BYTES || path.contains('\0') {
+        return Err(Problem::Text { what: "frame path", reason: "is empty, too long or holds a NUL character" });
+    }
+    Ok(())
 }
 
 fn name_reason(problem: &Problem) -> &'static str {

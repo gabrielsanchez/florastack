@@ -19,6 +19,8 @@ toml.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 sha2.workspace = true
+# The JSON schemas of the ids and preference groups that commands take as parameters.
+schemars.workspace = true
 
 # The system trash for orphan cleanup, on native targets only: the browser build (roadmap 7.3) has no trash, and
 # keeps temporary projects in its origin-private storage.

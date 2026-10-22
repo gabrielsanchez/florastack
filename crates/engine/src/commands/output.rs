@@ -1,0 +1,271 @@
+//! The outputs: listing, renaming and removing them, and saving one to an image file (a job).
+
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+use florastack_codecs::{OutputMetadata, OutputSpec};
+use florastack_core::Monitor;
+use florastack_project::{Edit, FrameId, Input, LayerId, OutputId, ProjectError, Value};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use super::{absolute, check_name, check_path, display};
+use crate::error::{CommandError, Invalid};
+use crate::jobs::{JobPlan, Lane, commit};
+use crate::registry::{CommandSpec, Effects, Meta, NoParams, Params, Requires};
+use crate::session::Session;
+
+pub(crate) fn specs() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec::query(
+            Meta::new("output.list", "List outputs", "Lists the outputs, oldest first: how each was made, its maps and its retouch layers.")
+                .requires(Requires::Project),
+            list,
+        ),
+        CommandSpec::instant(
+            Meta::new("output.rename", "Rename output", "Renames an output.").undoable().examples(&[r#"{ "output": 4, "name": "Pyramid, grit 0.5" }"#]),
+            rename,
+        ),
+        CommandSpec::instant(
+            Meta::new("output.remove", "Remove output", "Removes an output from the project.")
+                .help("Its cache files stay until the project is closed, so that undo can bring it back whole.")
+                .undoable()
+                .examples(&[r#"{ "output": 4 }"#]),
+            remove,
+        ),
+        CommandSpec::job(
+            Meta::new("output.save", "Save output", "Writes an output to an image file, in the format, depth and color profile given.")
+                .help(
+                    "The metadata (EXIF, IPTC, XMP) comes from `metadataFrom`, or by default from the first of the \
+                     output's frames, with the frame count in XMP. The file is written whole to a temporary file and \
+                     then renamed, so a failed write leaves nothing behind; an existing file is replaced only with \
+                     `overwrite`. Runs as a job, which can be cancelled until writing starts.",
+                )
+                .requires(Requires::Project)
+                .effects(Effects::Files)
+                .examples(&[
+                    r#"{ "output": 4, "path": "C:/Stacks/bee.tif", "spec": { "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16" } }"#,
+                    r#"{ "output": 4, "path": "C:/Stacks/bee.jpg", "spec": { "format": { "format": "jpeg", "quality": 92, "subsampling": "s444" }, "depth": "u8", "profile": "srgb" }, "overwrite": true }"#,
+                ]),
+            Lane::Heavy,
+            save,
+        ),
+    ]
+}
+
+/// A retouch layer, listed.
+#[derive(Debug, Serialize, JsonSchema)]
+struct LayerInfo {
+    id: LayerId,
+    name: String,
+    visible: bool,
+    /// How many strokes it holds.
+    strokes: usize,
+}
+
+/// An output, listed.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct OutputInfo {
+    id: OutputId,
+    name: String,
+    /// The method's name, such as `pyramid`.
+    method: String,
+    /// The method's parameters.
+    parameters: Value,
+    /// When it was made, RFC 3339.
+    created: String,
+    /// The frames it was made from, in order.
+    frames: Vec<FrameId>,
+    /// The outputs it was made from (slabs).
+    outputs: Vec<OutputId>,
+    /// The names of its maps, such as `depth`.
+    maps: Vec<String>,
+    preview: bool,
+    /// Its retouch layers, bottom first.
+    layers: Vec<LayerInfo>,
+}
+
+/// The outputs.
+#[derive(Debug, Serialize, JsonSchema)]
+struct OutputList {
+    outputs: Vec<OutputInfo>,
+}
+
+fn list(session: &Session, _: NoParams) -> Result<OutputList, CommandError> {
+    let outputs = session
+        .project()?
+        .outputs
+        .iter()
+        .map(|o| OutputInfo {
+            id: o.id(),
+            name: o.name.clone(),
+            method: o.method.clone(),
+            parameters: o.parameters.clone(),
+            created: o.created().to_string(),
+            frames: o.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect(),
+            outputs: o.inputs.iter().filter_map(|i| if let Input::Output(f) = i { Some(*f) } else { None }).collect(),
+            maps: o.maps.keys().map(|m| m.as_str().to_owned()).collect(),
+            preview: o.preview.is_some(),
+            layers: o.retouch.iter().map(|l| LayerInfo { id: l.id(), name: l.name.clone(), visible: l.visible, strokes: l.strokes.len() }).collect(),
+        })
+        .collect();
+    Ok(OutputList { outputs })
+}
+
+/// Renames an output.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RenameParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// Its new name: at most 200 characters, no control characters.
+    name: String,
+}
+
+impl Params for RenameParams {
+    fn check(&self) -> Result<(), Invalid> {
+        check_name("name", &self.name)
+    }
+}
+
+/// An output's name now.
+#[derive(Debug, Serialize, JsonSchema)]
+struct Renamed {
+    output: OutputId,
+    name: String,
+}
+
+fn find(session: &Session, output: OutputId) -> Result<&florastack_project::Output, CommandError> {
+    session.project()?.output(output).ok_or_else(|| CommandError::NotFound { what: output.to_string() })
+}
+
+fn rename(session: &mut Session, p: RenameParams) -> Result<Renamed, CommandError> {
+    if find(session, p.output)?.name != p.name {
+        session.apply(Edit::RenameOutput { output: p.output, name: p.name.clone() })?;
+    }
+    Ok(Renamed { output: p.output, name: p.name })
+}
+
+/// An output.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct OutputParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+}
+
+impl Params for OutputParams {}
+
+/// The output removed.
+#[derive(Debug, Serialize, JsonSchema)]
+struct Removed {
+    output: OutputId,
+}
+
+fn remove(session: &mut Session, p: OutputParams) -> Result<Removed, CommandError> {
+    find(session, p.output)?;
+    session.apply(Edit::RemoveOutput(p.output))?;
+    Ok(Removed { output: p.output })
+}
+
+/// Saves an output to an image file.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SaveParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// The file to write.
+    path: String,
+    /// The format, its options, the bit depth and the color profile.
+    spec: OutputSpec,
+    /// The frame whose metadata the file gets; by default the first of the output's frames.
+    #[serde(default)]
+    metadata_from: Option<FrameId>,
+    /// Replace the file if it exists.
+    #[serde(default)]
+    overwrite: bool,
+}
+
+impl Params for SaveParams {
+    fn check(&self) -> Result<(), Invalid> {
+        check_path("path", &self.path)?;
+        self.spec.validate().map_err(|e| Invalid::new("spec", e.to_string()))
+    }
+}
+
+/// The file written.
+#[derive(Debug, Serialize, JsonSchema)]
+struct Written {
+    path: String,
+    /// Its size.
+    bytes: u64,
+    /// What the file couldn't hold or carry, such as metadata the format has no place for.
+    warnings: Vec<String>,
+}
+
+/// Writes `bytes` to `path` through a temporary file in the same folder, renamed over it once complete.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
+    let write = |source| CommandError::from(ProjectError::Write { path: path.to_path_buf(), source });
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let temp = path.with_file_name(format!(".{name}.{}.part", std::process::id()));
+    let result = (|| {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)
+    })();
+    result.map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        write(e)
+    })
+}
+
+fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandError> {
+    let (project, folder) = (session.project()?, session.folder()?);
+    let output = find(session, p.output)?;
+    let image = output.image.clone();
+    let frames: Vec<FrameId> = output.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect();
+    let source = match p.metadata_from {
+        Some(id) => Some(project.frame(id).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?),
+        None => frames.iter().find_map(|id| project.frame(*id)),
+    };
+    let source: Option<PathBuf> = source.map(|f| folder.frame_path(f));
+    let frame_count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
+    let path = absolute(&p.path)?;
+    if !p.overwrite && path.exists() {
+        return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", path.display())));
+    }
+    let cache = session.cache_dir()?;
+    let spec = p.spec;
+    let plan = JobPlan::new(move |ctx| {
+        ctx.stage(0);
+        let pixels = crate::project::read_image(&cache, &image)?;
+        ctx.checkpoint()?;
+        let mut warnings = Vec::new();
+        let metadata = match &source {
+            Some(frame) => match std::fs::read(frame) {
+                Ok(bytes) => Some(florastack_codecs::read_metadata(&bytes)),
+                Err(e) => {
+                    warnings.push(format!("the metadata of {} can't be read, so the file has none: {e}", frame.display()));
+                    None
+                }
+            },
+            None => None,
+        };
+        let metadata = OutputMetadata { source: metadata, frame_count: Some(frame_count), modified: None };
+        ctx.checkpoint()?;
+        ctx.stage(1);
+        let encoded = florastack_codecs::write(&pixels, &spec, &metadata)?;
+        drop(pixels);
+        // From here the file is written: the job can no longer be cancelled.
+        ctx.finalize()?;
+        ctx.stage(2);
+        write_atomically(&path, &encoded.bytes)?;
+        warnings.extend(encoded.warnings.iter().map(ToString::to_string));
+        let written = Written { path: display(&path), bytes: encoded.bytes.len() as u64, warnings };
+        Ok(commit(move |_: &mut Session| Ok(written)))
+    });
+    Ok(plan.stages(&[("Reading", 0.2), ("Encoding", 0.7), ("Writing", 0.1)]))
+}

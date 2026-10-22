@@ -13,7 +13,7 @@ use crate::error::RawError;
 use crate::format::RawFormat;
 
 /// A CIE 1931 xy chromaticity: here, the color of the light a scene was lit by (its white).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Chromaticity {
     pub x: f64,
     pub y: f64,

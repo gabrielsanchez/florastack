@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 florastack-core.workspace = true
 serde.workspace = true
+# The JSON schemas of the read and write options, which commands take as parameters.
+schemars.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 rayon.workspace = true
@@ -40,5 +42,6 @@ florastack-core = { workspace = true, features = ["testutil"] }
 florastack-metrics.workspace = true
 florastack-testkit.workspace = true
 proptest.workspace = true
-# The options' serde round trip.
+# The options' serde round trips.
 toml.workspace = true
+serde_json.workspace = true

@@ -93,7 +93,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] Tile folders that a crashed run left behind (`TempFileStore`, named after the GUI binary with `-tiles-`) removed at startup: each folder now holds a lock, and `TempFileStore::remove_abandoned` deletes those whose lock is free (spilled tiles only, so deleted rather than trashed)
 - [x] Tests: save and load round trip, migration from a v0 fixture (`crates/project/tests/fixtures/v0/`), partial preset layering; plus hostile project files (with a proptest), orphans, locks and cache integrity
 - [x] The stack's `DevelopSettings` and its `Resolved` in the project: kept as serialized data that the engine reads (`florastack_engine::project::develop`), like the EXIF summary, the stacking parameters and the retouch strokes, so `RULES` is unchanged; the engine's tests pin the JSON shape of each
-- [ ] Call the startup cleanup: `TempFileStore::remove_abandoned` on every folder that holds tile stores, and `Orphans::find` on the temporary-projects folder, with the orphans offered to the user (5.1) and in the CLI's `project clean-orphans` (4.1)
+- [ ] Call the startup cleanup: `TempFileStore::remove_abandoned` on every folder that holds tile stores, and `Orphans::find` on the temporary-projects folder, with the orphans offered to the user (5.1) and in the CLI's `project clean-orphans` (4.1), through the `project.findOrphans` and `project.trashOrphans` commands (1.5)
 - [ ] The temporary-projects folder and the orphan age (30 days by default, `Orphans::DEFAULT_DAYS`) as preferences (5.4), with the folder on a local drive: on Windows, the shell may delete instead of recycle on a drive without a Recycle Bin, such as a network share
 - [ ] Check `SystemTrash` by hand on Windows, macOS and Linux (a temporary project lands in the Recycle Bin or Trash and can be restored): the tests never call it, so as not to touch the real trash of the machine they run on
 - [ ] Save As: naming a temporary project and moving it out of the temporary-projects folder (5.1)
@@ -104,11 +104,21 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 1.5 Command registry and job engine *(plan first)*
 
-- [ ] Command registry: named commands with serde params, a JSON schema (schemars), help text and an undoable flag; `list()` and `dispatch(name, json)`
-- [ ] Engine re-exports of the core, project and retouch types the apps need
-- [ ] Job engine: cancellable jobs on a worker pool with progress events (fraction, stage, ETA); one heavy job at a time, previews at lower priority
-- [ ] Undo and redo through inverse operations, one retouch stroke per step
-- [ ] Tests: every command has a schema and help text, dispatch from JSON, cancellation leaves the project consistent
+- [x] Command registry: named commands with serde params, a JSON schema (schemars), help text and an undoable flag; `list()` and `dispatch(name, json)` (`Registry::list`, which needs no project, and `Engine::dispatch`; draft 2020-12 schemas, inlined, for MCP tool definitions; 28 commands for projects, frames, develop settings, presets, outputs, undo and jobs, pinned in `crates/engine/tests/commands.txt`)
+- [x] Engine re-exports of the core, project and retouch types the apps need (`florastack_engine::model` for the project's; florastack-retouch has no types until 5.3)
+- [x] Job engine: cancellable jobs on a worker pool with progress events (fraction, stage, ETA); one heavy job at a time, previews at lower priority (a heavy lane, queued, on its own thread over rayon's pool; a preview lane on a small rayon pool, a newer preview cancelling the older; jobs plan from a snapshot, lock what they read, and commit on the engine's thread; `JobContext` implements `florastack_core::Monitor`)
+- [x] Undo and redo through inverse operations, one retouch stroke per step (`florastack_project::Edit`, whose `Project::apply` returns the inverse; one step per command, coalesced slider drags, dirty tracking against the saved state)
+- [x] Tests: every command has a schema and help text, dispatch from JSON, cancellation leaves the project consistent (plus every undoable command undone and redone exactly, hostile parameters and arbitrary JSON thrown at every command)
+- [x] Typed values for the enums' fields too: `WhiteBalance`, `ChromaticAberration` and `OutputFormat` refuse unknown keys inside their variants, which they ignored before
+- [ ] Continuous jobs that commit as they go, batch by batch, for the watch folder (4.2): a job commits once, when it ends
+- [ ] Preview jobs' pixels to the UI (3.1, 5.2): job results are JSON, which carries no images; keep them in memory for the viewer to read
+- [ ] Per-command capabilities for the control channel and MCP (6.4): `CommandInfo::effects` says what each command may change, and untrusted clients need a gate
+- [ ] The browser build's executor, over a Web Worker pool, and a `project.close` that doesn't block (7.3): `Engine::wait` is native only, and closing waits for cancelled jobs to stop
+- [ ] Typed preference groups for align, stack and output as their crates define settings (2.1, 3.1, 5.4); until then `preset.apply` refuses presets that set them
+- [ ] A byte budget for the undo history (long retouch sessions, 5.3): it keeps the last 1000 steps, whatever their size
+- [ ] `project.checkFrames`: the frames that are missing or changed when a project is reopened (5.1)
+- [ ] Command titles and help texts through Fluent (5.1): the registry's English texts are the fallback
+- [ ] `output.save` leaves the file's modified time out, so that saving the same output twice gives the same bytes; carry the output's creation time instead (5.4)
 
 ### Before Phase 2
 

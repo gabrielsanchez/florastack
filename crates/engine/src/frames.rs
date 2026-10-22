@@ -60,6 +60,16 @@ pub enum FrameError {
     Image(#[from] ImageError),
 }
 
+/// The file extensions of the image formats florastack-codecs reads, lower case and without the dot.
+pub const IMAGE_EXTENSIONS: [&str; 9] = ["jpg", "jpeg", "jpe", "png", "tif", "tiff", "exr", "webp", "bmp"];
+
+/// Whether a file's name says it is a frame FloraStack reads: a camera RAW or DNG file, or an image file. What picks
+/// the files of a folder; the file's bytes decide in the end ([`source`]).
+pub fn is_frame_name(path: &std::path::Path) -> bool {
+    let Some(extension) = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase) else { return false };
+    IMAGE_EXTENSIONS.contains(&extension.as_str()) || florastack_raw::extensions().any(|e| e == extension)
+}
+
 /// Which crate reads `bytes`: florastack-raw for camera RAW and DNG files, florastack-codecs for every image format it
 /// knows. Anything else is the codecs' error for it, which says what to do.
 pub fn source(bytes: &[u8]) -> Result<FrameSource, FrameError> {

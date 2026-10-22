@@ -45,6 +45,7 @@
 use florastack_core::ops::{Border, Interpolation, warp};
 use florastack_core::{Affine, ColorSpace, Encoding, Image, Orientation};
 use lightcraft_raw::Rgb32f;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::color::{self, Transform};
@@ -54,7 +55,7 @@ use crate::frame::{Chromaticity, Mosaic, RawFrame, SensorLayout};
 
 /// How a stack's RAW frames are developed: chosen once per stack, stored in its project, applied to every frame
 /// alike through [`RawDevelop`]. Every field has a default, so a preset can name only some.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DevelopSettings {
     pub white_balance: WhiteBalance,
@@ -62,6 +63,7 @@ pub struct DevelopSettings {
     pub demosaic: Demosaic,
     pub highlights: Highlights,
     /// Exposure in stops (EV), from -10 to 10: a gain of `2^exposure`, linear like everything else.
+    #[schemars(range(min = -10.0, max = 10.0))]
     pub exposure: f32,
     pub chromatic_aberration: ChromaticAberration,
     pub noise_reduction: NoiseReduction,
@@ -72,8 +74,8 @@ pub struct DevelopSettings {
 }
 
 /// Which white the frames are balanced for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub enum WhiteBalance {
     /// The white the camera recorded for the reference frame (D65 if it recorded none).
     #[default]
@@ -83,11 +85,16 @@ pub enum WhiteBalance {
     Auto,
     /// A correlated color temperature in kelvin (2000 to 50000) and a tint (-150 to 150, positive toward green),
     /// on the camera's own scale when it has color matrices and relative to the as-shot rendering otherwise.
-    Custom { temperature: f64, tint: f64 },
+    Custom {
+        #[schemars(range(min = 2000.0, max = 50000.0))]
+        temperature: f64,
+        #[schemars(range(min = -150.0, max = 150.0))]
+        tint: f64,
+    },
 }
 
 /// The demosaic method.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Demosaic {
     /// Bilinear interpolation, on any color filter array: fast, a little soft, with color fringes on the finest
@@ -99,7 +106,7 @@ pub enum Demosaic {
 }
 
 /// What happens to highlights the sensor clipped.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Highlights {
     /// Rebuild clipped channels from the unclipped ones (fully clipped pixels become neutral), so that clipped
@@ -112,8 +119,8 @@ pub enum Highlights {
 
 /// Lateral chromatic aberration correction: the red and blue planes magnified relative to green about the image's
 /// center, by a factor of `1 + scale`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ChromaticAberration {
     Off,
     /// Measured once on the reference frame, from the radial offsets of strong edges between the planes; no
@@ -123,7 +130,9 @@ pub enum ChromaticAberration {
     /// The red and blue planes' radial scales relative to green, each between -0.01 and 0.01 (a red edge at radius
     /// `r` sits at `r * (1 + red)`).
     Manual {
+        #[schemars(range(min = -0.01, max = 0.01))]
         red: f32,
+        #[schemars(range(min = -0.01, max = 0.01))]
         blue: f32,
     },
 }
@@ -132,12 +141,14 @@ pub enum ChromaticAberration {
 /// sliders. Off by default because both filters are nonlinear: the luminance filter smooths fine texture, which
 /// stacking reads as focus, and the chroma filter keeps every sample at zero or above, which lifts the noise floor of
 /// the darkest areas a little. Stacking averages noise away anyway; turn it on for frames shot at high ISO.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct NoiseReduction {
     /// Edge-aware smoothing of luminance. It smooths fine texture too, which stacking reads as focus, so keep it low.
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub luminance: f32,
     /// Smoothing of color (chroma) noise, keeping luminance.
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub color: f32,
 }
 
@@ -149,7 +160,7 @@ impl NoiseReduction {
 }
 
 /// Which demosaic a development uses.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Quality {
     /// The fast demosaic, for previews; every other step is the same as for output.
@@ -210,7 +221,7 @@ impl DevelopSettings {
 /// What a stack's [`DevelopSettings`] come to once resolved on its reference frame: the white every frame is balanced
 /// for, and the chromatic-aberration scales every frame is corrected by. Store it with the settings, so that a
 /// reopened project develops its frames exactly as before.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Resolved {
     pub white: Chromaticity,
@@ -219,7 +230,7 @@ pub struct Resolved {
 }
 
 /// Something a development did that the user may want to know.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum DevelopWarning {
     /// The camera has no color matrix FloraStack knows: its RGB was taken for sRGB, so colors are approximate.
@@ -659,6 +670,14 @@ mod tests {
         let partial: DevelopSettings = toml::from_str("white_balance = \"auto\"\nexposure = -1.0\n").unwrap();
         assert_eq!(partial, DevelopSettings { white_balance: WhiteBalance::Auto, exposure: -1.0, ..DevelopSettings::default() });
         assert!(toml::from_str::<DevelopSettings>("whitebalance = \"auto\"").is_err(), "a misspelled key is an error, not ignored");
+        // Inside a variant's fields too (they were ignored before 1.5).
+        for typo in [
+            r#"{ "white_balance": { "custom": { "temperature": 5000.0, "tint": 0.0, "tnt": 3.0 } } }"#,
+            r#"{ "chromatic_aberration": { "manual": { "red": 0.0, "blue": 0.0, "green": 0.0 } } }"#,
+        ] {
+            let error = serde_json::from_str::<DevelopSettings>(typo).unwrap_err().to_string();
+            assert!(error.contains("unknown field"), "{typo}: {error}");
+        }
         let resolved = Resolved { white: Chromaticity { x: 0.33, y: 0.34 }, chromatic_aberration: [0.0002, -0.0001] };
         assert_eq!(serde_json::from_str::<Resolved>(&serde_json::to_string(&resolved).unwrap()).unwrap(), resolved);
     }

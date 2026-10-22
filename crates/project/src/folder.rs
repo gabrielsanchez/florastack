@@ -11,17 +11,21 @@
 //! A project open for editing holds its folder's lock, so that a second window or process can't open it as well, and
 //! orphan cleanup ([`crate::orphans`]) never takes a project in use. Saving writes `project.json` to a temporary file
 //! and renames it over the old one, so that a crash or a full disk leaves the last good save.
+//!
+//! The cache's files are read and written through a [`CacheDir`] ([`ProjectFolder::cache_dir`]), which can be cloned
+//! and sent to the worker threads of long jobs: they write new cache files while the folder, its lock and the project
+//! stay with the thread that owns them.
 
 use std::collections::BTreeSet;
-use std::io::{ErrorKind, Read};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use florastack_core::LockFile;
 use florastack_core::branding::{DISPLAY_NAME, PROJECT_EXTENSION};
 
-use crate::cache::{Area, CacheRef, CacheWriter, PART_SUFFIX};
-use crate::error::{CacheProblem, ProjectError, SchemaError};
+use crate::cache::{Area, CacheDir, CacheRef, CacheWriter, PART_SUFFIX};
+use crate::error::{ProjectError, SchemaError};
 use crate::fsutil::{read_capped, write_atomic};
 use crate::hash::ContentHash;
 use crate::model::{Frame, Project};
@@ -78,10 +82,16 @@ const STALE_PART: Duration = Duration::from_hours(1);
 /// A project folder, open for editing (holding its lock) or read-only.
 #[derive(Debug)]
 pub struct ProjectFolder {
-    root: PathBuf,
+    /// The folder and whether it may be written.
+    cache: CacheDir,
     lock: Option<LockFile>,
-    read_only: bool,
     migrated_from: Option<u32>,
+}
+
+impl AsRef<CacheDir> for ProjectFolder {
+    fn as_ref(&self) -> &CacheDir {
+        &self.cache
+    }
 }
 
 impl ProjectFolder {
@@ -126,7 +136,7 @@ impl ProjectFolder {
             std::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir, source })?;
         }
         let lock = ProjectFolder::lock(&root)?;
-        let mut folder = ProjectFolder { root, lock, read_only: false, migrated_from: None };
+        let mut folder = ProjectFolder { cache: CacheDir::new(root, false), lock, migrated_from: None };
         folder.save(project)?;
         Ok(folder)
     }
@@ -176,22 +186,20 @@ impl ProjectFolder {
         if let Some(from) = decoded.migrated_from {
             tracing::info!("upgraded {} from project format {from} to {}", file.display(), schema::VERSION);
         }
-        Ok((ProjectFolder { root, lock, read_only, migrated_from: decoded.migrated_from }, decoded.project))
+        Ok((ProjectFolder { cache: CacheDir::new(root, read_only), lock, migrated_from: decoded.migrated_from }, decoded.project))
     }
 
     /// Saves `project` to `project.json`, atomically, after checking it, and records the time and the software.
     /// The first save of an upgraded project keeps the old file as `project.v<version>.json`.
     pub fn save(&mut self, project: &mut Project) -> Result<(), ProjectError> {
-        if self.read_only {
-            return Err(ProjectError::ReadOnly { path: self.root.clone() });
-        }
-        project.validate().map_err(|source| ProjectError::Invalid { path: self.root.clone(), source })?;
+        self.cache.writable()?;
+        project.validate().map_err(|source| ProjectError::Invalid { path: self.cache.path().to_path_buf(), source })?;
         let mut saved = project.clone();
         saved.mark_saved(Timestamp::now(), software());
         let file = self.project_file();
         let bytes = schema::encode(&saved).map_err(|e| schema_error(&file, e))?;
         if let Some(from) = self.migrated_from {
-            let backup = self.root.join(format!("project.v{from}.json"));
+            let backup = self.cache.path().join(format!("project.v{from}.json"));
             if !backup.exists() {
                 std::fs::copy(&file, &backup).map_err(|source| ProjectError::Write { path: backup, source })?;
             }
@@ -204,16 +212,21 @@ impl ProjectFolder {
 
     /// The project folder.
     pub fn path(&self) -> &Path {
-        &self.root
+        self.cache.path()
+    }
+
+    /// The folder's cache files, through a handle that worker threads can hold (see the module documentation).
+    pub fn cache_dir(&self) -> &CacheDir {
+        &self.cache
     }
 
     /// The project file, `project.json`.
     pub fn project_file(&self) -> PathBuf {
-        self.root.join(FILE_NAME)
+        self.cache.path().join(FILE_NAME)
     }
 
     pub fn is_read_only(&self) -> bool {
-        self.read_only
+        self.cache.is_read_only()
     }
 
     /// Whether the folder holds its lock (not when read-only, or on a file system without locks).
@@ -229,7 +242,8 @@ impl ProjectFolder {
     /// Where a frame's file is: its path, or for a relative one, that path from the folder holding the project folder.
     pub fn frame_path(&self, frame: &Frame) -> PathBuf {
         let path = Path::new(&frame.path);
-        if path.is_absolute() { path.to_path_buf() } else { self.root.parent().unwrap_or(&self.root).join(path) }
+        let root = self.cache.path();
+        if path.is_absolute() { path.to_path_buf() } else { root.parent().unwrap_or(root).join(path) }
     }
 
     /// Whether a frame's file is still the one that was added: by size and modification time, and by hash when the
@@ -256,73 +270,25 @@ impl ProjectFolder {
         Ok(if hash == frame.hash { FrameState::Unchanged } else { FrameState::Changed })
     }
 
-    fn writable(&self) -> Result<(), ProjectError> {
-        if self.read_only { Err(ProjectError::ReadOnly { path: self.root.clone() }) } else { Ok(()) }
-    }
-
     /// A writer for a new cache file in `area`, named after `stem` (such as `output-7` or `frame-3-aligned`) and
     /// `extension` (such as `tiff`), which the encoder chooses.
     pub fn writer(&self, area: Area, stem: &str, extension: &str) -> Result<CacheWriter, ProjectError> {
-        self.writable()?;
-        CacheWriter::create(&self.root, area, stem, extension)
+        self.cache.writer(area, stem, extension)
     }
 
     /// Stores `bytes` as a new cache file (see [`ProjectFolder::writer`]).
     pub fn store(&self, area: Area, stem: &str, extension: &str, bytes: &[u8], key: Option<String>) -> Result<CacheRef, ProjectError> {
-        use std::io::Write as _;
-        let mut writer = self.writer(area, stem, extension)?;
-        writer.write_all(bytes).map_err(|source| ProjectError::Write { path: self.root.join(area.dir()), source })?;
-        writer.commit(key)
-    }
-
-    /// The size of a cache file, checked against its reference.
-    fn open_cached(&self, reference: &CacheRef) -> Result<(std::fs::File, PathBuf), ProjectError> {
-        let path = reference.path.resolve(&self.root);
-        let problem = |source| ProjectError::Cache { path: path.clone(), source };
-        let file = match std::fs::File::open(&path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Err(problem(CacheProblem::Missing)),
-            Err(source) => return Err(ProjectError::Read { path, source }),
-        };
-        let meta = file.metadata().map_err(|source| ProjectError::Read { path: path.clone(), source })?;
-        if !meta.is_file() {
-            return Err(problem(CacheProblem::NotAFile));
-        }
-        if meta.len() != reference.size {
-            return Err(problem(CacheProblem::Size { expected: reference.size, found: meta.len() }));
-        }
-        Ok((file, path))
+        self.cache.store(area, stem, extension, bytes, key)
     }
 
     /// Reads a cache file whole, after checking its size and hash against its reference.
     pub fn read(&self, reference: &CacheRef) -> Result<Vec<u8>, ProjectError> {
-        let (file, path) = self.open_cached(reference)?;
-        // The file's real size, checked above: a reference can't make this allocate more than the file holds.
-        let mut bytes = Vec::with_capacity(usize::try_from(reference.size).unwrap_or(0));
-        file.take(reference.size.saturating_add(1)).read_to_end(&mut bytes).map_err(|source| ProjectError::Read { path: path.clone(), source })?;
-        let found = bytes.len() as u64;
-        if found != reference.size {
-            return Err(ProjectError::Cache { path, source: CacheProblem::Size { expected: reference.size, found } });
-        }
-        let hash = ContentHash::of(&bytes);
-        if hash != reference.hash {
-            return Err(ProjectError::Cache { path, source: CacheProblem::Hash { expected: reference.hash, found: hash } });
-        }
-        Ok(bytes)
+        self.cache.read(reference)
     }
 
     /// Checks a cache file's size and hash without keeping its bytes.
     pub fn verify(&self, reference: &CacheRef) -> Result<(), ProjectError> {
-        let (file, path) = self.open_cached(reference)?;
-        let (hash, found) = ContentHash::of_reader(file.take(reference.size.saturating_add(1)))
-            .map_err(|source| ProjectError::Read { path: path.clone(), source })?;
-        if found != reference.size {
-            return Err(ProjectError::Cache { path, source: CacheProblem::Size { expected: reference.size, found } });
-        }
-        if hash != reference.hash {
-            return Err(ProjectError::Cache { path, source: CacheProblem::Hash { expected: reference.hash, found: hash } });
-        }
-        Ok(())
+        self.cache.verify(reference)
     }
 
     /// The project's cache files that can't be used, each with why: every one is checked for its presence and size,
@@ -334,7 +300,7 @@ impl ProjectFolder {
             if !seen.insert(&reference.path) {
                 continue;
             }
-            let result = if full { self.verify(reference) } else { self.open_cached(reference).map(drop) };
+            let result = if full { self.cache.verify(reference) } else { self.cache.check_size(reference) };
             if let Err(e) = result {
                 issues.push((reference.clone(), e));
             }
@@ -346,11 +312,12 @@ impl ProjectFolder {
     /// aligned again, or by a crash (temporary files at least an hour old). The engine removes them with
     /// [`ProjectFolder::remove_unreferenced`] once nothing, the undo history included, can refer to them again.
     pub fn unreferenced(&self, project: &Project) -> Result<Vec<PathBuf>, ProjectError> {
-        let referenced: BTreeSet<_> = project.cache_refs().into_iter().map(|r| r.path.resolve(&self.root)).collect();
+        let root = self.cache.path();
+        let referenced: BTreeSet<_> = project.cache_refs().into_iter().map(|r| r.path.resolve(root)).collect();
         let now = SystemTime::now();
         let mut out = Vec::new();
         for area in Area::ALL {
-            let dir = self.root.join(area.dir());
+            let dir = root.join(area.dir());
             let entries = match std::fs::read_dir(&dir) {
                 Ok(entries) => entries,
                 Err(e) if e.kind() == ErrorKind::NotFound => continue,
@@ -378,7 +345,7 @@ impl ProjectFolder {
     /// Deletes the files [`ProjectFolder::unreferenced`] lists and returns them. They are FloraStack's own
     /// intermediates, which nothing refers to, not the user's files.
     pub fn remove_unreferenced(&self, project: &Project) -> Result<Vec<PathBuf>, ProjectError> {
-        self.writable()?;
+        self.cache.writable()?;
         let files = self.unreferenced(project)?;
         for file in &files {
             match std::fs::remove_file(file) {
