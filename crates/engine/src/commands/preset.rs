@@ -1,9 +1,10 @@
 //! Preference presets: TOML files that hold some of the project's preferences, applied on top of them, saved from
 //! them, and read.
 //!
-//! A preset's groups are checked with the types of the crates that own them before they are applied. The groups that
-//! no crate has settings for yet (`align`, `stack` and `output`, until their phases) can't be checked, so a preset that
-//! sets them is refused rather than stored unchecked: the error names the group, and `groups` can leave it out.
+//! A preset's groups are checked with the types of the crates that own them before they are applied: `develop` with
+//! florastack-raw's `DevelopSettings`, `align` with florastack-align's `AlignSettings`. The groups that no crate has
+//! settings for yet (`stack` and `output`, until their phases) can't be checked, so a preset that sets them is refused
+//! rather than stored unchecked: the error names the group, and `groups` can leave it out.
 
 use florastack_project::{Edit, Group, Preferences, Preset, Value};
 use schemars::JsonSchema;
@@ -21,7 +22,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                 .help(
                     "Tables merge key by key and other values replace what was there, so presets layer: one for \
                      develop settings, another for output. `groups` applies only some of the preset's groups. A group \
-                     that this version can't check yet (align, stack and output have no settings yet) is refused.",
+                     that this version can't check yet (stack and output have no settings yet) is refused.",
                 )
                 .undoable()
                 .examples(&[r#"{ "path": "C:/Presets/rail.toml" }"#, r#"{ "path": "C:/Presets/insect.toml", "groups": ["develop"] }"#]),
@@ -50,7 +51,11 @@ fn check_group(session: &Session, group: Group, preferences: &Preferences) -> Re
             let settings: florastack_raw::DevelopSettings = preferences.get(Group::Develop)?;
             settings.validate().map_err(|e| session.invalid("develop", e.to_string()))
         }
-        Group::Align | Group::Stack | Group::Output => Err(session.invalid(
+        Group::Align => {
+            let settings: florastack_align::AlignSettings = preferences.get(Group::Align)?;
+            settings.validate().map_err(|e| session.invalid("align", e.to_string()))
+        }
+        Group::Stack | Group::Output => Err(session.invalid(
             group.name(),
             format!(
                 "can't be checked: this version of FloraStack has no {} settings yet, so a preset can't set them; apply its other groups with `groups`",

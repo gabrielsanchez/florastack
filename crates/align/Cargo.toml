@@ -11,3 +11,21 @@ workspace = true
 
 [dependencies]
 florastack-core.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+# The JSON schema of the alignment settings, which the engine checks presets with and commands will take.
+schemars.workspace = true
+
+[dev-dependencies]
+# Synthetic stacks with known transforms and gains, for the accuracy tests and the benches.
+florastack-core = { workspace = true, features = ["testutil"] }
+criterion.workspace = true
+# The settings' serde round trips, as a project file (JSON) and a preset (TOML) store them.
+serde_json.workspace = true
+toml.workspace = true
+
+[[bench]]
+name = "align"
+harness = false

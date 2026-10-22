@@ -201,18 +201,26 @@ fn develop_settings_merge_and_are_checked() {
 }
 
 #[test]
-fn presets_with_groups_that_cant_be_checked_are_refused() {
+fn presets_are_checked_group_by_group() {
     let dir = TempDir::new("presets");
     let mut engine = Engine::new(config(dir.path()));
     run(&mut engine, "project.new", &format!(r#"{{ "name": "Presets", "folder": {} }}"#, quoted(dir.path())));
     let preset = dir.path().join("rail.toml");
-    std::fs::write(&preset, "[preset]\nname = \"Rail\"\n\n[develop]\nexposure = 0.5\n\n[align]\nrotation = false\n").unwrap();
+    std::fs::write(&preset, "[preset]\nname = \"Rail\"\n\n[develop]\nexposure = 0.5\n\n[stack]\nradius = 3\n").unwrap();
     let e = engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err();
     assert_eq!(e.code(), "params");
-    assert!(e.info().message.contains("`align` can't be checked"), "{}", e.info().message);
+    assert!(e.info().message.contains("`stack` can't be checked"), "{}", e.info().message);
     assert!(engine.project().unwrap().preferences.is_empty(), "nothing applied");
     let applied = run(&mut engine, "preset.apply", &format!(r#"{{ "path": {}, "groups": ["develop"] }}"#, quoted(&preset)));
     assert_eq!(applied, json!({ "name": "Rail", "groups": ["develop"] }));
+    // The align group is checked with florastack-align's settings.
+    std::fs::write(&preset, "[align]\nrotation = false\nmax_shift = 2.5\n").unwrap();
+    assert_eq!(run(&mut engine, "preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))), json!({ "name": null, "groups": ["align"] }));
+    assert_eq!(engine.project().unwrap().preferences.group(florastack_engine::model::Group::Align).get("rotation"), Some(&json!(false)));
+    std::fs::write(&preset, "[align]\nmax_shift = 500.0\n").unwrap();
+    assert_eq!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err().code(), "params");
+    std::fs::write(&preset, "[align]\nrotaton = false\n").unwrap();
+    assert!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).is_err(), "a misspelled key");
     std::fs::write(&preset, "[develop]\nexposure = 50.0\n").unwrap();
     assert_eq!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err().code(), "params");
     std::fs::write(&preset, "[develop]\nexposre = 1.0\n").unwrap();
