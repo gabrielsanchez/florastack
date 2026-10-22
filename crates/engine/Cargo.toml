@@ -22,3 +22,5 @@ thiserror.workspace = true
 
 [dev-dependencies]
 florastack-testkit.workspace = true
+# The pinned JSON shapes of the types a project stores.
+serde_json.workspace = true

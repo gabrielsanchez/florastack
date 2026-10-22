@@ -85,14 +85,22 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 1.4 Project model
 
-- [ ] `Project`: ordered frames (path, content hash, EXIF summary, enabled flag), develop settings, alignment results, outputs with their parameters, retouch layers and preferences
-- [ ] `<name>.florastack/` folders: versioned `project.json` with migrations, `cache/` of lossless intermediates and `previews/`
-- [ ] Reopened projects can be retouched at once, with no recomputation
-- [ ] Partial TOML presets that layer
-- [ ] Orphan cleanup: old unnamed temporary projects moved to the OS trash, never deleted
-- [ ] Tile folders that a crashed run left behind (`TempFileStore`, named after the GUI binary with `-tiles-`) removed at startup
-- [ ] Tests: save and load round trip, migration from a v0 fixture, partial preset layering
-- [ ] The stack's `DevelopSettings` and its `Resolved` in the project: florastack-project may depend only on florastack-core, so either give it florastack-raw in `RULES` (with the reasoning) or keep both as serialized data that the engine reads
+- [x] `Project`: ordered frames (path, content hash, EXIF summary, enabled flag), develop settings, alignment results, outputs with their parameters, retouch layers and preferences (`florastack_project::model`; frames, outputs and layers have ids that are never reused)
+- [x] `<name>.florastack/` folders: versioned `project.json` with migrations, `cache/` of lossless intermediates and `previews/` (`ProjectFolder`, `schema`; atomic saves, a lock against a second editor, cache files named after their SHA-256 and checked against it when read)
+- [x] Reopened projects can be retouched at once, with no recomputation: outputs, maps and aligned frames are lossless TIFF files in `cache/` (written and read by `florastack_engine::project` through florastack-codecs), strokes are in `project.json`
+- [x] Partial TOML presets that layer (`Preset`, `Preferences::layer`: tables merge key by key, other values replace)
+- [x] Orphan cleanup: old unnamed temporary projects moved to the OS trash, never deleted (`Orphans`, behind the `Trash` trait; `SystemTrash` on native targets through the `trash` crate, tests use `FolderTrash`)
+- [x] Tile folders that a crashed run left behind (`TempFileStore`, named after the GUI binary with `-tiles-`) removed at startup: each folder now holds a lock, and `TempFileStore::remove_abandoned` deletes those whose lock is free (spilled tiles only, so deleted rather than trashed)
+- [x] Tests: save and load round trip, migration from a v0 fixture (`crates/project/tests/fixtures/v0/`), partial preset layering; plus hostile project files (with a proptest), orphans, locks and cache integrity
+- [x] The stack's `DevelopSettings` and its `Resolved` in the project: kept as serialized data that the engine reads (`florastack_engine::project::develop`), like the EXIF summary, the stacking parameters and the retouch strokes, so `RULES` is unchanged; the engine's tests pin the JSON shape of each
+- [ ] Call the startup cleanup: `TempFileStore::remove_abandoned` on every folder that holds tile stores, and `Orphans::find` on the temporary-projects folder, with the orphans offered to the user (5.1) and in the CLI's `project clean-orphans` (4.1)
+- [ ] The temporary-projects folder and the orphan age (30 days by default, `Orphans::DEFAULT_DAYS`) as preferences (5.4), with the folder on a local drive: on Windows, the shell may delete instead of recycle on a drive without a Recycle Bin, such as a network share
+- [ ] Check `SystemTrash` by hand on Windows, macOS and Linux (a temporary project lands in the Recycle Bin or Trash and can be restored): the tests never call it, so as not to touch the real trash of the machine they run on
+- [ ] Save As: naming a temporary project and moving it out of the temporary-projects folder (5.1)
+- [ ] Frames found again when a project moves to another machine (the stored paths are absolute; a relative path is resolved from the folder that holds the project folder)
+- [ ] Retouch strokes: `project.json` is capped at 64 MiB, so long stroke lists may have to move into cache files (5.3)
+- [ ] Re-arm the quick frame check: a frame hashed within `TRUSTED_AGE` (3 s) of its last modification keeps no modification time, so that a same-size rewrite can't pass for unchanged, and every check hashes it again; store its time once a later check finds it unchanged and settled (frames from tethered capture and the watch folder, 4.2 and 6.1, are all this kind)
+- [ ] `cargo check -p florastack-project --target wasm32-unknown-unknown` in CI (it builds and passes Clippy locally), and a project-folder backend over the browser's origin-private storage (7.3)
 
 ### 1.5 Command registry and job engine *(plan first)*
 

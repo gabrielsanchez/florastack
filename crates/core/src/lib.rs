@@ -15,6 +15,8 @@
 //! - [`tile`]: [`TileGrid`], overlapping tiles stitched back with feathered seams, so that processing can bound its
 //!   memory.
 //! - [`store`]: [`TileCache`], tiles in memory up to a budget and spilled to a [`TileStore`] (temporary files) beyond it.
+//! - [`lock`]: [`LockFile`], an exclusive lock that the operating system releases when its process ends, so that a
+//!   folder in use (a tile store's, an open project's) can be told from one that a crashed run left behind.
 //!
 //! Behind the `testutil` feature, which only `[dev-dependencies]` may enable, the [`testutil`] module generates
 //! synthetic focus stacks with known ground truth for the alignment and stacking tests.
@@ -22,6 +24,7 @@
 pub mod convert;
 pub mod geometry;
 pub mod image;
+pub mod lock;
 pub mod ops;
 pub mod orientation;
 pub mod store;
@@ -31,6 +34,7 @@ pub mod tile;
 
 pub use geometry::{Affine, Rect};
 pub use image::{AnyImage, ColorSpace, Encoding, Image, ImageError, Sample, SampleFormat};
+pub use lock::{LockFile, LockState};
 pub use orientation::Orientation;
 pub use store::{CacheStats, MemoryStore, StoreError, TempFileStore, TileCache, TileKey, TileStore};
 pub use tile::{Tile, TileError, TileGrid};
