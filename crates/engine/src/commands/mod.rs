@@ -5,9 +5,13 @@
 //!   `project.findOrphans`, `project.trashOrphans`);
 //! - [`frames`]: the frame list (`project.addFrames`, a job, `project.removeFrames`, `project.moveFrames`,
 //!   `project.setFramesEnabled`, `project.frames`);
+//! - [`filmstrip`]: every frame's previews, as shot and aligned, with what moved in it (`filmstrip.list`), and making
+//!   the ones missing or out of date (`filmstrip.update`, a preview job);
 //! - [`develop`]: the RAW develop settings (`develop.get`, `develop.set`, `develop.reset`);
 //! - [`align`]: the alignment settings (`align.get`, `align.set`, `align.reset`), aligning the stack and sorting it by
 //!   scale (`align.run` and `align.sortByScale`, jobs), and the alignment the project holds (`align.info`);
+//! - [`defects`]: the stack's defect mask, the dust and hot pixels that alignment inpaints (`defects.detect` and
+//!   `defects.import`, jobs, `defects.export`, a job, `defects.clear`, `defects.info`);
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
@@ -20,8 +24,10 @@
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
 pub mod align;
+pub mod defects;
 pub mod develop;
 pub mod edit;
+pub mod filmstrip;
 pub mod frames;
 pub mod job;
 pub mod output;
@@ -38,8 +44,10 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     let mut all = Vec::new();
     all.extend(project::specs());
     all.extend(frames::specs());
+    all.extend(filmstrip::specs());
     all.extend(develop::specs());
     all.extend(align::specs());
+    all.extend(defects::specs());
     all.extend(preset::specs());
     all.extend(output::specs());
     all.extend(edit::specs());

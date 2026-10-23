@@ -289,6 +289,9 @@ struct FrameInfo {
     /// The share of the stack's in-focus detail on which it is among the sharpest, when alignment could tell.
     #[serde(skip_serializing_if = "Option::is_none")]
     sharp_fraction: Option<f64>,
+    /// The share of it that moved against its neighbor, once aligned, from 0 to 1 (`filmstrip.list` shows where).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motion_score: Option<f64>,
     /// Whether it has a preview.
     preview: bool,
 }
@@ -315,6 +318,7 @@ fn list(session: &Session, _: NoParams) -> Result<FrameList, CommandError> {
             aligned: f.alignment.is_some(),
             flags: crate::project::frame_report(f).map(|r| r.flags).unwrap_or_default(),
             sharp_fraction: crate::project::frame_report(f).and_then(|r| r.sharp_fraction),
+            motion_score: crate::project::frame_report(f).and_then(|r| r.motion).map(|m| m.score),
             preview: f.preview.is_some(),
         })
         .collect();

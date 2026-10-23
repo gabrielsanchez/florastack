@@ -12,10 +12,16 @@
 //! assumed), and the next frame is aligned to that frame instead, so that one bad frame doesn't break the chain. A
 //! frame whose match is ambiguous, as on a repeating pattern, is flagged only.
 //!
+//! Each frame that aligned also gets a motion map against the frame it was aligned to (`motion.rs`), measured on what
+//! both have prepared: what moved, once the frame's transform is taken out. Frames inpainted with a defect mask
+//! ([`StackAligner::set_defects`], `defects.rs`) have no motion measured near its spots, whose fill stays on the
+//! sensor while the scene moves.
+//!
 //! Only three prepared frames are held at a time (the master's, the last accepted one's and the new one's), however
-//! long the stack, plus each frame's small focus map (`focus.rs`): the caller reads each frame when it is asked for
+//! long the stack, plus each frame's small focus and motion maps: the caller reads each frame when it is asked for
 //! and can drop it once [`StackAligner::add`] returns. Once every frame is in, [`StackAligner::finish`] compares the
-//! focus maps, through the frames' transforms, and flags the frames that are out of focus ([`Flag::OutOfFocus`]).
+//! focus maps, through the frames' transforms, flags the frames that are out of focus ([`Flag::OutOfFocus`]), and
+//! flags those where the subject moved where they are in focus ([`Flag::Moved`]).
 
 use florastack_core::{Affine, Image, Monitor};
 use schemars::JsonSchema;
@@ -23,11 +29,13 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::brightness::gain;
+use crate::defects::DefectMask;
 use crate::ecc::{self, LIMIT_TOLERANCE};
 use crate::error::AlignError;
-use crate::focus::{FocusMap, sharp_fractions};
+use crate::focus::{FocusField, FocusMap, NEAR, sharp_fractions};
 use crate::framing::{Canvas, Framing};
 use crate::model::{Geometry, Params, Similarity};
+use crate::motion::{self, Motion};
 use crate::prepare::Prepared;
 use crate::settings::{AlignSettings, Term};
 
@@ -64,6 +72,9 @@ pub enum Flag {
     /// [`AlignSettings::min_sharp_fraction`] (`focus.rs`). Only flagged, never rejected: the user decides whether to
     /// leave it out.
     OutOfFocus,
+    /// Part of the subject moved against the frame's reference, once aligned, by at least
+    /// [`AlignSettings::min_motion`] (`motion.rs`): its motion map shows where. Only flagged, never rejected.
+    Moved,
 }
 
 impl Flag {
@@ -98,6 +109,10 @@ pub struct FrameAlignment {
     /// little detail that some frames show sharp and others blurred, or a rejected frame, whose transform is only its
     /// reference's), and until the stack is finished.
     pub sharp_fraction: Option<f64>,
+    /// What moved in the frame against its reference, once aligned (`motion.rs`): its map, and from
+    /// [`StackAligner::finish`] on, its score and regions where the frame is in focus. `None` for the master and for a
+    /// rejected frame, whose transform is only its reference's.
+    pub motion: Option<Motion>,
 }
 
 impl FrameAlignment {
@@ -111,6 +126,7 @@ impl FrameAlignment {
             status: Status::Master,
             flags: Vec::new(),
             sharp_fraction: None,
+            motion: None,
         }
     }
 }
@@ -199,6 +215,8 @@ pub struct StackAligner {
     results: Vec<Option<FrameAlignment>>,
     /// Each frame's focus map, compared once every frame is in.
     focus: Vec<Option<FocusMap>>,
+    /// The defect mask the frames were inpainted with, if any.
+    defects: Option<DefectMask>,
 }
 
 impl StackAligner {
@@ -223,7 +241,15 @@ impl StackAligner {
             last: None,
             results: vec![None; frames],
             focus: vec![None; frames],
+            defects: None,
         })
+    }
+
+    /// Tells the aligner that the frames are inpainted with `mask` (`defects.rs`): the fill of a defect stays on the
+    /// sensor while the scene moves, so motion isn't measured near the mask's spots. The mask must have the frames'
+    /// size, which [`StackAligner::add`] checks.
+    pub fn set_defects(&mut self, mask: Option<DefectMask>) {
+        self.defects = mask;
     }
 
     /// The frame to add next, or `None` once every frame has been.
@@ -245,6 +271,9 @@ impl StackAligner {
             && (g.width, g.height) != (w, h)
         {
             return Err(AlignError::FrameSize { index, width: w, height: h, expected_width: g.width, expected_height: g.height });
+        }
+        if let Some(mask) = &self.defects {
+            mask.check_size(w, h)?;
         }
         monitor.checkpoint()?;
         let prepared = Prepared::new(frame, self.settings.resolution as usize, self.settings.brightness)?;
@@ -286,6 +315,16 @@ impl StackAligner {
             if fraction.is_some_and(|f| f < self.settings.min_sharp_fraction) {
                 frame.flags.push(Flag::OutOfFocus);
             }
+        }
+        // Movement counts where its frame is among the sharpest (`motion.rs`).
+        let field = FocusField::new(&maps, &transforms, &gains);
+        for (i, frame) in frames.iter_mut().enumerate() {
+            let Some(motion) = frame.motion.take() else { continue };
+            let motion = Motion::new(motion.map, |p| field.relative(i, p).is_none_or(|r| r >= NEAR));
+            if motion.moved() {
+                frame.flags.push(Flag::Moved);
+            }
+            frame.motion = Some(motion);
         }
         Ok(StackAlignment { master: self.master, frames, width, height })
     }
@@ -334,6 +373,14 @@ impl StackAligner {
         }
 
         let rejected = self.settings.reject && flags.iter().any(|f| f.rejects());
+        // The motion map; which of its cells count is told once every frame's focus is known (`finish`).
+        let motion = if rejected {
+            None
+        } else {
+            let link_transform = geometry.similarity(&link.params).to_affine(geometry.width, geometry.height);
+            motion::measure(reference, &prepared, &link_transform, self.settings.min_motion, self.defects.as_ref())
+                .map(|map| Motion::new(map, |_| true))
+        };
         let total = if rejected { base } else { total };
         let similarity = geometry.similarity(&total);
         let transform = similarity.to_affine(geometry.width, geometry.height);
@@ -350,6 +397,7 @@ impl StackAligner {
             status: if rejected { Status::Rejected } else { Status::Aligned },
             flags,
             sharp_fraction: None,
+            motion,
         }
     }
 }

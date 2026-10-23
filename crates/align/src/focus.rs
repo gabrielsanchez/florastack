@@ -127,6 +127,47 @@ impl Sampler<'_> {
     }
 }
 
+/// How each frame's map is read at the master's pixels; `None` for a frame without a map or a transform that can't be
+/// used.
+fn samplers<'a>(maps: &'a [Option<FocusMap>], transforms: &[Affine], gains: &[f64]) -> Vec<Option<Sampler<'a>>> {
+    maps.iter()
+        .zip(transforms.iter().zip(gains))
+        .map(|(map, (transform, &gain))| {
+            let map = map.as_ref()?;
+            let from_frame = map.mapping.to_frame().inverse()?;
+            let gain = if gain.is_finite() && gain > 0.0 { gain } else { 1.0 };
+            Some(Sampler { to_cells: transform.then(&from_frame), energy: &map.energy, gain2: gain * gain })
+        })
+        .collect()
+}
+
+/// The frames' focus maps laid over the scene: how sharp a frame is at one of its pixels, against the sharpest frame
+/// at the same point of the scene. Motion is flagged only where a frame is among the sharpest (`motion.rs`).
+pub(crate) struct FocusField<'a> {
+    samplers: Vec<Option<Sampler<'a>>>,
+    /// From each frame's pixels to the master's.
+    to_master: Vec<Option<Affine>>,
+}
+
+impl<'a> FocusField<'a> {
+    pub(crate) fn new(maps: &'a [Option<FocusMap>], transforms: &[Affine], gains: &[f64]) -> FocusField<'a> {
+        FocusField { samplers: samplers(maps, transforms, gains), to_master: transforms.iter().map(Affine::inverse).collect() }
+    }
+
+    /// Frame `frame`'s focus energy at its pixel `p`, as a share of the largest any frame has at the same point of the
+    /// scene; `None` where that can't be told (fewer than three frames to compare, a frame without a map, or no detail
+    /// there in any frame).
+    pub(crate) fn relative(&self, frame: usize, p: (f64, f64)) -> Option<f64> {
+        if self.samplers.len() < 3 {
+            return None;
+        }
+        let m = self.to_master.get(frame).copied().flatten()?.apply(p.0, p.1);
+        let own = self.samplers.get(frame)?.as_ref()?.at(m)?;
+        let max = self.samplers.iter().flatten().filter_map(|s| s.at(m)).filter(|v| v.is_finite()).fold(0.0, f64::max);
+        (max > 0.0 && own.is_finite()).then(|| own / max)
+    }
+}
+
 /// Each frame's sharp-content fraction (see the module documentation), from the frames' focus maps (`None` for a frame
 /// without one), their transforms from the master's pixels and their gains; the master's cells are the ones compared.
 pub(crate) fn sharp_fractions(maps: &[Option<FocusMap>], transforms: &[Affine], gains: &[f64], master: usize) -> Sharpness {
@@ -136,16 +177,7 @@ pub(crate) fn sharp_fractions(maps: &[Option<FocusMap>], transforms: &[Affine], 
     if n < 3 || transforms.len() != n || gains.len() != n {
         return nothing;
     }
-    let samplers: Vec<Option<Sampler>> = maps
-        .iter()
-        .zip(transforms.iter().zip(gains))
-        .map(|(map, (transform, &gain))| {
-            let map = map.as_ref()?;
-            let from_frame = map.mapping.to_frame().inverse()?;
-            let gain = if gain.is_finite() && gain > 0.0 { gain } else { 1.0 };
-            Some(Sampler { to_cells: transform.then(&from_frame), energy: &map.energy, gain2: gain * gain })
-        })
-        .collect();
+    let samplers = samplers(maps, transforms, gains);
     let to_master = grid.mapping.to_frame();
     let (mw, mh) = (grid.energy.width(), grid.energy.height());
     // The outermost cells see the clamped borders of the band-pass; leave them out when there are others.

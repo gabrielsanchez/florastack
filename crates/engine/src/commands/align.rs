@@ -2,14 +2,17 @@
 //! aligning the stack (`align.run`, a job), sorting it by scale (`align.sortByScale`, a job), and what the project holds
 //! of its alignment (`align.info`).
 //!
-//! Both jobs read and develop the enabled frames one at a time and hand each to florastack-align's `StackAligner`,
-//! which keeps nothing of a frame but its small focus map: memory doesn't grow with the stack. Once every frame is in,
-//! the narrow end sets the processing order and the master (`florastack_align::order_stack`), and the commit records
-//! the run in the project as one undo step (`Edit::SetAlignment`): every frame's transform, gain and score, with its
-//! report (status, flags such as out of focus, sharp-content fraction), and the run's report (frame size, narrow end,
-//! processing order). Frames that aren't enabled lose any alignment they had, so that the frames with an alignment
-//! are the run's. Sorting by scale aligns twice, first to measure every frame's scale in the present order, then in
-//! scale order, and its commit puts the frames in that order (`Edit::SetFrameOrder`) in the same step.
+//! Both jobs read and develop the enabled frames one at a time, inpaint the stack's defect mask in each (detecting one
+//! first when the `detect_defects` setting asks for it and the project has none: `defects.rs`), write each frame's
+//! preview for the filmstrip, and hand each to florastack-align's `StackAligner`, which keeps nothing of a frame but
+//! its small focus and motion maps: memory doesn't grow with the stack. Once every frame is in, the narrow end sets the
+//! processing order and the master (`florastack_align::order_stack`), and the commit records the run in the project as
+//! one undo step (`Edit::SetAlignment`): every frame's transform, gain and score, with its report (status, flags such
+//! as out of focus or moved, sharp-content fraction, the motion found against its neighbor), the run's report (frame
+//! size, narrow end, processing order), the frames' previews as shot and aligned onto the canvas of the framing set,
+//! and a mask it detected. Frames that aren't enabled lose any alignment they had, so that the frames with an
+//! alignment are the run's. Sorting by scale aligns twice, first to measure every frame's scale in the present order,
+//! then in scale order, and its commit puts the frames in that order (`Edit::SetFrameOrder`) in the same step.
 //!
 //! The framing isn't recorded with the run: it follows from the transforms whenever it is asked for (`align.info`,
 //! and the stacking of roadmap 3), so that changing it needs no new alignment, and nor does the coverage of the
@@ -20,19 +23,23 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use florastack_align::{
-    AlignError, AlignSettings, End, Flag, Framing, Similarity, StackAligner, StackAlignment, Status, measuring_settings, order_stack, scale_order,
+    AlignError, AlignSettings, DefectDetector, DefectMask, End, Flag, Framing, MIN_DETECTION_FRAMES, Similarity, StackAligner, StackAlignment,
+    Status, detection_frames, inpaint, measuring_settings, order_stack, scale_order,
 };
 use florastack_codecs::ReadOptions;
-use florastack_core::Monitor;
-use florastack_project::{Aspects, Edit, Frame, FrameId, Group, Preferences, Table};
-use florastack_raw::Quality;
+use florastack_core::{Image, Monitor};
+use florastack_project::{Aspects, CacheDir, CacheRef, Edit, Frame, FrameId, Group, Preferences, Table};
+use florastack_raw::{DevelopSettings, Quality, RawDevelop};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::CommandError;
 use crate::frames::FrameReader;
 use crate::jobs::{Commit, JobContext, JobPlan, Lane, commit};
-use crate::project::{ProjectDataError, align_settings, alignment_edit, develop_record, stored_alignment};
+use crate::project::{
+    FrameMotion, MaskSource, MaskSummary, ProjectDataError, align_settings, alignment_edit, defect_mask_ref, defects_map, develop_record,
+    preview_key, read_defect_mask, store_defect_mask, stored_alignment, write_aligned_preview, write_frame_preview,
+};
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
 
@@ -111,7 +118,8 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             )
             .help(
                 "For each aligned frame: its transform from the master's pixels and its terms (scale, rotation, \
-                     shift), its brightness gain and score, its status and flags, and its sharp-content fraction. \
+                     shift), its brightness gain and score, its status and flags, its sharp-content fraction and what \
+                     moved in it against its neighbor. \
                      For the run: the master, the frames' size, the narrow end, the processing order and the settings \
                      it ran with. For each framing (narrow, wide, common): the size of the output it gives and the \
                      transform from its pixels to the master's, or why the frames can't be framed that way; `framing` \
@@ -184,21 +192,32 @@ fn reset(session: &mut Session, _: NoParams) -> Result<Settings, CommandError> {
 }
 
 /// What an alignment job reads, taken from the project when it starts.
-struct Plan {
+pub(crate) struct Plan {
     command: &'static str,
     /// The enabled frames, in the project's order, and their files.
     ids: Vec<FrameId>,
     paths: Vec<PathBuf>,
+    /// The same frames as the project holds them, for their previews' keys.
+    frames: Vec<Frame>,
     settings: AlignSettings,
+    develop_settings: DevelopSettings,
     reader: FrameReader,
     /// Whether the project held the stack's development already, resolved with the develop settings in force.
     resolved: bool,
     /// The frame the development was resolved on, if this job resolved it.
     developed: Option<FrameId>,
+    cache: CacheDir,
+    /// The project's defect mask, and the mask itself once read, or detected by this job.
+    mask_ref: Option<CacheRef>,
+    mask: Option<DefectMask>,
+    /// The mask this job detected and stored, with its summary.
+    detected: Option<(CacheRef, MaskSummary)>,
+    /// The previews this job wrote, by frame.
+    previews: Vec<(FrameId, CacheRef)>,
 }
 
 impl Plan {
-    fn new(session: &Session, command: &'static str, minimum: usize) -> Result<Plan, CommandError> {
+    pub(crate) fn new(session: &Session, command: &'static str, minimum: usize) -> Result<Plan, CommandError> {
         let (project, folder) = (session.project()?, session.folder()?);
         let frames: Vec<&Frame> = project.frames.iter().filter(|f| f.enabled).collect();
         if frames.len() < minimum {
@@ -207,73 +226,180 @@ impl Plan {
             return Err(session.unavailable(format!("{reason}: add frames with `project.addFrames`, or enable some with `project.setFramesEnabled`")));
         }
         let settings = align_settings(project).map_err(|e| session.invalid("align", e.to_string()))?;
+        let develop_settings = crate::project::develop_settings(project)?;
         let options = ReadOptions::default();
         let (reader, resolved) = match crate::project::develop(project)? {
             Some(develop) => (FrameReader::with_develop(develop, options), true),
-            None => (FrameReader::new(crate::project::develop_settings(project)?, options), false),
+            None => (FrameReader::new(develop_settings.clone(), options), false),
         };
         Ok(Plan {
             command,
             ids: frames.iter().map(|f| f.id()).collect(),
             paths: frames.iter().map(|f| folder.frame_path(f)).collect(),
+            frames: frames.iter().map(|&f| f.clone()).collect(),
             settings,
+            develop_settings,
             reader,
             resolved,
             developed: None,
+            cache: session.cache_dir()?,
+            mask_ref: defect_mask_ref(project).cloned(),
+            mask: None,
+            detected: None,
+            previews: Vec::new(),
         })
     }
 
+    /// How many frames the job reads.
+    pub(crate) fn frame_count(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// The stack's development, when this job resolved it, and the frame it was resolved on.
+    pub(crate) fn resolved_develop(&self) -> Option<(FrameId, &RawDevelop)> {
+        match (self.resolved, self.developed, self.reader.develop()) {
+            (false, Some(frame), Some(develop)) => Some((frame, develop)),
+            _ => None,
+        }
+    }
+
+    fn internal(&self) -> CommandError {
+        CommandError::Internal { command: self.command.to_owned() }
+    }
+
+    /// Whether this job detects a defect mask before aligning: the settings ask for one and the project has none.
+    fn detects(&self) -> bool {
+        self.settings.detect_defects && self.mask_ref.is_none() && self.ids.len() >= MIN_DETECTION_FRAMES
+    }
+
+    /// Reads and develops the `i`-th frame, without inpainting it.
+    pub(crate) fn read_unmasked(&mut self, i: usize) -> Result<Image<f32>, CommandError> {
+        let (Some(&id), Some(path)) = (self.ids.get(i), self.paths.get(i)) else { return Err(self.internal()) };
+        let bytes =
+            std::fs::read(path).map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: path.clone(), source }))?;
+        let had = self.reader.develop().is_some();
+        let frame = self.reader.read(&bytes, Quality::Preview).map_err(|source| ProjectDataError::ReadFrame { path: path.clone(), source })?;
+        if !had && self.reader.develop().is_some() {
+            self.developed = Some(id);
+        }
+        Ok(frame.image)
+    }
+
+    /// Reads and develops the `i`-th frame, with the stack's defects inpainted.
+    pub(crate) fn read(&mut self, i: usize) -> Result<Image<f32>, CommandError> {
+        let mut image = self.read_unmasked(i)?;
+        if let Some(mask) = &self.mask {
+            inpaint(&mut image, mask).map_err(|e| self.frame_error(i, e))?;
+        }
+        Ok(image)
+    }
+
+    /// An error about the `i`-th frame's size, as the user can act on it.
+    pub(crate) fn frame_error(&self, i: usize, e: AlignError) -> CommandError {
+        let (id, path) = (self.ids.get(i).map_or_else(String::new, ToString::to_string), self.paths.get(i).map(|p| p.display().to_string()));
+        let path = path.unwrap_or_default();
+        match e {
+            AlignError::FrameSize { width, height, expected_width, expected_height, .. } => CommandError::Unavailable {
+                command: self.command.to_owned(),
+                reason: format!(
+                    "{id} ({path}) is {width}x{height} pixels, but the stack's frames are {expected_width}x{expected_height}: frames must all have the same size, so disable it with `project.setFramesEnabled`"
+                ),
+            },
+            AlignError::MaskSize { width, height, frame_width, frame_height } => CommandError::Unavailable {
+                command: self.command.to_owned(),
+                reason: format!(
+                    "the defect mask is {width}x{height} pixels, but {id} ({path}) is {frame_width}x{frame_height}: import a mask of the frames' size with `defects.import`, or remove it with `defects.clear`"
+                ),
+            },
+            other => other.into(),
+        }
+    }
+
+    /// Reads the project's defect mask, or detects one when [`Plan::detects`] and stores it.
+    fn defects(&mut self, ctx: &JobContext) -> Result<(), CommandError> {
+        if let Some(reference) = &self.mask_ref {
+            self.mask = Some(read_defect_mask(&self.cache, reference)?);
+            return Ok(());
+        }
+        if !self.detects() {
+            return Ok(());
+        }
+        let picked = detection_frames(self.ids.len());
+        let mut detector: Option<DefectDetector> = None;
+        for (done, &i) in picked.iter().enumerate() {
+            ctx.checkpoint()?;
+            let image = self.read_unmasked(i)?;
+            let d = match &mut detector {
+                Some(d) => d,
+                empty => empty.insert(DefectDetector::new(image.width(), image.height())?),
+            };
+            d.add(&image, ctx).map_err(|e| self.frame_error(i, e))?;
+            ctx.step(done as u64 + 1, picked.len() as u64)?;
+        }
+        let mask = detector.ok_or_else(|| self.internal())?.finish()?;
+        let reference = store_defect_mask(&self.cache, &mask, MaskSource::Detected)?;
+        self.detected = Some((reference, MaskSummary::of(&mask, MaskSource::Detected)));
+        self.mask = Some(mask);
+        Ok(())
+    }
+
     /// Aligns the frames in the order `positions` gives (`positions[k]` is the index in `ids` of the frame at position
-    /// `k`), from their middle frame, reading each one when the aligner asks for it.
-    fn align(&mut self, ctx: &JobContext, positions: &[usize], settings: &AlignSettings) -> Result<StackAlignment, CommandError> {
+    /// `k`), from their middle frame, reading each one when the aligner asks for it, inpainted; with `previews`, writes
+    /// each frame's preview too.
+    fn align(&mut self, ctx: &JobContext, positions: &[usize], settings: &AlignSettings, previews: bool) -> Result<StackAlignment, CommandError> {
         let n = positions.len();
         let mut aligner = StackAligner::new(settings, n, n / 2)?;
+        aligner.set_defects(self.mask.clone());
         while let Some(k) = aligner.next_frame() {
             ctx.checkpoint()?;
-            let i = positions.get(k).copied().ok_or(CommandError::Internal { command: self.command.to_owned() })?;
-            let (Some(&id), Some(path)) = (self.ids.get(i), self.paths.get(i)) else {
-                return Err(CommandError::Internal { command: self.command.to_owned() });
-            };
-            let bytes = std::fs::read(path)
-                .map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: path.clone(), source }))?;
-            let had = self.reader.develop().is_some();
-            let frame = self.reader.read(&bytes, Quality::Preview).map_err(|source| ProjectDataError::ReadFrame { path: path.clone(), source })?;
-            drop(bytes);
-            if !had && self.reader.develop().is_some() {
-                self.developed = Some(id);
+            let i = positions.get(k).copied().ok_or_else(|| self.internal())?;
+            let image = self.read(i)?;
+            aligner.add(&image, ctx).map_err(|e| self.frame_error(i, e))?;
+            if previews {
+                let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
+                let key = preview_key(frame, &self.develop_settings, self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r)))?;
+                let reference = write_frame_preview(&self.cache, frame.id(), &image, key)?;
+                self.previews.push((frame.id(), reference));
             }
-            aligner.add(&frame.image, ctx).map_err(|e| match e {
-                AlignError::FrameSize { width, height, expected_width, expected_height, .. } => CommandError::Unavailable {
-                    command: self.command.to_owned(),
-                    reason: format!(
-                        "{id} ({}) is {width}x{height} pixels, but the stack's frames are {expected_width}x{expected_height}: frames must all have the same size, so disable it with `project.setFramesEnabled`",
-                        path.display()
-                    ),
-                },
-                other => other.into(),
-            })?;
         }
         Ok(aligner.finish()?)
     }
 
     /// The commit of a run that aligned the frames `ids` (in that order) as `alignment`: records it, with the frames
-    /// put in that order first when `sort`, and the stack's development when this job resolved it.
+    /// put in that order first when `sort`, the stack's development when this job resolved it, the defect mask when it
+    /// detected one, and the frames' previews, aligned onto the canvas the settings frame the output with.
     fn commit(self, ids: Vec<FrameId>, alignment: &StackAlignment, sort: bool) -> Result<Commit<Aligned>, CommandError> {
         let (rebased, order) = order_stack(alignment, &self.settings)?;
         let id = |i: usize| ids.get(i).copied();
         let summary = Aligned {
-            master: id(rebased.master).ok_or(CommandError::Internal { command: self.command.to_owned() })?,
+            master: id(rebased.master).ok_or_else(|| self.internal())?,
             narrow_end: order.narrow,
             start: order.start,
             order: order.frames.iter().filter_map(|&i| id(i)).collect(),
             out_of_focus: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OutOfFocus)),
+            moved: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::Moved)),
             rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
+            defects: self.detected.as_ref().map(|(_, s)| s.clone()),
             frame_order: None,
         };
-        let develop = match (self.resolved, self.developed, self.reader.develop()) {
-            (false, Some(reference), Some(develop)) => Some(develop_record(reference, develop)?),
-            _ => None,
+        let develop = match self.resolved_develop() {
+            Some((reference, develop)) => Some(develop_record(reference, develop)?),
+            None => None,
         };
+        // The aligned previews, on the canvas of the framing the settings choose; none when the frames can't be framed so.
+        let narrow = order.narrow_frame.filter(|&i| rebased.frames.get(i).is_some_and(|f| f.status != Status::Rejected));
+        let canvas = rebased.canvas(self.settings.framing, narrow).ok();
+        let mut previews = Vec::with_capacity(self.previews.len());
+        for (frame, preview) in self.previews {
+            let aligned = match (&canvas, ids.iter().position(|&i| i == frame).and_then(|i| rebased.frames.get(i))) {
+                (Some(canvas), Some(f)) => {
+                    Some(write_aligned_preview(&self.cache, frame, &preview, (rebased.width, rebased.height), &f.transform, canvas)?)
+                }
+                _ => None,
+            };
+            previews.push(Edit::SetPreviews { frame, preview: Some(preview), aligned_preview: aligned });
+        }
+        let detected = self.detected.map(|(r, _)| r);
         let settings = self.settings;
         Ok(commit(move |session: &mut Session| {
             let project = session.project()?;
@@ -294,6 +420,10 @@ impl Plan {
             if let Some(develop) = develop {
                 edits.push(Edit::SetDevelop(Some(develop)));
             }
+            if let (Some(map), Some(name)) = (detected, defects_map()) {
+                edits.push(Edit::SetProjectMap { name, map: Some(map) });
+            }
+            edits.extend(previews);
             session.apply(Edit::Batch(edits))?;
             Ok(summary)
         }))
@@ -319,45 +449,76 @@ struct Aligned {
     order: Vec<FrameId>,
     /// The frames with no in-focus detail: flagged for you to disable.
     out_of_focus: Vec<FrameId>,
+    /// The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where.
+    moved: Vec<FrameId>,
     /// The frames whose alignment couldn't be trusted, and keep their neighbor's (`align.info` says why).
     rejected: Vec<FrameId>,
+    /// The defect mask this run detected and inpainted, when the settings asked for one (`detect_defects`) and the
+    /// project had none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    defects: Option<MaskSummary>,
     /// After sorting by scale: the project's frame order now.
     #[serde(skip_serializing_if = "Option::is_none")]
     frame_order: Option<Vec<FrameId>>,
 }
 
-/// What an alignment job reads, and its commit changes: the frame list, the development and the alignment.
+/// What an alignment job reads, and its commit changes: the frame list, the development, the alignment (with the
+/// defect mask) and the previews.
 fn locks() -> Aspects {
     Aspects::FRAMES.union(Aspects::DEVELOP).union(Aspects::ALIGN)
 }
 
+/// The stages of an alignment job: finding the defects when it detects them, then the passes it names.
+fn stages(plan: &Plan, passes: &'static [(&'static str, f32)]) -> Vec<(&'static str, f32)> {
+    let mut stages = Vec::with_capacity(passes.len() + 1);
+    if plan.detects() {
+        stages.push(("Finding dust and hot pixels", 0.3));
+    }
+    stages.extend(passes.iter().copied());
+    stages
+}
+
 fn run(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError> {
     let mut plan = Plan::new(session, "align.run", 1)?;
+    let stages = stages(&plan, &[("Aligning frames", 1.0)]);
     let job = JobPlan::new(move |ctx| {
-        ctx.stage(0);
+        let mut stage = 0;
+        if plan.detects() {
+            ctx.stage(stage);
+            stage += 1;
+        }
+        plan.defects(ctx)?;
+        ctx.stage(stage);
         let positions: Vec<usize> = (0..plan.ids.len()).collect();
         let settings = plan.settings.clone();
-        let alignment = plan.align(ctx, &positions, &settings)?;
+        let alignment = plan.align(ctx, &positions, &settings, true)?;
         let ids = plan.ids.clone();
         plan.commit(ids, &alignment, false)
     });
-    Ok(job.stages(&[("Aligning frames", 1.0)]).locks(locks()))
+    Ok(job.stages(&stages).locks(locks()))
 }
 
 fn sort_by_scale(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError> {
     let mut plan = Plan::new(session, "align.sortByScale", 2)?;
+    let stages = stages(&plan, &[("Measuring scales", 0.5), ("Aligning frames", 0.5)]);
     let job = JobPlan::new(move |ctx| {
-        ctx.stage(0);
+        let mut stage = 0;
+        if plan.detects() {
+            ctx.stage(stage);
+            stage += 1;
+        }
+        plan.defects(ctx)?;
+        ctx.stage(stage);
         let present: Vec<usize> = (0..plan.ids.len()).collect();
-        let measured = plan.align(ctx, &present, &measuring_settings(&plan.settings))?;
+        let measured = plan.align(ctx, &present, &measuring_settings(&plan.settings), false)?;
         let order = scale_order(&measured)?;
-        ctx.stage(1);
+        ctx.stage(stage + 1);
         let settings = plan.settings.clone();
-        let alignment = plan.align(ctx, &order, &settings)?;
+        let alignment = plan.align(ctx, &order, &settings, true)?;
         let ids: Vec<FrameId> = order.iter().filter_map(|&i| plan.ids.get(i).copied()).collect();
         plan.commit(ids, &alignment, true)
     });
-    Ok(job.stages(&[("Measuring scales", 0.5), ("Aligning frames", 0.5)]).locks(locks()))
+    Ok(job.stages(&stages).locks(locks()))
 }
 
 /// The stack's alignment.
@@ -441,6 +602,9 @@ struct AlignedFrameInfo {
     /// The frame it was aligned to.
     #[serde(skip_serializing_if = "Option::is_none")]
     reference: Option<FrameId>,
+    /// What moved in it against that frame: a score, the largest displacement and the regions, in frame pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motion: Option<FrameMotion>,
 }
 
 fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
@@ -473,6 +637,7 @@ fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
                 flags: report.map(|r| r.flags.clone()).unwrap_or_default(),
                 sharp_fraction: report.and_then(|r| r.sharp_fraction),
                 reference: report.and_then(|r| r.reference),
+                motion: report.and_then(|r| r.motion.clone()),
             }
         })
         .collect();

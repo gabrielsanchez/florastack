@@ -87,24 +87,35 @@ pub fn frame_files(dir: &Path, n: u16) -> Vec<PathBuf> {
 
 /// The margin, in pixels, synthetic frames are generated with on every side and cropped of, so that no frame shows the
 /// generator's clamped scene edge.
-const MARGIN: usize = 8;
+pub const MARGIN: usize = 8;
 
 /// The frames of a synthetic stack (`florastack_core::testutil`) of `width` x `height` pixels, as 16-bit sRGB TIFF files
 /// `dir/<name>/frame-00.tif` and on, in focus order.
 pub fn synthetic_frames(dir: &Path, name: &str, width: usize, height: usize, params: &florastack_core::testutil::StackParams) -> Vec<PathBuf> {
-    use florastack_core::testutil::{generate, scene};
+    use florastack_core::testutil::scene;
+    let (sharp, depth) = scene::textured(width + 2 * MARGIN, height + 2 * MARGIN, params.seed).unwrap();
+    scene_frames(dir, name, &sharp, &depth, params)
+}
+
+/// The frames of a synthetic stack of the scene `sharp` with its `depth`, generated `MARGIN` pixels larger on every
+/// side than the frames, written as [`synthetic_frames`] writes them.
+pub fn scene_frames(dir: &Path, name: &str, sharp: &Image<f32>, depth: &Image<f32>, params: &florastack_core::testutil::StackParams) -> Vec<PathBuf> {
+    let stack = florastack_core::testutil::generate(sharp, depth, params).unwrap();
+    let (width, height) = (sharp.width() - 2 * MARGIN, sharp.height() - 2 * MARGIN);
+    let cropped: Vec<Image<f32>> = stack.frames.iter().map(|f| f.crop(florastack_core::Rect::new(MARGIN, MARGIN, width, height)).unwrap()).collect();
+    write_frames(dir, name, &cropped)
+}
+
+/// Linear frames as 16-bit sRGB TIFF files `dir/<name>/frame-00.tif` and on.
+pub fn write_frames(dir: &Path, name: &str, frames: &[Image<f32>]) -> Vec<PathBuf> {
     let folder = dir.join(name);
     std::fs::create_dir_all(&folder).unwrap();
-    let (sharp, depth) = scene::textured(width + 2 * MARGIN, height + 2 * MARGIN, params.seed).unwrap();
-    let stack = generate(&sharp, &depth, params).unwrap();
     let spec = OutputSpec::new(florastack_codecs::Format::Tiff).unwrap();
-    stack
-        .frames
+    frames
         .iter()
         .enumerate()
         .map(|(i, frame)| {
-            let cropped = frame.crop(florastack_core::Rect::new(MARGIN, MARGIN, width, height)).unwrap();
-            let encoded = cropped.to_encoding::<u16>(florastack_core::Encoding::Srgb).unwrap();
+            let encoded = frame.to_encoding::<u16>(florastack_core::Encoding::Srgb).unwrap();
             let path = folder.join(format!("frame-{i:02}.tif"));
             std::fs::write(&path, florastack_codecs::write(&AnyImage::U16(encoded), &spec, &OutputMetadata::default()).unwrap().bytes).unwrap();
             path

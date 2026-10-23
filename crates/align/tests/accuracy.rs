@@ -77,9 +77,11 @@ impl Score {
 }
 
 /// Aligns the stacks of seeds 1 to 3, each to its first frame and to its middle one, checks that no frame's alignment
-/// was flagged, prints a table and returns the scores. A frame may be flagged out of focus, which isn't about its
-/// alignment: the test scenes leave a gap in depth between their bristles and their discs, and a frame focused in it
-/// has next to nothing in focus.
+/// was flagged, prints a table and returns the scores. A frame may be flagged out of focus or moved, which isn't about
+/// its alignment: the test scenes leave a gap in depth between their bristles and their discs, and a frame focused in
+/// it has next to nothing in focus; and the dust of the noisy, dusty stacks stays on the sensor while the frames shift
+/// by up to 1.5 pixels, so that against an aligned neighbor it moves (inpainted first, as the engine does, it doesn't:
+/// `tests/motion.rs`).
 fn run(name: &str, settings: &AlignSettings, params: impl Fn(u64) -> StackParams) -> Vec<Score> {
     println!("{name}: mean and worst frame error (px), worst gain error (%)");
     let mut scores = Vec::new();
@@ -88,7 +90,7 @@ fn run(name: &str, settings: &AlignSettings, params: impl Fn(u64) -> StackParams
         for master in [0, FRAMES / 2] {
             let result = align_frames(&stack.frames, master, settings, &Unmonitored).unwrap();
             for (i, frame) in result.frames.iter().enumerate() {
-                let aligned = frame.flags.iter().all(|f| *f == Flag::OutOfFocus) && frame.status != Status::Rejected;
+                let aligned = frame.flags.iter().all(|f| matches!(f, Flag::OutOfFocus | Flag::Moved)) && frame.status != Status::Rejected;
                 assert!(aligned, "seed {seed}, master {master}, frame {i}: {frame:?}");
             }
             let score = Score::of(&result, &stack);

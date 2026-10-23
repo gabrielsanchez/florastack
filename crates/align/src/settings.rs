@@ -14,6 +14,10 @@ const MAX_ROTATION: f64 = 45.0;
 /// The default `min_sharp_fraction`: a frame that is among the sharpest on less than 0.2% of the stack's in-focus
 /// detail has, for all practical purposes, none (see `focus.rs`).
 pub const DEFAULT_MIN_SHARP_FRACTION: f64 = 0.002;
+/// The default `min_motion`, in frame pixels.
+pub const DEFAULT_MIN_MOTION: f64 = 2.0;
+/// The smallest and largest `min_motion`, in frame pixels.
+const MOTION_RANGE: (f64, f64) = (0.1, 100.0);
 /// The smallest and largest `resolution`, in pixels.
 pub const MIN_RESOLUTION: u32 = 64;
 pub const MAX_RESOLUTION: u32 = 16_384;
@@ -43,9 +47,9 @@ impl Term {
 }
 
 /// How a stack's frames are aligned to its master frame, in which order the stack is processed, how its output is
-/// framed and when a frame counts as out of focus. Every field has a default, so that a preset can name only some: by
-/// default every term is corrected, within generous limits, the stack is processed from its narrow end and the output
-/// is cropped to that end's field of view.
+/// framed, when a frame counts as out of focus or moved, and whether sensor defects are detected. Every field has a
+/// default, so that a preset can name only some: by default every term is corrected, within generous limits, the stack
+/// is processed from its narrow end and the output is cropped to that end's field of view.
 ///
 /// Each term the stack doesn't need can be turned off, which makes alignment both faster and more accurate: a rail
 /// moves the camera without turning it (`rotation = false`), and steady lighting keeps the brightness
@@ -108,6 +112,17 @@ pub struct AlignSettings {
     /// start and the end of a stack, add nothing but blur; they are only flagged, for the user to exclude.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub min_sharp_fraction: f64,
+    /// The smallest local movement flagged, in pixels of the frames, from 0.1 to 100: a region of a frame that moved at
+    /// least this much against its neighbor, once aligned, is marked in its motion map, and a frame with such a region
+    /// is flagged as moved (`motion.rs`). Movement is measured on a level of at most 1024 pixels, and below three
+    /// quarters of a pixel there it can't be told from the apparent motion of defocus and noise: on larger frames, the
+    /// threshold is at least that many frame pixels (4.4 on a 6000-pixel frame).
+    #[schemars(range(min = 0.1, max = 100.0))]
+    pub min_motion: f64,
+    /// Before aligning, when the project has no defect mask, detect one from the frames (dust and hot pixels, which
+    /// stay at the same sensor pixels) and inpaint it in every frame. Off by default: review a detected mask before
+    /// stacking with it (`defects.rs`). A mask the project has, detected or supplied, is always inpainted.
+    pub detect_defects: bool,
 }
 
 impl Default for AlignSettings {
@@ -129,6 +144,8 @@ impl Default for AlignSettings {
             reverse_order: false,
             framing: Framing::Narrow,
             min_sharp_fraction: DEFAULT_MIN_SHARP_FRACTION,
+            min_motion: DEFAULT_MIN_MOTION,
+            detect_defects: false,
         }
     }
 }
@@ -147,6 +164,9 @@ impl AlignSettings {
             if !(0.0..=max).contains(&value) {
                 return Err(AlignError::Setting { name, value, expected });
             }
+        }
+        if !(MOTION_RANGE.0..=MOTION_RANGE.1).contains(&self.min_motion) {
+            return Err(AlignError::Setting { name: "min_motion", value: self.min_motion, expected: "between 0.1 and 100 pixels" });
         }
         if !(MIN_RESOLUTION..=MAX_RESOLUTION).contains(&self.resolution) {
             return Err(AlignError::Setting { name: "resolution", value: f64::from(self.resolution), expected: "between 64 and 16384 pixels" });
@@ -186,6 +206,7 @@ mod tests {
             AlignSettings { resolution: 32, ..AlignSettings::default() },
             AlignSettings { resolution: u32::MAX, ..AlignSettings::default() },
             AlignSettings { min_sharp_fraction: -0.1, ..AlignSettings::default() },
+            AlignSettings { min_motion: 0.0, ..AlignSettings::default() },
         ];
         let names: Vec<&str> = bad
             .iter()
@@ -194,7 +215,7 @@ mod tests {
                 other => panic!("{s:?}: {other:?}"),
             })
             .collect();
-        assert_eq!(names, ["max_shift", "max_scale", "max_rotation", "min_score", "resolution", "resolution", "min_sharp_fraction"]);
+        assert_eq!(names, ["max_shift", "max_scale", "max_rotation", "min_score", "resolution", "resolution", "min_sharp_fraction", "min_motion"]);
         let edges = AlignSettings { max_shift: 0.0, max_scale: 50.0, max_rotation: 45.0, min_score: 1.0, resolution: 64, ..AlignSettings::default() };
         assert_eq!(edges.validate(), Ok(()));
     }

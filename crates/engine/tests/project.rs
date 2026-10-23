@@ -5,13 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
-use florastack_align::{AlignSettings, End, Flag, Framing, Status, Term};
+use florastack_align::{AlignSettings, End, Flag, Framing, MotionRegion, Status, Term};
 use florastack_codecs::{ExifSummary, Format};
 use florastack_core::{AnyImage, ColorSpace, Encoding, Image};
 use florastack_engine::model::FrameId;
 use florastack_engine::project::{
-    FrameReport, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, read_image, set_develop_settings, store_develop, write_image,
-    write_preview,
+    FrameMotion, FrameReport, MaskSource, MaskSummary, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, read_image,
+    set_develop_settings, store_develop, write_image, write_preview,
 };
 use florastack_project::{Area, Input, MapName, Maps, NewOutput, ProjectFolder, to_data};
 use florastack_raw::{ChromaticAberration, Chromaticity, DevelopSettings, NoiseReduction, RawDevelop, Resolved, WhiteBalance};
@@ -150,7 +150,7 @@ fn a_reopened_project_is_retouched_with_no_recomputation() {
     let output = write_image(&folder, "output-3", &images[2], None).unwrap();
     let depth = write_image(&folder, "output-3-depth", &images[1], None).unwrap();
     let Some(AnyImage::F32(linear)) = images.get(2).cloned() else { panic!() };
-    let preview = write_preview(&folder, "output-3", &linear).unwrap();
+    let preview = write_preview(&folder, "output-3", &linear, None).unwrap();
     let id = project.add_output(NewOutput {
         name: "Pyramid".into(),
         method: "pyramid".into(),
@@ -218,14 +218,14 @@ fn previews_are_small_srgb_jpegs() {
     let dir = TempDir::new("preview");
     let (folder, _) = ProjectFolder::create(dir.path(), "Preview").unwrap();
     let image = Image::from_fn(1200, 800, 3, ColorSpace::LINEAR, |x, y, c| ((x + 2 * y + c) % 255) as f32 / 255.0).unwrap();
-    let reference = write_preview(&folder, "frame-1", &image).unwrap();
+    let reference = write_preview(&folder, "frame-1", &image, None).unwrap();
     assert_eq!(reference.path.area(), Area::Previews);
     let bytes = folder.read(&reference).unwrap();
     let decoded = florastack_codecs::read(&bytes, &florastack_codecs::ReadOptions::default()).unwrap();
     assert_eq!(decoded.info.format, Format::Jpeg);
     assert_eq!((decoded.image.width(), decoded.image.height()), (PREVIEW_SIDE, 341));
     let tiny = Image::from_fn(40, 30, 1, ColorSpace::LINEAR, |_, _, _| 0.5).unwrap();
-    let reference = write_preview(&folder, "frame-2", &tiny).unwrap();
+    let reference = write_preview(&folder, "frame-2", &tiny, None).unwrap();
     let decoded = florastack_codecs::read(&folder.read(&reference).unwrap(), &florastack_codecs::ReadOptions::default()).unwrap();
     assert_eq!((decoded.image.width(), decoded.image.height()), (40, 30), "small images aren't enlarged");
 }
@@ -272,7 +272,8 @@ fn the_shapes_stored_in_project_files_are_pinned() {
         json!({
             "shift_x": true, "shift_y": true, "scale": true, "rotation": true, "brightness": true, "refine": false,
             "max_shift": 10.0, "max_scale": 15.0, "max_rotation": 5.0, "min_score": 0.3, "reject": true, "resolution": 2048,
-            "automatic_order": true, "reverse_order": false, "framing": "narrow", "min_sharp_fraction": 0.002,
+            "automatic_order": true, "reverse_order": false, "framing": "narrow", "min_sharp_fraction": 0.002, "min_motion": 2.0,
+            "detect_defects": false,
         })
     );
     let id = |n: u64| serde_json::from_value::<FrameId>(json!(n)).unwrap();
@@ -281,11 +282,33 @@ fn the_shapes_stored_in_project_files_are_pinned() {
         flags: vec![Flag::Limit(Term::ShiftX), Flag::OutOfFocus],
         reference: Some(id(3)),
         sharp_fraction: Some(0.25),
+        motion: None,
     };
     assert_eq!(
         to_data("frame alignment", &frame).unwrap(),
         json!({ "status": "rejected", "flags": [{ "limit": "shift_x" }, "out-of-focus"], "reference": 3, "sharp_fraction": 0.25 })
     );
+    let region = MotionRegion { x: 120, y: 80, width: 80, height: 64, cells: 63, dx: 3.0, dy: -2.25, peak: 3.75 };
+    let moved = FrameReport {
+        status: Status::Aligned,
+        flags: vec![Flag::Moved],
+        reference: Some(id(2)),
+        sharp_fraction: None,
+        motion: Some(FrameMotion { score: 0.0625, peak: 3.75, regions: vec![region] }),
+    };
+    assert_eq!(
+        to_data("frame alignment", &moved).unwrap(),
+        json!({
+            "status": "aligned", "flags": ["moved"], "reference": 2, "sharp_fraction": null,
+            "motion": {
+                "score": 0.0625, "peak": 3.75,
+                "regions": [{ "x": 120, "y": 80, "width": 80, "height": 64, "cells": 63, "dx": 3.0, "dy": -2.25, "peak": 3.75 }],
+            },
+        })
+    );
+    // A defect mask's summary, its cache key.
+    let mask = MaskSummary { source: MaskSource::Detected, width: 6000, height: 4000, pixels: 1234, spots: 7 };
+    assert_eq!(serde_json::to_value(&mask).unwrap(), json!({ "source": "detected", "width": 6000, "height": 4000, "pixels": 1234, "spots": 7 }));
     let run =
         RunReport { width: 6000, height: 4000, narrow_end: Some(End::Last), start: End::First, order: vec![id(1), id(3)], narrow_frame: Some(id(3)) };
     assert_eq!(
@@ -294,8 +317,8 @@ fn the_shapes_stored_in_project_files_are_pinned() {
     );
     assert_eq!(serde_json::to_value(Framing::ALL).unwrap(), json!(["narrow", "wide", "common"]));
     assert_eq!(
-        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined]).unwrap(),
-        json!(["low-score", "repeating-pattern", "no-match", "not-refined"])
+        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined, Flag::Moved]).unwrap(),
+        json!(["low-score", "repeating-pattern", "no-match", "not-refined", "moved"])
     );
     assert_eq!(serde_json::to_value([Status::Master, Status::Aligned]).unwrap(), json!(["master", "aligned"]));
     assert_eq!(
