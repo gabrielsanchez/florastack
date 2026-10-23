@@ -57,6 +57,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         let motion = folder.store(Area::Cache, &format!("frame-{}-motion", id.get()), "tiff", b"motion map", None).unwrap();
         let frame = project.frame_mut(id).unwrap();
         frame.alignment = Some(Alignment { transform: if id == a { Affine::IDENTITY } else { transform }, brightness_gain: gain, quality });
+        frame.report = Some(json!({ "status": "aligned", "flags": ["repeating-pattern"], "sharp_fraction": 0.125 }));
         frame.aligned = Some(aligned);
         frame.preview = Some(preview);
         frame.maps = maps(vec![("motion", motion)]);
@@ -68,7 +69,11 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         settings: json!({ "white_balance": { "custom": { "temperature": 5200.0, "tint": 3.0 } }, "exposure": 0.25 }),
         resolved: json!({ "white": { "x": 0.312_727, "y": 0.329_023 }, "chromatic_aberration": [0.000_12, -0.000_08] }),
     });
-    project.alignment = Some(AlignmentRun { master: c, settings: json!({ "rotation": false }) });
+    project.alignment = Some(AlignmentRun {
+        master: c,
+        settings: json!({ "rotation": false }),
+        report: Some(json!({ "width": 6000, "height": 4000, "narrow_end": "last", "start": "last", "order": [c.get(), a.get()] })),
+    });
     let preset = Preset::parse("[align]\nrotation = false\n[stack]\nmethod = \"pyramid\"\n[stack.pyramid]\ngrit = 0.5\n").unwrap();
     project.preferences.layer(&preset.preferences);
     project.preferences.set(Group::Develop, &json!({ "white_balance": "auto", "exposure": 0.25 })).unwrap();
@@ -128,7 +133,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
 
     // The file is readable JSON that starts with its format and version.
     let text = std::fs::read_to_string(folder.project_file()).unwrap();
-    assert!(text.starts_with("{\n  \"format\": \"florastack-project\",\n  \"version\": 1,\n"), "{}", &text[..80]);
+    assert!(text.starts_with("{\n  \"format\": \"florastack-project\",\n  \"version\": 2,\n"), "{}", &text[..80]);
     assert_eq!(schema::parse(text.as_bytes()).unwrap(), reopened);
 }
 

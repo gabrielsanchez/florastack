@@ -98,6 +98,22 @@ fn every_command_dispatches_from_json() {
     assert_eq!(trashed["trashed"], json!([path]));
     assert!(dir.path().join("trash").join(Path::new(&path).file_name().unwrap()).is_dir(), "in the trash, not deleted");
 
+    // Alignment, on a stack of frames that can be aligned: six frames, each 2% larger than the one before.
+    let stack = common::synthetic_frames(dir.path(), "synthetic", 160, 120, &common::breathing(6, 0.02, None, 2));
+    calls.run("project.new", &format!(r#"{{ "name": "Aligned", "folder": {} }}"#, quoted(dir.path())));
+    calls.run("project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, common::path_list(&stack)));
+    assert_eq!(calls.run("align.get", "{}")["settings"]["framing"], "narrow");
+    assert_eq!(calls.run("align.set", r#"{ "framing": "wide", "rotation": false }"#)["settings"]["framing"], "wide");
+    let aligned = calls.run("align.run", "{}");
+    assert_eq!((&aligned["narrowEnd"], &aligned["start"]), (&json!("last"), &json!("last")), "{aligned}");
+    let info = calls.run("align.info", "{}");
+    assert_eq!((&info["aligned"], &info["framing"]), (&json!(true), &json!("wide")));
+    assert_eq!(info["run"]["frames"].as_array().unwrap().len(), 6);
+    let sorted = calls.run("align.sortByScale", "{}");
+    assert_eq!(sorted["frameOrder"].as_array().unwrap().len(), 6, "{sorted}");
+    assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
+    calls.run("project.close", r#"{ "discardChanges": true }"#);
+
     let all: BTreeSet<String> = Registry::standard().names().into_iter().map(str::to_owned).collect();
     let missed: Vec<&String> = all.difference(&calls.names).collect();
     assert!(missed.is_empty(), "commands this test never dispatched: {missed:?}");

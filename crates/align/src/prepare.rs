@@ -19,8 +19,9 @@
 //!    band-pass, on the synthetic stacks.
 //!
 //! Each level knows how its pixels map to the frame's ([`Mapping`]), so that the solver's parameters stay in frame
-//! pixels on every level. Phase correlation runs on a coarser level's band-pass, and a strongly low-passed linear
-//! luminance of about 64 pixels feeds the brightness gain.
+//! pixels on every level. Phase correlation runs on a coarser level's band-pass, a strongly low-passed linear
+//! luminance of about 64 pixels feeds the brightness gain, and the finest level's band-pass gives the frame's focus map
+//! (`focus.rs`).
 //!
 //! [`AlignSettings::resolution`]: crate::AlignSettings::resolution
 
@@ -30,6 +31,7 @@ use florastack_core::{Affine, ColorSpace, Encoding, Image};
 use rayon::prelude::*;
 
 use crate::error::AlignError;
+use crate::focus::FocusMap;
 
 /// The smallest side, in pixels, of a frame that can be aligned.
 pub const MIN_SIDE: usize = 16;
@@ -119,6 +121,8 @@ pub(crate) struct Prepared {
     pub correlation_level: usize,
     /// The low-passed linear luminance for the brightness gain, when the gain is estimated.
     pub brightness: Option<(Mapping, Image<f32>)>,
+    /// The frame's focus map, from its finest level (`focus.rs`).
+    pub focus: FocusMap,
 }
 
 impl Prepared {
@@ -145,7 +149,9 @@ impl Prepared {
         let correlation_level = planes.iter().position(|(p, _)| p.width().max(p.height()) <= CORRELATION_SIDE).unwrap_or(planes.len() - 1);
         let levels =
             planes.iter().map(|(plane, mapping)| Ok(Level { mapping: *mapping, field: field(plane)? })).collect::<Result<Vec<_>, AlignError>>()?;
-        Ok(Prepared { levels, correlation_level, brightness })
+        let finest = levels.first().ok_or(AlignError::NoFrames)?;
+        let focus = FocusMap::new(&finest.field, finest.mapping)?;
+        Ok(Prepared { levels, correlation_level, brightness, focus })
     }
 }
 

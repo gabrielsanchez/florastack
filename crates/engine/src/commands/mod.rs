@@ -6,17 +6,20 @@
 //! - [`frames`]: the frame list (`project.addFrames`, a job, `project.removeFrames`, `project.moveFrames`,
 //!   `project.setFramesEnabled`, `project.frames`);
 //! - [`develop`]: the RAW develop settings (`develop.get`, `develop.set`, `develop.reset`);
+//! - [`align`]: the alignment settings (`align.get`, `align.set`, `align.reset`), aligning the stack and sorting it by
+//!   scale (`align.run` and `align.sortByScale`, jobs), and the alignment the project holds (`align.info`);
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
 //! - [`job`]: the jobs (`job.list`, `job.cancel`).
 //!
-//! Alignment, stacking and retouching add their areas in their phases (`align.*`, `stack.*`, `retouch.*`).
+//! Stacking and retouching add their areas in their phases (`stack.*`, `retouch.*`).
 
 // Every command function has the signature the registry's constructors take: its parameters by value (most commands
 // consume them) and a `Result` (most can fail), so that commands are written alike.
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
+pub mod align;
 pub mod develop;
 pub mod edit;
 pub mod frames;
@@ -36,6 +39,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(project::specs());
     all.extend(frames::specs());
     all.extend(develop::specs());
+    all.extend(align::specs());
     all.extend(preset::specs());
     all.extend(output::specs());
     all.extend(edit::specs());

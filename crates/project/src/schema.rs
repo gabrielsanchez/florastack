@@ -8,7 +8,7 @@
 //! ```json
 //! {
 //!   "format": "florastack-project",
-//!   "version": 1,
+//!   "version": 2,
 //!   "software": "FloraStack 0.1.0",
 //!   "name": "Bee head",
 //!   "created": "2026-10-21T13:02:11.250Z",
@@ -16,7 +16,7 @@
 //!   "next_id": 6,
 //!   "frames": [ { "id": 1, "path": "...", "size": 25165824, "hash": "sha256:...", "enabled": true, ... } ],
 //!   "develop": { "reference": 1, "settings": { ... }, "resolved": { ... } },
-//!   "alignment": { "master": 1, "settings": { ... } },
+//!   "alignment": { "master": 1, "settings": { ... }, "report": { ... } },
 //!   "preferences": { "develop": { ... }, "align": { ... }, "stack": { ... }, "output": { ... } },
 //!   "maps": { "dust": { "path": "cache/dust-....tiff", "size": 1234, "hash": "sha256:..." } },
 //!   "outputs": [ { "id": 4, "name": "...", "method": "pyramid", "parameters": { ... }, "created": "...",
@@ -40,7 +40,8 @@
 //!
 //! Version 0 is the draft layout the model was designed from (camelCase-free but flat: `file`, `sha256`, a `skip`
 //! flag, a six-number `matrix`, Unix-second times and a single stroke list per output), never released; its
-//! migration exists so that the chain is exercised, by a committed fixture, from the first release on.
+//! migration exists so that the chain is exercised, by a committed fixture, from the first release on. Version 2
+//! adds what alignment reports beyond its transforms, an optional `report` on each frame and on the alignment run.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -53,7 +54,7 @@ use crate::time::Timestamp;
 /// The `format` of every project file.
 pub const FORMAT: &str = "florastack-project";
 /// The format version this build writes, and the newest it reads.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// The project file's name in the project folder.
 pub const FILE_NAME: &str = "project.json";
 /// The largest project file. Bulk data (pixels, focus statistics) lives in the cache; a project file this large is
@@ -64,7 +65,7 @@ pub const MAX_FILE_BYTES: u64 = 64 << 20;
 type Migration = fn(Map<String, Value>) -> Result<Map<String, Value>, MigrationError>;
 
 /// The migrations, from version `i` to `i + 1`.
-pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1];
+pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2];
 
 /// The `format` field: always [`FORMAT`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -387,9 +388,40 @@ mod v0 {
     }
 }
 
+/// Version 1 to version 2.
+mod v1 {
+    use serde_json::{Map, Value};
+
+    use crate::error::MigrationError;
+
+    /// Version 2 adds what alignment reports beyond its transforms: an optional `report` on each frame (its flags,
+    /// such as out of focus, and its sharp-content fraction) and on the alignment run (the frames' size, the narrow end
+    /// and the processing order), as the engine stores them. A version 1 file has neither, so only its version
+    /// changes.
+    #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature, `Migration`.
+    pub(super) fn to_v2(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
+        doc.insert("version".into(), Value::from(2));
+        Ok(doc)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_version_1_file_is_upgraded_unchanged_but_for_its_version() {
+        let v1 = br#"{"format": "florastack-project", "version": 1, "name": "Coin", "created": "2026-10-21T00:00:00Z",
+            "modified": "2026-10-21T00:00:00Z", "next_id": 2,
+            "frames": [{"id": 1, "path": "/a.tif", "size": 1, "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                        "enabled": true, "alignment": {"transform": [[1, 0, 0], [0, 1, 0]], "brightness_gain": 1.0, "quality": 1.0}}],
+            "alignment": {"master": 1, "settings": {}}}"#;
+        let decoded = decode(v1).unwrap();
+        assert_eq!(decoded.migrated_from, Some(1));
+        let p = decoded.project;
+        assert_eq!((p.name(), p.frames.len(), p.frames[0].report.clone()), (Some("Coin"), 1, None));
+        assert_eq!(p.alignment.unwrap().report, None);
+    }
 
     #[test]
     fn headers_are_read_from_any_version() {

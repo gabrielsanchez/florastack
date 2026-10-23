@@ -30,7 +30,7 @@
 //! estimated gain follows. Without defocus, the gain is right to within 0.1%.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use florastack_align::{AlignSettings, StackAlignment, Status, align_frames};
+use florastack_align::{AlignSettings, Flag, StackAlignment, Status, align_frames};
 use florastack_core::Unmonitored;
 use florastack_core::testutil::{StackParams, SyntheticStack, generate, scene, transform_error};
 
@@ -76,8 +76,10 @@ impl Score {
     }
 }
 
-/// Aligns the stacks of seeds 1 to 3, each to its first frame and to its middle one, checks that no frame was flagged,
-/// prints a table and returns the scores.
+/// Aligns the stacks of seeds 1 to 3, each to its first frame and to its middle one, checks that no frame's alignment
+/// was flagged, prints a table and returns the scores. A frame may be flagged out of focus, which isn't about its
+/// alignment: the test scenes leave a gap in depth between their bristles and their discs, and a frame focused in it
+/// has next to nothing in focus.
 fn run(name: &str, settings: &AlignSettings, params: impl Fn(u64) -> StackParams) -> Vec<Score> {
     println!("{name}: mean and worst frame error (px), worst gain error (%)");
     let mut scores = Vec::new();
@@ -86,7 +88,8 @@ fn run(name: &str, settings: &AlignSettings, params: impl Fn(u64) -> StackParams
         for master in [0, FRAMES / 2] {
             let result = align_frames(&stack.frames, master, settings, &Unmonitored).unwrap();
             for (i, frame) in result.frames.iter().enumerate() {
-                assert!(frame.flags.is_empty() && frame.status != Status::Rejected, "seed {seed}, master {master}, frame {i}: {frame:?}");
+                let aligned = frame.flags.iter().all(|f| *f == Flag::OutOfFocus) && frame.status != Status::Rejected;
+                assert!(aligned, "seed {seed}, master {master}, frame {i}: {frame:?}");
             }
             let score = Score::of(&result, &stack);
             println!("  seed {seed}, master {master:2}: {:.4} {:.4} {:.3}%", score.mean(), score.worst(), 100.0 * score.worst_gain());

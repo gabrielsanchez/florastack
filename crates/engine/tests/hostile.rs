@@ -61,6 +61,12 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("preset.apply", json!({ "path": "p.toml", "groups": ["colour"] })),
         ("develop.set", json!({ "exposure": 1e300 })),
         ("develop.set", json!({ "exposure": null })),
+        ("align.set", json!({ "max_shift": 500 })),
+        ("align.set", json!({ "framing": "widest" })),
+        ("align.set", json!({ "min_sharp_fraction": 2 })),
+        ("align.set", json!({ "resolution": 1e30 })),
+        ("align.set", json!({ "reverse_order": "yes" })),
+        ("align.set", json!({ "max_rotation": null })),
         (
             "output.save",
             json!({ "output": 1, "path": "x.jpg", "spec": { "format": { "format": "jpeg", "quality": 0, "subsampling": "s444" }, "depth": "u8" } }),

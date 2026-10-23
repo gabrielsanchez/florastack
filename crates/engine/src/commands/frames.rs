@@ -284,6 +284,11 @@ struct FrameInfo {
     exif: Option<ExifSummary>,
     /// Whether it has been aligned.
     aligned: bool,
+    /// What alignment flagged about it, such as `out-of-focus` (`align.info` has the details).
+    flags: Vec<florastack_align::Flag>,
+    /// The share of the stack's in-focus detail on which it is among the sharpest, when alignment could tell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sharp_fraction: Option<f64>,
     /// Whether it has a preview.
     preview: bool,
 }
@@ -307,7 +312,9 @@ fn list(session: &Session, _: NoParams) -> Result<FrameList, CommandError> {
             hash: f.hash.to_string(),
             // A summary the project can't read back isn't shown, rather than failing the whole list.
             exif: crate::project::exif(f).ok().flatten(),
-            aligned: f.aligned.is_some(),
+            aligned: f.alignment.is_some(),
+            flags: crate::project::frame_report(f).map(|r| r.flags).unwrap_or_default(),
+            sharp_fraction: crate::project::frame_report(f).and_then(|r| r.sharp_fraction),
             preview: f.preview.is_some(),
         })
         .collect();

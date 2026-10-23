@@ -5,10 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use florastack_align::{AlignSettings, End, Flag, Framing, Status, Term};
 use florastack_codecs::{ExifSummary, Format};
 use florastack_core::{AnyImage, ColorSpace, Encoding, Image};
+use florastack_engine::model::FrameId;
 use florastack_engine::project::{
-    PREVIEW_SIDE, add_frame, develop, develop_settings, exif, read_image, set_develop_settings, store_develop, write_image, write_preview,
+    FrameReport, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, read_image, set_develop_settings, store_develop, write_image,
+    write_preview,
 };
 use florastack_project::{Area, Input, MapName, Maps, NewOutput, ProjectFolder, to_data};
 use florastack_raw::{ChromaticAberration, Chromaticity, DevelopSettings, NoiseReduction, RawDevelop, Resolved, WhiteBalance};
@@ -263,6 +266,38 @@ fn the_shapes_stored_in_project_files_are_pinned() {
         keywords: vec!["bee".into()],
         ..ExifSummary::default()
     };
+    // What alignment stores: its settings, a frame's report and a run's.
+    assert_eq!(
+        to_data("alignment settings", &AlignSettings::default()).unwrap(),
+        json!({
+            "shift_x": true, "shift_y": true, "scale": true, "rotation": true, "brightness": true, "refine": false,
+            "max_shift": 10.0, "max_scale": 15.0, "max_rotation": 5.0, "min_score": 0.3, "reject": true, "resolution": 2048,
+            "automatic_order": true, "reverse_order": false, "framing": "narrow", "min_sharp_fraction": 0.002,
+        })
+    );
+    let id = |n: u64| serde_json::from_value::<FrameId>(json!(n)).unwrap();
+    let frame = FrameReport {
+        status: Status::Rejected,
+        flags: vec![Flag::Limit(Term::ShiftX), Flag::OutOfFocus],
+        reference: Some(id(3)),
+        sharp_fraction: Some(0.25),
+    };
+    assert_eq!(
+        to_data("frame alignment", &frame).unwrap(),
+        json!({ "status": "rejected", "flags": [{ "limit": "shift_x" }, "out-of-focus"], "reference": 3, "sharp_fraction": 0.25 })
+    );
+    let run =
+        RunReport { width: 6000, height: 4000, narrow_end: Some(End::Last), start: End::First, order: vec![id(1), id(3)], narrow_frame: Some(id(3)) };
+    assert_eq!(
+        to_data("alignment run", &run).unwrap(),
+        json!({ "width": 6000, "height": 4000, "narrow_end": "last", "start": "first", "order": [1, 3], "narrow_frame": 3 })
+    );
+    assert_eq!(serde_json::to_value(Framing::ALL).unwrap(), json!(["narrow", "wide", "common"]));
+    assert_eq!(
+        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined]).unwrap(),
+        json!(["low-score", "repeating-pattern", "no-match", "not-refined"])
+    );
+    assert_eq!(serde_json::to_value([Status::Master, Status::Aligned]).unwrap(), json!(["master", "aligned"]));
     assert_eq!(
         to_data("EXIF summary", &summary).unwrap(),
         json!({

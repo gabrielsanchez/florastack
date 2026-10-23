@@ -29,5 +29,7 @@ rayon.workspace = true
 
 [dev-dependencies]
 florastack-testkit.workspace = true
+# Synthetic stacks, written as frame files, for the alignment commands' tests.
+florastack-core = { workspace = true, features = ["testutil"] }
 # Arbitrary JSON thrown at every command.
 proptest.workspace = true

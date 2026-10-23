@@ -18,7 +18,9 @@ use serde::{Serialize, Serializer};
 use serde_json::Value;
 
 use crate::error::Problem;
-use crate::model::{Develop, Frame, FrameFile, FrameId, LayerId, Output, OutputId, Project, RetouchLayer, check_frame_path, check_name};
+use crate::model::{
+    Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, LayerId, Output, OutputId, Project, RetouchLayer, check_frame_path, check_name,
+};
 use crate::prefs::{Group, Table};
 
 /// One change to a project. See the module documentation.
@@ -50,6 +52,11 @@ pub enum Edit {
     },
     /// Replaces the stack's resolved development.
     SetDevelop(Option<Develop>),
+    /// Replaces the stack's alignment run, and the alignment and report of each frame listed.
+    SetAlignment {
+        run: Option<AlignmentRun>,
+        frames: Vec<AlignedFrame>,
+    },
     /// Puts an output back at `index`, with its own id (the inverse of [`Edit::RemoveOutput`]).
     InsertOutput {
         index: usize,
@@ -88,6 +95,14 @@ pub enum Edit {
     },
     /// Several edits, made in order as one.
     Batch(Vec<Edit>),
+}
+
+/// A frame's alignment and report, as [`Edit::SetAlignment`] sets them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AlignedFrame {
+    pub frame: FrameId,
+    pub alignment: Option<Alignment>,
+    pub report: Option<Value>,
 }
 
 /// Why an edit can't be made. The project is unchanged.
@@ -234,6 +249,7 @@ impl Edit {
             }
             Edit::SetPreferences { group, .. } => Aspects::of_group(*group),
             Edit::SetDevelop(_) => Aspects::DEVELOP,
+            Edit::SetAlignment { .. } => Aspects::ALIGN,
             // An output's layers go with it.
             Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
             Edit::RenameOutput { .. } => Aspects::OUTPUTS,
@@ -292,6 +308,7 @@ impl Project {
                 Ok(Edit::SetPreferences { group, table: old })
             }
             Edit::SetDevelop(develop) => Ok(Edit::SetDevelop(std::mem::replace(&mut self.develop, develop))),
+            Edit::SetAlignment { run, frames } => self.set_alignment(run, frames),
             Edit::InsertOutput { index, output } => self.insert_output(index, *output),
             Edit::RemoveOutput(id) => {
                 let index = self.outputs.iter().position(|o| o.id() == id).ok_or(EditError::NoOutput(id))?;
@@ -359,6 +376,32 @@ impl Project {
         Ok(Edit::RemoveFrame(id))
     }
 
+    /// Sets the alignment run and the listed frames' alignments and reports, after checking every frame first; the
+    /// inverse lists the old values in the reverse order, so that a frame listed twice ends as it was.
+    fn set_alignment(&mut self, run: Option<AlignmentRun>, frames: Vec<AlignedFrame>) -> Result<Edit, EditError> {
+        for f in &frames {
+            if self.frame(f.frame).is_none() {
+                return Err(EditError::NoFrame(f.frame));
+            }
+            if let Some(a) = &f.alignment {
+                let finite = a.transform.m.iter().flatten().all(|v| v.is_finite()) && a.brightness_gain.is_finite() && a.quality.is_finite();
+                if !finite {
+                    return Err(EditError::Invalid(Problem::NotFinite { what: "frame alignment" }));
+                }
+            }
+        }
+        let mut old = Vec::with_capacity(frames.len());
+        for f in frames {
+            if let Some(frame) = self.frame_mut(f.frame) {
+                let alignment = std::mem::replace(&mut frame.alignment, f.alignment);
+                let report = std::mem::replace(&mut frame.report, f.report);
+                old.push(AlignedFrame { frame: f.frame, alignment, report });
+            }
+        }
+        old.reverse();
+        Ok(Edit::SetAlignment { run: std::mem::replace(&mut self.alignment, run), frames: old })
+    }
+
     fn set_frame_order(&mut self, order: &[FrameId]) -> Result<Edit, EditError> {
         let old: Vec<FrameId> = self.frames.iter().map(Frame::id).collect();
         let present: BTreeSet<FrameId> = old.iter().copied().collect();
@@ -421,6 +464,10 @@ mod tests {
         FrameFile { path: format!("/photos/{n}.tif"), size: 10, modified: None, hash: ContentHash::from_bytes([n; 32]) }
     }
 
+    fn aligned(gain: f64) -> Alignment {
+        Alignment { transform: florastack_core::Affine::translation(1.5, -0.25), brightness_gain: gain, quality: 0.9 }
+    }
+
     #[test]
     fn every_edit_is_undone_by_its_inverse() {
         let mut p = Project::new(Some("Bee")).unwrap();
@@ -436,6 +483,14 @@ mod tests {
             Edit::SetFrameEnabled { frame: b, enabled: false },
             Edit::SetPreferences { group: Group::Develop, table: serde_json::json!({ "exposure": 1.5 }).as_object().unwrap().clone() },
             Edit::Batch(vec![Edit::RemoveFrame(b), Edit::SetName(Some("Ant".into()))]),
+            Edit::SetAlignment {
+                run: Some(AlignmentRun { master: b, settings: serde_json::json!({}), report: Some(serde_json::json!({ "start": "last" })) }),
+                frames: vec![
+                    AlignedFrame { frame: a, alignment: Some(aligned(1.02)), report: Some(serde_json::json!({ "flags": ["out-of-focus"] })) },
+                    AlignedFrame { frame: b, alignment: Some(aligned(1.0)), report: None },
+                    AlignedFrame { frame: a, alignment: Some(aligned(1.03)), report: None },
+                ],
+            },
         ];
         for edit in edits {
             let mut q = before.clone();
@@ -467,6 +522,20 @@ mod tests {
             (Edit::SetName(Some(" ".into())), EditError::Invalid(Problem::Text { what: "project name", reason: "is empty" })),
             (Edit::Batch(vec![Edit::SetName(Some("Ok".into())), Edit::RemoveFrame(a), Edit::RemoveFrame(a)]), EditError::NoFrame(a)),
             (Edit::PopStroke { output: OutputId(5), layer: LayerId(6) }, EditError::NoOutput(OutputId(5))),
+            (
+                Edit::SetAlignment {
+                    run: None,
+                    frames: vec![
+                        AlignedFrame { frame: a, alignment: Some(aligned(1.0)), report: None },
+                        AlignedFrame { frame: FrameId(99), alignment: None, report: None },
+                    ],
+                },
+                EditError::NoFrame(FrameId(99)),
+            ),
+            (
+                Edit::SetAlignment { run: None, frames: vec![AlignedFrame { frame: a, alignment: Some(aligned(f64::NAN)), report: None }] },
+                EditError::Invalid(Problem::NotFinite { what: "frame alignment" }),
+            ),
         ];
         for (edit, error) in failing {
             assert_eq!(p.apply(edit.clone()), Err(error), "{edit:?}");

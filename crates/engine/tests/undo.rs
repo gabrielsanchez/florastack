@@ -25,6 +25,15 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
     std::fs::write(&preset, "[develop]\nexposure = 1.25\nwhite_balance = \"auto\"\n").unwrap();
     let quoted = |p: &std::path::Path| serde_json::to_string(&p.display().to_string()).unwrap();
     let none = Vec::new;
+    // The fixture's frames are too small to align: the cases that align disable them and add these, in a shuffled order.
+    let stack = common::synthetic_frames(dir, "synthetic", 160, 120, &common::breathing(5, 0.02, None, 9));
+    let shuffled = [3, 0, 4, 1, 2].map(|i| stack[i].clone());
+    let aligning = || {
+        vec![
+            ("project.setFramesEnabled", format!(r#"{{ "frames": [{a}, {b}, {c}], "enabled": false }}"#)),
+            ("project.addFrames", format!(r#"{{ "paths": [{}] }}"#, common::path_list(&shuffled))),
+        ]
+    };
     vec![
         Case { name: "project.rename", setup: none(), params: r#"{ "name": "Renamed" }"#.into() },
         Case { name: "project.addFrames", setup: none(), params: format!(r#"{{ "paths": [{}] }}"#, quoted(&extra)) },
@@ -38,6 +47,14 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             params: "{}".into(),
         },
         Case { name: "preset.apply", setup: none(), params: format!(r#"{{ "path": {} }}"#, quoted(&preset)) },
+        Case { name: "align.set", setup: none(), params: r#"{ "framing": "common", "rotation": false }"#.into() },
+        Case {
+            name: "align.reset",
+            setup: vec![("align.set", r#"{ "framing": "wide" }"#.into()), ("project.save", "{}".into())],
+            params: "{}".into(),
+        },
+        Case { name: "align.run", setup: aligning(), params: "{}".into() },
+        Case { name: "align.sortByScale", setup: aligning(), params: "{}".into() },
         Case { name: "output.rename", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Renamed" }}"#) },
         Case { name: "output.remove", setup: none(), params: format!(r#"{{ "output": {output} }}"#) },
         Case {

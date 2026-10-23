@@ -21,6 +21,8 @@ schemars.workspace = true
 [dev-dependencies]
 # Synthetic stacks with known transforms and gains, for the accuracy tests and the benches.
 florastack-core = { workspace = true, features = ["testutil"] }
+# Scoring framing against the ground truth: wide framing leaves no streaks (tests/ordering.rs).
+florastack-metrics.workspace = true
 criterion.workspace = true
 # The settings' serde round trips, as a project file (JSON) and a preset (TOML) store them.
 serde_json.workspace = true
