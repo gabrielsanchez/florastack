@@ -201,7 +201,7 @@ const MAX_BLOCK: usize = 64;
 /// The linear luminance of `frame`, averaged over blocks of `k` x `k` pixels (`k` at least 1): `width / k` x
 /// `height / k` pixels, the last columns and rows dropped when `k` doesn't divide the size. See the module
 /// documentation for the luminance itself.
-fn luminance(frame: &Image<f32>, k: usize) -> Result<Image<f32>, AlignError> {
+pub(crate) fn luminance(frame: &Image<f32>, k: usize) -> Result<Image<f32>, AlignError> {
     let k = k.max(1);
     let mut out = Image::new((frame.width() / k).max(1), (frame.height() / k).max(1), 1, ColorSpace::LINEAR)?;
     let c = frame.channels();

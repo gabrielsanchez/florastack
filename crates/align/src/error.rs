@@ -43,6 +43,17 @@ pub enum AlignError {
         "the frames' scales differ by {spread:.2} pixels at the frame's corner at most, too little to sort them by: the stack has no focus breathing or magnification change to order it with"
     )]
     NoScaleChange { spread: f64 },
+    /// A defect mask that doesn't have the frames' size.
+    #[error("the defect mask is {width}x{height} pixels, but the frames are {frame_width}x{frame_height}: a mask must have the frames' size")]
+    MaskSize { width: usize, height: usize, frame_width: usize, frame_height: usize },
+    /// A defect mask of too many separate spots, such as a grid of dots.
+    #[error("the defect mask has more than {max} separate spots: a mask marks dust and hot pixels, not a pattern")]
+    MaskSpots { max: usize },
+    /// Defect detection counts at most this many frames.
+    #[error("defect detection counts at most {max} frames")]
+    DetectionFrames { max: usize },
+    #[error("defect detection needs at least {min} frames, not {frames}: with fewer, noise could pass for dust")]
+    FewFrames { frames: usize, min: usize },
     #[error("alignment was cancelled")]
     Cancelled(#[from] Cancelled),
     #[error(transparent)]

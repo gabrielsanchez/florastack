@@ -8,7 +8,7 @@
 //! ```json
 //! {
 //!   "format": "florastack-project",
-//!   "version": 2,
+//!   "version": 3,
 //!   "software": "FloraStack 0.1.0",
 //!   "name": "Bee head",
 //!   "created": "2026-10-21T13:02:11.250Z",
@@ -18,7 +18,7 @@
 //!   "develop": { "reference": 1, "settings": { ... }, "resolved": { ... } },
 //!   "alignment": { "master": 1, "settings": { ... }, "report": { ... } },
 //!   "preferences": { "develop": { ... }, "align": { ... }, "stack": { ... }, "output": { ... } },
-//!   "maps": { "dust": { "path": "cache/dust-....tiff", "size": 1234, "hash": "sha256:..." } },
+//!   "maps": { "defects": { "path": "cache/defects-....tiff", "size": 1234, "hash": "sha256:...", "key": "..." } },
 //!   "outputs": [ { "id": 4, "name": "...", "method": "pyramid", "parameters": { ... }, "created": "...",
 //!                  "inputs": [ { "frame": 1 } ], "image": { ... }, "retouch": [ ... ] } ]
 //! }
@@ -42,6 +42,8 @@
 //! flag, a six-number `matrix`, Unix-second times and a single stroke list per output), never released; its
 //! migration exists so that the chain is exercised, by a committed fixture, from the first release on. Version 2
 //! adds what alignment reports beyond its transforms, an optional `report` on each frame and on the alignment run.
+//! Version 3 adds each frame's optional `aligned_preview`, and the motion that alignment found in a frame to its
+//! report.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -54,7 +56,7 @@ use crate::time::Timestamp;
 /// The `format` of every project file.
 pub const FORMAT: &str = "florastack-project";
 /// The format version this build writes, and the newest it reads.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// The project file's name in the project folder.
 pub const FILE_NAME: &str = "project.json";
 /// The largest project file. Bulk data (pixels, focus statistics) lives in the cache; a project file this large is
@@ -65,7 +67,7 @@ pub const MAX_FILE_BYTES: u64 = 64 << 20;
 type Migration = fn(Map<String, Value>) -> Result<Map<String, Value>, MigrationError>;
 
 /// The migrations, from version `i` to `i + 1`.
-pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2];
+pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3];
 
 /// The `format` field: always [`FORMAT`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -405,6 +407,22 @@ mod v1 {
     }
 }
 
+/// Version 2 to version 3.
+mod v2 {
+    use serde_json::{Map, Value};
+
+    use crate::error::MigrationError;
+
+    /// Version 3 adds each frame's optional `aligned_preview` (its preview aligned onto the output's canvas, for the
+    /// filmstrip) and, in the frame reports the engine stores, the motion alignment found in the frame (its score and
+    /// regions). A version 2 file has neither, so only its version changes.
+    #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature, `Migration`.
+    pub(super) fn to_v3(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
+        doc.insert("version".into(), Value::from(3));
+        Ok(doc)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +439,18 @@ mod tests {
         let p = decoded.project;
         assert_eq!((p.name(), p.frames.len(), p.frames[0].report.clone()), (Some("Coin"), 1, None));
         assert_eq!(p.alignment.unwrap().report, None);
+    }
+
+    #[test]
+    fn a_version_2_file_is_upgraded_unchanged_but_for_its_version() {
+        let v2 = br#"{"format": "florastack-project", "version": 2, "name": "Coin", "created": "2026-10-21T00:00:00Z",
+            "modified": "2026-10-21T00:00:00Z", "next_id": 2,
+            "frames": [{"id": 1, "path": "/a.tif", "size": 1, "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                        "enabled": true, "report": {"flags": ["out-of-focus"]}}]}"#;
+        let decoded = decode(v2).unwrap();
+        assert_eq!(decoded.migrated_from, Some(2));
+        let p = decoded.project;
+        assert_eq!((p.frames[0].aligned_preview.clone(), p.frames[0].report.clone()), (None, Some(serde_json::json!({ "flags": ["out-of-focus"] }))));
     }
 
     #[test]

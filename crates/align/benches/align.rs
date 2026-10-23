@@ -1,7 +1,8 @@
 //! Benchmarks of frame alignment on 24 MP (6000x4000) RGB `f32` frames: a 100-frame stack, the roadmap's yardstick,
 //! and a pair of frames that only shift, aligned with every term and with the shifts alone, which shows what turning
-//! off the terms a stack doesn't need saves. Run them with `cargo xtask bench`, which writes the summary to
-//! `target/bench-summary.json`.
+//! off the terms a stack doesn't need saves; and of the defect stage that runs before it: one frame counted by the
+//! dust and hot-pixel detector, and one frame inpainted under a mask of 200 dust spots. Run them with
+//! `cargo xtask bench`, which writes the summary to `target/bench-summary.json`.
 //!
 //! The frames are synthetic: the textured test scene, moved by sub-pixel shifts, a small rotation and focus breathing
 //! (the pair: shifts only), without defocus or noise, which would only make the generator slower. Eight frames
@@ -13,9 +14,10 @@
 
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main};
-use florastack_align::{AlignSettings, StackAligner, align_frames};
+use criterion::{BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main};
+use florastack_align::{AlignSettings, DefectDetector, DefectMask, MAX_DETECTION_FRAMES, StackAligner, align_frames, inpaint};
 use florastack_core::Unmonitored;
+use florastack_core::testutil::Rng;
 use florastack_core::testutil::{StackParams, generate, scene};
 
 const WIDTH: usize = 6000;
@@ -45,6 +47,36 @@ fn align(c: &mut Criterion) {
         });
     }
 
+    // The defect stage: a frame counted for detection, and a frame inpainted under 200 spots of 3 to 30 pixels' radius.
+    group.throughput(Throughput::Elements(pixels)).measurement_time(Duration::from_secs(20));
+    let mut detector = DefectDetector::new(WIDTH, HEIGHT).unwrap();
+    group.bench_function(BenchmarkId::new("defects/detect-frame", &size), |b| {
+        b.iter(|| {
+            if detector.frames() == MAX_DETECTION_FRAMES {
+                detector = DefectDetector::new(WIDTH, HEIGHT).unwrap();
+            }
+            detector.add(&frames[0], &Unmonitored).unwrap();
+        });
+    });
+    let mut rng = Rng::new(7);
+    let spots: Vec<(f64, f64, f64)> = (0..200).map(|_| (rng.range(0.0, WIDTH as f64), rng.range(0.0, HEIGHT as f64), rng.range(3.0, 30.0))).collect();
+    let mut flags = vec![false; WIDTH * HEIGHT];
+    for &(cx, cy, r) in &spots {
+        let (x0, x1) = (pixel(cx - r), pixel(cx + r).min(WIDTH - 1));
+        let (y0, y1) = (pixel(cy - r), pixel(cy + r).min(HEIGHT - 1));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if (x as f64 - cx).hypot(y as f64 - cy) <= r {
+                    flags[y * WIDTH + x] = true;
+                }
+            }
+        }
+    }
+    let mask = DefectMask::from_fn(WIDTH, HEIGHT, |x, y| flags[y * WIDTH + x]).unwrap();
+    group.bench_function(BenchmarkId::new("defects/inpaint", &size), |b| {
+        b.iter_batched(|| frames[0].clone(), |mut frame| inpaint(&mut frame, &mask).unwrap(), BatchSize::LargeInput);
+    });
+
     // About half a minute each: one per sample (criterion warns that ten don't fit in this time, and runs them anyway).
     group.throughput(Throughput::Elements(STACK as u64 * pixels)).measurement_time(Duration::from_secs(240));
     group.bench_function(BenchmarkId::new("stack", format!("{STACK}x{size}")), |b| {
@@ -57,6 +89,12 @@ fn align(c: &mut Criterion) {
         });
     });
     group.finish();
+}
+
+/// A coordinate on the frame, as a pixel index, at least 0.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // On a 6000-pixel frame.
+fn pixel(v: f64) -> usize {
+    v.max(0.0) as usize
 }
 
 criterion_group!(benches, align);

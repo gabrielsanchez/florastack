@@ -17,9 +17,11 @@ use std::fmt;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 
+use crate::cache::CacheRef;
 use crate::error::Problem;
 use crate::model::{
-    Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, LayerId, Output, OutputId, Project, RetouchLayer, check_frame_path, check_name,
+    Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, LayerId, MapName, Output, OutputId, Project, RetouchLayer, check_frame_path,
+    check_name,
 };
 use crate::prefs::{Group, Table};
 
@@ -56,6 +58,17 @@ pub enum Edit {
     SetAlignment {
         run: Option<AlignmentRun>,
         frames: Vec<AlignedFrame>,
+    },
+    /// Sets one of the stack's maps (`Some`), such as its defect mask, or removes it (`None`).
+    SetProjectMap {
+        name: MapName,
+        map: Option<CacheRef>,
+    },
+    /// Replaces a frame's previews: as shot, and aligned.
+    SetPreviews {
+        frame: FrameId,
+        preview: Option<CacheRef>,
+        aligned_preview: Option<CacheRef>,
     },
     /// Puts an output back at `index`, with its own id (the inverse of [`Edit::RemoveOutput`]).
     InsertOutput {
@@ -148,9 +161,11 @@ impl Aspects {
     pub const OUTPUTS: Aspects = Aspects(1 << 6);
     /// The retouch layers and their strokes.
     pub const RETOUCH: Aspects = Aspects(1 << 7);
-    pub const ALL: Aspects = Aspects((1 << 8) - 1);
+    /// The frames' previews.
+    pub const PREVIEWS: Aspects = Aspects(1 << 8);
+    pub const ALL: Aspects = Aspects((1 << 9) - 1);
 
-    const NAMES: [(Aspects, &'static str); 8] = [
+    const NAMES: [(Aspects, &'static str); 9] = [
         (Aspects::NAME, "name"),
         (Aspects::FRAMES, "frames"),
         (Aspects::DEVELOP, "develop"),
@@ -159,6 +174,7 @@ impl Aspects {
         (Aspects::EXPORT, "export"),
         (Aspects::OUTPUTS, "outputs"),
         (Aspects::RETOUCH, "retouch"),
+        (Aspects::PREVIEWS, "previews"),
     ];
 
     /// The aspect that a preference group belongs to.
@@ -199,7 +215,7 @@ impl Aspects {
     }
 
     /// Every aspect name, in order.
-    pub fn all_names() -> [&'static str; 8] {
+    pub fn all_names() -> [&'static str; 9] {
         Aspects::NAMES.map(|(_, name)| name)
     }
 }
@@ -249,7 +265,9 @@ impl Edit {
             }
             Edit::SetPreferences { group, .. } => Aspects::of_group(*group),
             Edit::SetDevelop(_) => Aspects::DEVELOP,
-            Edit::SetAlignment { .. } => Aspects::ALIGN,
+            // The stack's maps (the defect mask) are what alignment reads its frames with.
+            Edit::SetAlignment { .. } | Edit::SetProjectMap { .. } => Aspects::ALIGN,
+            Edit::SetPreviews { .. } => Aspects::PREVIEWS,
             // An output's layers go with it.
             Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
             Edit::RenameOutput { .. } => Aspects::OUTPUTS,
@@ -269,8 +287,10 @@ impl Edit {
                 true
             }
             (Edit::SetPreferences { group: a, .. }, Edit::SetPreferences { group: b, .. }) => a == b,
-            (Edit::SetFrameEnabled { frame: a, .. }, Edit::SetFrameEnabled { frame: b, .. }) => a == b,
+            (Edit::SetFrameEnabled { frame: a, .. }, Edit::SetFrameEnabled { frame: b, .. })
+            | (Edit::SetPreviews { frame: a, .. }, Edit::SetPreviews { frame: b, .. }) => a == b,
             (Edit::RenameOutput { output: a, .. }, Edit::RenameOutput { output: b, .. }) => a == b,
+            (Edit::SetProjectMap { name: a, .. }, Edit::SetProjectMap { name: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -309,6 +329,19 @@ impl Project {
             }
             Edit::SetDevelop(develop) => Ok(Edit::SetDevelop(std::mem::replace(&mut self.develop, develop))),
             Edit::SetAlignment { run, frames } => self.set_alignment(run, frames),
+            Edit::SetProjectMap { name, map } => {
+                let old = match map {
+                    Some(map) => self.maps.insert(name.clone(), map),
+                    None => self.maps.remove(&name),
+                };
+                Ok(Edit::SetProjectMap { name, map: old })
+            }
+            Edit::SetPreviews { frame, preview, aligned_preview } => {
+                let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
+                let preview = std::mem::replace(&mut f.preview, preview);
+                let aligned_preview = std::mem::replace(&mut f.aligned_preview, aligned_preview);
+                Ok(Edit::SetPreviews { frame, preview, aligned_preview })
+            }
             Edit::InsertOutput { index, output } => self.insert_output(index, *output),
             Edit::RemoveOutput(id) => {
                 let index = self.outputs.iter().position(|o| o.id() == id).ok_or(EditError::NoOutput(id))?;
@@ -464,6 +497,15 @@ mod tests {
         FrameFile { path: format!("/photos/{n}.tif"), size: 10, modified: None, hash: ContentHash::from_bytes([n; 32]) }
     }
 
+    fn cache_ref(n: u8) -> CacheRef {
+        CacheRef {
+            path: crate::cache::CachePath::parse(&format!("cache/defects-{n:016x}.tiff")).unwrap(),
+            size: 10,
+            hash: ContentHash::from_bytes([n; 32]),
+            key: None,
+        }
+    }
+
     fn aligned(gain: f64) -> Alignment {
         Alignment { transform: florastack_core::Affine::translation(1.5, -0.25), brightness_gain: gain, quality: 0.9 }
     }
@@ -491,6 +533,8 @@ mod tests {
                     AlignedFrame { frame: a, alignment: Some(aligned(1.03)), report: None },
                 ],
             },
+            Edit::SetProjectMap { name: MapName::new("defects").unwrap(), map: Some(cache_ref(1)) },
+            Edit::SetPreviews { frame: b, preview: Some(cache_ref(2)), aligned_preview: Some(cache_ref(3)) },
         ];
         for edit in edits {
             let mut q = before.clone();
@@ -522,6 +566,7 @@ mod tests {
             (Edit::SetName(Some(" ".into())), EditError::Invalid(Problem::Text { what: "project name", reason: "is empty" })),
             (Edit::Batch(vec![Edit::SetName(Some("Ok".into())), Edit::RemoveFrame(a), Edit::RemoveFrame(a)]), EditError::NoFrame(a)),
             (Edit::PopStroke { output: OutputId(5), layer: LayerId(6) }, EditError::NoOutput(OutputId(5))),
+            (Edit::SetPreviews { frame: FrameId(99), preview: None, aligned_preview: None }, EditError::NoFrame(FrameId(99))),
             (
                 Edit::SetAlignment {
                     run: None,

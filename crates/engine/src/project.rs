@@ -6,7 +6,11 @@
 //!   development resolved with them ([`store_develop`], [`develop`]), florastack-raw's types;
 //! - the alignment settings, a preference group ([`align_settings`]), and an alignment run with what it found about
 //!   each frame and about the stack ([`alignment_edit`], [`stored_alignment`]; [`FrameReport`] and [`RunReport`] are
-//!   the shapes the reports take), florastack-align's types;
+//!   the shapes the reports take, with the motion found in each frame, [`FrameMotion`]), florastack-align's types;
+//! - the stack's defect mask, one of the project's maps, stored as a lossless image of black spots on white with a
+//!   summary of it as its cache key ([`store_defect_mask`], [`read_defect_mask`], [`MaskSummary`]);
+//! - the frames' previews for the filmstrip, as shot and aligned, keyed by what they were made from
+//!   ([`write_frame_preview`], [`write_aligned_preview`], [`preview_key`], [`aligned_preview_key`]);
 //! - each frame's EXIF summary ([`add_frame`], [`read_frame_file`], [`exif`]), florastack-codecs';
 //! - the cache's images, written losslessly as Deflate-compressed TIFF at their own sample type, color space and
 //!   range ([`write_image`], [`read_image`]), and previews, small sRGB JPEGs ([`write_preview`]). They take a
@@ -17,16 +21,19 @@
 
 use std::path::Path;
 
-use florastack_align::{AlignError, AlignSettings, Canvas, End, Flag, Framing, ProcessingOrder, StackAlignment, Status};
+use florastack_align::{
+    AlignError, AlignSettings, Canvas, DefectMask, End, Flag, Framing, MotionRegion, ProcessingOrder, StackAlignment, Status, aligned_thumbnail,
+    thumbnail,
+};
 use florastack_codecs::{
     BitDepth, ChromaSubsampling, CodecError, ExifSummary, OrientationPolicy, OutputFormat, OutputMetadata, OutputProfile, OutputSpec, ReadOptions,
     TiffCompression,
 };
 use florastack_core::ops::{OpError, resize};
-use florastack_core::{AnyImage, Image, SampleFormat};
+use florastack_core::{Affine, AnyImage, Image, SampleFormat};
 use florastack_project::{
-    AlignedFrame, Alignment, AlignmentRun, Area, CacheDir, CacheRef, Develop, Edit, Frame, FrameFile, FrameId, Group, Project, ProjectError, Value,
-    from_data, to_data,
+    AlignedFrame, Alignment, AlignmentRun, Area, CacheDir, CacheRef, ContentHash, Develop, Edit, Frame, FrameFile, FrameId, Group, MapName, Project,
+    ProjectError, Value, from_data, to_data,
 };
 use florastack_raw::{DevelopSettings, RawDevelop, RawError, Resolved};
 use schemars::JsonSchema;
@@ -165,8 +172,9 @@ pub fn read_image(folder: &impl AsRef<CacheDir>, reference: &CacheRef) -> Result
 /// The long side of a preview, in pixels.
 pub const PREVIEW_SIDE: usize = 512;
 
-/// Writes a preview of a linear image into `previews/`: at most [`PREVIEW_SIDE`] pixels on its long side, an sRGB JPEG.
-pub fn write_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f32>) -> Result<CacheRef, ProjectDataError> {
+/// Writes a preview of a linear image into `previews/`: at most [`PREVIEW_SIDE`] pixels on its long side, an sRGB JPEG,
+/// with `key` (what it was made from).
+pub fn write_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f32>, key: Option<String>) -> Result<CacheRef, ProjectDataError> {
     let (w, h) = (image.width(), image.height());
     let long = w.max(h);
     let small;
@@ -184,7 +192,7 @@ pub fn write_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f3
         extended_range: false,
     };
     let encoded = florastack_codecs::write(&AnyImage::F32(image.clone()), &spec, &OutputMetadata::default())?;
-    Ok(folder.as_ref().store(Area::Previews, stem, "jpg", &encoded.bytes, None)?)
+    Ok(folder.as_ref().store(Area::Previews, stem, "jpg", &encoded.bytes, key)?)
 }
 
 /// The alignment settings the preferences hold, every key they don't set at its default, checked.
@@ -192,6 +200,19 @@ pub fn align_settings(project: &Project) -> Result<AlignSettings, ProjectDataErr
     let settings: AlignSettings = project.preferences.get(Group::Align)?;
     settings.validate()?;
     Ok(settings)
+}
+
+/// What moved in a frame against its neighbor, once aligned, as a frame's report stores it (florastack-align's
+/// `Motion`, without its map).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FrameMotion {
+    /// The share of the frame's measured cells that moved, from 0 to 1.
+    pub score: f64,
+    /// The largest displacement measured, in frame pixels.
+    pub peak: f64,
+    /// The regions that moved, in frame pixels, largest first.
+    pub regions: Vec<MotionRegion>,
 }
 
 /// What alignment found about a frame beyond its transform, as a project stores it (`Frame::report`).
@@ -207,6 +228,9 @@ pub struct FrameReport {
     /// The share of the stack's in-focus detail on which the frame is among the sharpest, from 0 to 1, when it could
     /// be told.
     pub sharp_fraction: Option<f64>,
+    /// What moved in it against its reference; none for the master and rejected frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<FrameMotion>,
 }
 
 /// What an alignment run found about the stack, as a project stores it (`AlignmentRun::report`).
@@ -260,6 +284,7 @@ pub fn alignment_edit(
                     flags: f.flags.clone(),
                     reference: f.reference.map(id).transpose()?,
                     sharp_fraction: f.sharp_fraction,
+                    motion: f.motion.as_ref().map(|m| FrameMotion { score: m.score, peak: m.peak, regions: m.regions.clone() }),
                 };
                 (Some(Alignment { transform: f.transform, brightness_gain: f.gain, quality: f.score }), Some(to_data("frame alignment", &report)?))
             }
@@ -321,4 +346,120 @@ pub fn stored_alignment(project: &Project) -> Result<Option<StoredAlignment>, Pr
 /// A frame's alignment report, if it has one this version can read.
 pub fn frame_report(frame: &Frame) -> Option<FrameReport> {
     frame.report.as_ref().and_then(|r| from_data("frame alignment", r).ok())
+}
+
+/// The name of the stack's defect mask among the project's maps.
+pub const DEFECTS: &str = "defects";
+
+/// The defect mask's name, as a [`MapName`] (always a valid one).
+pub fn defects_map() -> Option<MapName> {
+    MapName::new(DEFECTS).ok()
+}
+
+/// Where a defect mask came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaskSource {
+    /// Detected from the frames (`florastack_align::DefectDetector`).
+    Detected,
+    /// Imported from an image file.
+    Imported,
+}
+
+/// What a stored defect mask is: the summary its cache key holds, so that it can be told without reading the mask.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MaskSummary {
+    pub source: MaskSource,
+    /// Its size, which must be the frames'.
+    pub width: usize,
+    pub height: usize,
+    /// How many pixels are masked, in how many spots (8-connected groups).
+    pub pixels: usize,
+    pub spots: usize,
+}
+
+impl MaskSummary {
+    pub fn of(mask: &DefectMask, source: MaskSource) -> MaskSummary {
+        MaskSummary { source, width: mask.width(), height: mask.height(), pixels: mask.count(), spots: mask.spots().len() }
+    }
+}
+
+/// Writes a defect mask into the project's cache, losslessly, as an 8-bit image of black spots on white, with its
+/// summary as the key.
+pub fn store_defect_mask(folder: &impl AsRef<CacheDir>, mask: &DefectMask, source: MaskSource) -> Result<CacheRef, ProjectDataError> {
+    let key = serde_json::to_string(&MaskSummary::of(mask, source)).map_err(|source| ProjectError::Data { what: "defect mask summary", source })?;
+    write_image(folder, DEFECTS, &AnyImage::U8(mask.to_image()?), Some(key))
+}
+
+/// The project's defect mask, if it has one.
+pub fn defect_mask_ref(project: &Project) -> Option<&CacheRef> {
+    project.maps.iter().find(|(name, _)| name.as_str() == DEFECTS).map(|(_, r)| r)
+}
+
+/// A stored mask's summary, from its key; `None` when the key isn't one.
+pub fn mask_summary(reference: &CacheRef) -> Option<MaskSummary> {
+    reference.key.as_deref().and_then(|k| serde_json::from_str(k).ok())
+}
+
+/// Reads a defect mask from the project's cache.
+pub fn read_defect_mask(folder: &impl AsRef<CacheDir>, reference: &CacheRef) -> Result<DefectMask, ProjectDataError> {
+    mask_from_image(read_image(folder, reference)?)
+}
+
+/// The defect mask an image draws: black spots on white (`florastack_align::DefectMask::from_image`), whatever its
+/// sample type, on the values as stored.
+pub fn mask_from_image(image: AnyImage) -> Result<DefectMask, ProjectDataError> {
+    let image = match image {
+        AnyImage::U8(i) => i.convert::<f32>().map_err(AlignError::from)?,
+        AnyImage::U16(i) => i.convert::<f32>().map_err(AlignError::from)?,
+        AnyImage::F32(i) => i,
+    };
+    Ok(DefectMask::from_image(&image)?)
+}
+
+/// Reads a defect mask from an image file the user made or edited: any format florastack-codecs reads, turned upright
+/// as the frames are.
+pub fn read_mask_file(path: &Path) -> Result<DefectMask, ProjectDataError> {
+    let bytes = std::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+    mask_from_image(florastack_codecs::read(&bytes, &ReadOptions::default())?.image)
+}
+
+/// The key of a frame's preview: the frame's contents, the develop settings it was developed with and the defect mask
+/// it was inpainted with. A preview whose key differs is out of date.
+pub fn preview_key(frame: &Frame, develop: &DevelopSettings, mask: Option<&CacheRef>) -> Result<String, ProjectDataError> {
+    let develop = serde_json::to_vec(develop).map_err(|source| ProjectError::Data { what: "develop settings", source })?;
+    let mask = mask.map_or_else(|| "none".to_owned(), |m| m.hash.to_string());
+    Ok(format!("frame {} develop {} defects {mask}", frame.hash, ContentHash::of(&develop)))
+}
+
+/// The key of a frame's aligned preview: its preview, its transform and the canvas, hashed.
+pub fn aligned_preview_key(preview: &CacheRef, transform: &Affine, canvas: &Canvas) -> String {
+    let text = format!("{} {:?} {} {} {:?}", preview.hash, transform.m, canvas.width, canvas.height, canvas.to_master.m);
+    format!("aligned {}", ContentHash::of(text.as_bytes()))
+}
+
+/// Writes the preview of frame `id`, read and developed as `image` (and inpainted), keyed `key`.
+pub fn write_frame_preview(folder: &impl AsRef<CacheDir>, id: FrameId, image: &Image<f32>, key: String) -> Result<CacheRef, ProjectDataError> {
+    let small = thumbnail(image, PREVIEW_SIDE)?;
+    write_preview(folder, &format!("frame-{}", id.get()), &small, Some(key))
+}
+
+/// Writes the aligned preview of frame `id`, from its preview: a `width` x `height` frame with alignment `transform`,
+/// warped onto `canvas` at the preview's scale; what the frame doesn't cover is black.
+pub fn write_aligned_preview(
+    folder: &impl AsRef<CacheDir>,
+    id: FrameId,
+    preview: &CacheRef,
+    (width, height): (usize, usize),
+    transform: &Affine,
+    canvas: &Canvas,
+) -> Result<CacheRef, ProjectDataError> {
+    let small = match read_image(folder, preview)? {
+        AnyImage::U8(i) => i.to_linear_f32().map_err(AlignError::from)?,
+        AnyImage::U16(i) => i.to_linear_f32().map_err(AlignError::from)?,
+        AnyImage::F32(i) => i,
+    };
+    let aligned = aligned_thumbnail(&small, width, height, transform, canvas)?;
+    write_preview(folder, &format!("frame-{}-aligned", id.get()), &aligned.image, Some(aligned_preview_key(preview, transform, canvas)))
 }

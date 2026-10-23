@@ -205,7 +205,7 @@ struct Written {
 }
 
 /// Writes `bytes` to `path` through a temporary file in the same folder, renamed over it once complete.
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
     let write = |source| CommandError::from(ProjectError::Write { path: path.to_path_buf(), source });
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let temp = path.with_file_name(format!(".{name}.{}.part", std::process::id()));

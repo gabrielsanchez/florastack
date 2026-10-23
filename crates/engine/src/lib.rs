@@ -13,8 +13,9 @@
 //! - [`frames`]: reading a stack's frames, each file sent to the crate that reads it (camera RAW and DNG files to
 //!   florastack-raw, developed alike; 16-bit TIFF and other image files to florastack-codecs, unchanged).
 //! - [`project`]: the project with the other crates' types: the develop settings and their resolution, the alignment
-//!   settings and runs with their reports, each frame's EXIF summary, which florastack-project stores as data, and the
-//!   cache's images (lossless TIFF) and previews (JPEG), which it stores as bytes.
+//!   settings and runs with their reports (each frame's flags and motion), each frame's EXIF summary, which
+//!   florastack-project stores as data, and the cache's images (lossless TIFF: the defect mask, outputs) and previews
+//!   (JPEG: the filmstrip's, as shot and aligned), which it stores as bytes.
 
 pub mod commands;
 pub mod engine;

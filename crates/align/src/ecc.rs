@@ -553,7 +553,7 @@ fn dot<const K: usize>(a: &[f64; K], b: &[f64; K]) -> f64 {
 
 /// The lower-triangular `L` with `L L^T = h`, or `None` unless `h` is clearly positive definite.
 #[allow(clippy::needless_range_loop)] // Matrix arithmetic reads best with indices.
-fn cholesky<const K: usize>(h: &[[f64; K]; K]) -> Option<[[f64; K]; K]> {
+pub(crate) fn cholesky<const K: usize>(h: &[[f64; K]; K]) -> Option<[[f64; K]; K]> {
     let mut l = [[0.0; K]; K];
     for i in 0..K {
         for j in 0..=i {
@@ -577,7 +577,7 @@ fn cholesky<const K: usize>(h: &[[f64; K]; K]) -> Option<[[f64; K]; K]> {
 
 /// `x` with `L L^T x = b`.
 #[allow(clippy::needless_range_loop)] // Matrix arithmetic reads best with indices.
-fn solve_cholesky<const K: usize>(l: &[[f64; K]; K], b: &[f64; K]) -> [f64; K] {
+pub(crate) fn solve_cholesky<const K: usize>(l: &[[f64; K]; K], b: &[f64; K]) -> [f64; K] {
     let mut y = [0.0; K];
     for i in 0..K {
         let mut sum = b[i];

@@ -28,6 +28,23 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
     // The fixture's frames are too small to align: the cases that align disable them and add these, in a shuffled order.
     let stack = common::synthetic_frames(dir, "synthetic", 160, 120, &common::breathing(5, 0.02, None, 9));
     let shuffled = [3, 0, 4, 1, 2].map(|i| stack[i].clone());
+    // A defect mask the size of the synthetic frames: a black spot on white.
+    let mask = dir.join("mask.png");
+    let drawn =
+        florastack_core::Image::from_fn(
+            160,
+            120,
+            1,
+            florastack_core::ColorSpace::SRGB,
+            |x, y, _| if x.abs_diff(40) + y.abs_diff(30) < 4 { 0_u8 } else { 255 },
+        )
+        .unwrap();
+    let png = florastack_codecs::OutputSpec::new(florastack_codecs::Format::Png).unwrap();
+    std::fs::write(
+        &mask,
+        florastack_codecs::write(&florastack_core::AnyImage::U8(drawn), &png, &florastack_codecs::OutputMetadata::default()).unwrap().bytes,
+    )
+    .unwrap();
     let aligning = || {
         vec![
             ("project.setFramesEnabled", format!(r#"{{ "frames": [{a}, {b}, {c}], "enabled": false }}"#)),
@@ -55,6 +72,13 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
         },
         Case { name: "align.run", setup: aligning(), params: "{}".into() },
         Case { name: "align.sortByScale", setup: aligning(), params: "{}".into() },
+        Case { name: "defects.detect", setup: aligning(), params: "{}".into() },
+        Case { name: "defects.import", setup: none(), params: format!(r#"{{ "path": {} }}"#, quoted(&mask)) },
+        Case {
+            name: "defects.clear",
+            setup: vec![("defects.import", format!(r#"{{ "path": {} }}"#, quoted(&mask))), ("project.save", "{}".into())],
+            params: "{}".into(),
+        },
         Case { name: "output.rename", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Renamed" }}"#) },
         Case { name: "output.remove", setup: none(), params: format!(r#"{{ "output": {output} }}"#) },
         Case {

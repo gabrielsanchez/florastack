@@ -133,7 +133,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
 
     // The file is readable JSON that starts with its format and version.
     let text = std::fs::read_to_string(folder.project_file()).unwrap();
-    assert!(text.starts_with("{\n  \"format\": \"florastack-project\",\n  \"version\": 2,\n"), "{}", &text[..80]);
+    assert!(text.starts_with("{\n  \"format\": \"florastack-project\",\n  \"version\": 3,\n"), "{}", &text[..80]);
     assert_eq!(schema::parse(text.as_bytes()).unwrap(), reopened);
 }
 

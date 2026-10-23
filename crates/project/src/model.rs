@@ -179,9 +179,13 @@ pub struct Frame {
     /// The frame developed and aligned, losslessly, as stacking and retouching read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aligned: Option<CacheRef>,
-    /// A small JPEG for the frame list and the filmstrip.
+    /// A small JPEG for the frame list and the filmstrip, as the frame was shot (developed, with its sensor defects
+    /// inpainted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<CacheRef>,
+    /// The same, aligned onto the output's canvas, for scrubbing through the stack in the filmstrip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aligned_preview: Option<CacheRef>,
     /// Other per-frame maps, such as a motion map.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub maps: Maps,
@@ -379,7 +383,7 @@ pub struct Project {
     /// Every processing preference, by group: what presets set.
     #[serde(default)]
     pub preferences: Preferences,
-    /// Maps of the whole stack, such as the dust mask (in sensor coordinates). Which output pixels each frame covers
+    /// Maps of the whole stack, such as the defect mask (`defects`, in sensor coordinates). Which output pixels each frame covers
     /// follows from its alignment and isn't stored (florastack-align's `Coverage`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub maps: Maps,
@@ -487,6 +491,7 @@ impl Project {
             report: None,
             aligned: None,
             preview: None,
+            aligned_preview: None,
             maps: Maps::new(),
         });
         id
@@ -550,7 +555,7 @@ impl Project {
     pub fn cache_refs(&self) -> Vec<&CacheRef> {
         let mut refs: Vec<&CacheRef> = Vec::new();
         for f in &self.frames {
-            refs.extend(f.aligned.iter().chain(&f.preview).chain(f.maps.values()));
+            refs.extend(f.aligned.iter().chain(&f.preview).chain(&f.aligned_preview).chain(f.maps.values()));
         }
         refs.extend(self.maps.values());
         for o in &self.outputs {

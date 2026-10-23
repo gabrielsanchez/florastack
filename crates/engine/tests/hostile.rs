@@ -67,6 +67,13 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("align.set", json!({ "resolution": 1e30 })),
         ("align.set", json!({ "reverse_order": "yes" })),
         ("align.set", json!({ "max_rotation": null })),
+        ("align.set", json!({ "min_motion": 0 })),
+        ("align.set", json!({ "min_motion": 1e9 })),
+        ("align.set", json!({ "detect_defects": "yes" })),
+        ("defects.import", json!({ "path": "" })),
+        ("defects.import", json!({ "path": "a\u{0}b" })),
+        ("defects.export", json!({ "path": " " })),
+        ("defects.export", json!({ "path": "x.png", "overwrite": "yes" })),
         (
             "output.save",
             json!({ "output": 1, "path": "x.jpg", "spec": { "format": { "format": "jpeg", "quality": 0, "subsampling": "s444" }, "depth": "u8" } }),
@@ -104,7 +111,7 @@ fn deep_or_huge_json_is_refused() {
 
 /// Commands left out of the arbitrary-JSON test: they create, move or write files outside the test's folders when
 /// their parameters happen to be valid paths, such as `"."`.
-const WRITES_FILES: [&str; 4] = ["project.new", "project.trashOrphans", "preset.save", "output.save"];
+const WRITES_FILES: [&str; 5] = ["project.new", "project.trashOrphans", "preset.save", "output.save", "defects.export"];
 
 fn leaf() -> impl Strategy<Value = Value> {
     prop_oneof![

@@ -111,6 +111,24 @@ fn every_command_dispatches_from_json() {
     assert_eq!(info["run"]["frames"].as_array().unwrap().len(), 6);
     let sorted = calls.run("align.sortByScale", "{}");
     assert_eq!(sorted["frameOrder"].as_array().unwrap().len(), 6, "{sorted}");
+    // Aligning made the filmstrip's previews, as shot and aligned.
+    let filmstrip = calls.run("filmstrip.list", "{}");
+    assert_eq!((filmstrip["stale"].as_u64(), filmstrip["frames"].as_array().unwrap().len()), (Some(0), 6), "{filmstrip}");
+    assert!(Path::new(filmstrip["frames"][0]["alignedPreview"].as_str().unwrap()).is_file(), "{filmstrip}");
+    // A defect mask, detected, written out, read back and removed; a new mask makes the previews out of date.
+    assert_eq!(calls.run("defects.info", "{}")["mask"], false);
+    let detected = calls.run("defects.detect", "{}");
+    assert_eq!((&detected["summary"]["source"], &detected["summary"]["width"]), (&json!("detected"), &json!(160)), "{detected}");
+    let mask = dir.path().join("mask.png");
+    let exported = calls.run("defects.export", &format!(r#"{{ "path": {} }}"#, quoted(&mask)));
+    assert_eq!(exported["bytes"].as_u64().unwrap(), std::fs::metadata(&mask).unwrap().len());
+    let imported = calls.run("defects.import", &format!(r#"{{ "path": {} }}"#, quoted(&mask)));
+    assert_eq!(imported["summary"]["source"], "imported");
+    assert_eq!(calls.run("filmstrip.list", "{}")["stale"], 12);
+    let updated = calls.run("filmstrip.update", "{}");
+    assert_eq!((&updated["previews"], &updated["alignedPreviews"]), (&json!(6), &json!(6)), "{updated}");
+    assert_eq!(calls.run("filmstrip.list", "{}")["stale"], 0);
+    assert_eq!(calls.run("defects.clear", "{}")["cleared"], true);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);
 

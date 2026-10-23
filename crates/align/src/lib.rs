@@ -1,7 +1,7 @@
 //! Frame alignment: a per-frame shift, scale, rotation and brightness gain relative to a master frame, stack ordering and
-//! output framing, and the defect handling (dust, hot pixels, subject movement) that has to run in sensor coordinates
-//! before frames are warped. Its CPU code is the reference that the GPU kernels are tested against. It may depend only on
-//! `florastack-core`.
+//! output framing, the defect handling (dust, hot pixels) that has to run in sensor coordinates before frames are
+//! warped, subject movement and the filmstrip's previews. Its CPU code is the reference that the GPU kernels are tested
+//! against. It may depend only on `florastack-core`.
 //!
 //! # Aligning a stack
 //!
@@ -51,15 +51,32 @@
 //!   canvas with its coverage (`coverage.rs`).
 //! - **Sorting by scale** ([`scale_order`], [`align_by_scale`]): a first pass recovers each frame's scale, the frames
 //!   are put in scale order, which is focus order, and aligned again (`sort.rs`).
+//!
+//! # Defects, movement and the filmstrip
+//!
+//! - **Sensor defects** ([`DefectMask`], `defects.rs`): dust and hot pixels sit at the same sensor pixels in every
+//!   frame, so they are repaired there, before alignment warps the frames into trails of copies. A mask comes from the
+//!   user (an image of black spots on white, [`DefectMask::from_image`]) or from the frames ([`DefectDetector`],
+//!   [`detect_defects`]: darker than all around by the same factor in every frame, or brighter than the neighbors in
+//!   most), can be saved as such an image ([`DefectMask::to_image`]), and is filled in each frame from the pixels
+//!   around it ([`inpaint`]).
+//! - **Movement** ([`Motion`], [`MotionMap`], `motion.rs`): each frame's residual motion against the neighbor it was
+//!   aligned to, cell by cell, by Lucas–Kanade with gain and defocus terms; the regions that moved where the frame is
+//!   in focus, a score, and [`Flag::Moved`].
+//! - **The filmstrip** ([`thumbnail`], [`aligned_thumbnail`], `filmstrip.rs`): small previews of each frame, as shot
+//!   and warped onto the output's canvas, for scrubbing through the stack.
 
 mod brightness;
 mod coverage;
+mod defects;
 mod ecc;
 mod error;
 mod fft;
+mod filmstrip;
 mod focus;
 mod framing;
 mod model;
+mod motion;
 mod order;
 mod phase;
 mod prepare;
@@ -68,11 +85,16 @@ mod sort;
 mod stack;
 
 pub use coverage::{Coverage, Covered, DEFAULT_FEATHER, coverage_count, warp_to_canvas};
+pub use defects::{
+    DefectDetector, DefectMask, MAX_DETECTION_FRAMES, MAX_SPOTS, MIN_DETECTION_FRAMES, Spot, detect_defects, detection_frames, inpaint,
+};
 pub use error::AlignError;
+pub use filmstrip::{MIN_THUMBNAIL_SIDE, aligned_thumbnail, thumbnail};
 pub use framing::{Canvas, Framing, MAX_FACTOR};
 pub use model::Similarity;
+pub use motion::{Motion, MotionCell, MotionMap, MotionRegion};
 pub use order::{End, NARROW_MIN, ProcessingOrder, align_ordered, narrow_end, order_stack};
 pub use prepare::MIN_SIDE;
-pub use settings::{AlignSettings, DEFAULT_MIN_SHARP_FRACTION, MAX_RESOLUTION, MIN_RESOLUTION, Term};
+pub use settings::{AlignSettings, DEFAULT_MIN_MOTION, DEFAULT_MIN_SHARP_FRACTION, MAX_RESOLUTION, MIN_RESOLUTION, Term};
 pub use sort::{MIN_SPREAD, align_by_scale, measuring_settings, scale_order};
 pub use stack::{Flag, FrameAlignment, StackAligner, StackAlignment, Status, align_frames};
