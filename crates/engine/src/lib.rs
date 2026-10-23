@@ -12,9 +12,9 @@
 //! - [`jobs`]: long commands as jobs on workers, in lanes, with progress, ETAs and cancellation at checkpoints.
 //! - [`frames`]: reading a stack's frames, each file sent to the crate that reads it (camera RAW and DNG files to
 //!   florastack-raw, developed alike; 16-bit TIFF and other image files to florastack-codecs, unchanged).
-//! - [`project`]: the project with the other crates' types: the develop settings and their resolution, each frame's
-//!   EXIF summary, which florastack-project stores as data, and the cache's images (lossless TIFF) and previews
-//!   (JPEG), which it stores as bytes.
+//! - [`project`]: the project with the other crates' types: the develop settings and their resolution, the alignment
+//!   settings and runs with their reports, each frame's EXIF summary, which florastack-project stores as data, and the
+//!   cache's images (lossless TIFF) and previews (JPEG), which it stores as bytes.
 
 pub mod commands;
 pub mod engine;
@@ -49,6 +49,8 @@ pub use florastack_codecs::{
     BitDepth, ChromaSubsampling, DngCompression, DngLook, ExifSummary, ExrCompression, Format, OrientationPolicy, OutputFormat, OutputProfile,
     OutputSpec, ReadOptions, TiffCompression, WideSpace,
 };
+// The alignment settings, and what alignment reports about frames and stacks.
+pub use florastack_align::{AlignSettings, End, Flag, Framing, Term};
 // The RAW develop settings.
 pub use florastack_raw::{ChromaticAberration, Demosaic, DevelopSettings, Highlights, NoiseReduction, Quality, RawDevelop, Resolved, WhiteBalance};
 
@@ -58,7 +60,7 @@ pub mod model {
     #[cfg(not(target_arch = "wasm32"))]
     pub use florastack_project::SystemTrash;
     pub use florastack_project::{
-        Alignment, Aspects, CacheRef, ContentHash, FolderTrash, Frame, FrameId, FrameState, Group, Input, LayerId, MapName, Orphan, Output, OutputId,
-        Preferences, Preset, Project, RetouchLayer, Timestamp, Trash,
+        AlignedFrame, Alignment, AlignmentRun, Aspects, CacheRef, ContentHash, FolderTrash, Frame, FrameId, FrameState, Group, Input, LayerId,
+        MapName, Orphan, Output, OutputId, Preferences, Preset, Project, RetouchLayer, Timestamp, Trash,
     };
 }

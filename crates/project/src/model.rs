@@ -3,10 +3,11 @@
 //!
 //! What other crates define is kept here as JSON data ([`Value`]) that this crate stores and never interprets: each
 //! frame's EXIF summary (florastack-codecs), the stack's develop settings and their resolution (florastack-raw), the
-//! alignment and stacking settings (florastack-align and florastack-stack), each output's parameters
-//! (florastack-stack) and its retouch strokes (florastack-retouch). The engine converts them to and from their crates'
-//! types. Everything else, the frame list, the alignment results, the outputs and the cache references, is this
-//! crate's own.
+//! alignment and stacking settings (florastack-align and florastack-stack), what alignment reports about each frame
+//! and about the stack beyond its transforms (florastack-align's flags, sharp-content fractions, narrow end and
+//! processing order), each output's parameters (florastack-stack) and its retouch strokes (florastack-retouch). The
+//! engine converts them to and from their crates' types. Everything else, the frame list, the alignment transforms, the
+//! outputs and the cache references, is this crate's own.
 //!
 //! Frames, outputs and retouch layers have ids that are never reused within a project ([`FrameId`], [`OutputId`],
 //! [`LayerId`]), so that references to them survive reordering and removal. A reference may name something that has
@@ -171,6 +172,10 @@ pub struct Frame {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment: Option<Alignment>,
+    /// What alignment found out about the frame beyond its transform (florastack-align's flags, such as out of focus,
+    /// and its sharp-content fraction, as the engine stores them); set with its alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<Value>,
     /// The frame developed and aligned, losslessly, as stacking and retouching read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aligned: Option<CacheRef>,
@@ -253,14 +258,18 @@ pub struct Develop {
     pub resolved: Value,
 }
 
-/// The stack's alignment run: the master frame that every frame's [`Alignment`] is relative to, and the alignment
-/// settings it ran with.
+/// The stack's alignment run: the master frame that every frame's [`Alignment`] is relative to, the alignment
+/// settings it ran with, and what it found about the stack.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AlignmentRun {
     pub master: FrameId,
     /// florastack-align's settings.
     pub settings: Value,
+    /// What the run found about the stack (the frames' size, the narrow end and the order the stack is processed in,
+    /// as the engine stores them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<Value>,
 }
 
 /// What an output was made from.
@@ -370,7 +379,8 @@ pub struct Project {
     /// Every processing preference, by group: what presets set.
     #[serde(default)]
     pub preferences: Preferences,
-    /// Maps of the whole stack, such as the dust mask (in sensor coordinates) or the coverage mask.
+    /// Maps of the whole stack, such as the dust mask (in sensor coordinates). Which output pixels each frame covers
+    /// follows from its alignment and isn't stored (florastack-align's `Coverage`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub maps: Maps,
     /// The results, oldest first.
@@ -474,6 +484,7 @@ impl Project {
             exif,
             enabled: true,
             alignment: None,
+            report: None,
             aligned: None,
             preview: None,
             maps: Maps::new(),

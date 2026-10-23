@@ -51,7 +51,7 @@ pub mod time;
 pub mod trash;
 
 pub use cache::{Area, CacheDir, CachePath, CacheRef, CacheWriter};
-pub use edit::{Aspects, Edit, EditError};
+pub use edit::{AlignedFrame, Aspects, Edit, EditError};
 pub use error::{CacheProblem, MigrationError, PresetError, Problem, ProjectError, SchemaError};
 pub use folder::{FrameState, ProjectFolder, folder_name};
 pub use hash::ContentHash;

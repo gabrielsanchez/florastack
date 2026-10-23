@@ -13,15 +13,20 @@
 //! frame whose match is ambiguous, as on a repeating pattern, is flagged only.
 //!
 //! Only three prepared frames are held at a time (the master's, the last accepted one's and the new one's), however
-//! long the stack: the caller reads each frame when it is asked for and can drop it once [`StackAligner::add`]
-//! returns.
+//! long the stack, plus each frame's small focus map (`focus.rs`): the caller reads each frame when it is asked for
+//! and can drop it once [`StackAligner::add`] returns. Once every frame is in, [`StackAligner::finish`] compares the
+//! focus maps, through the frames' transforms, and flags the frames that are out of focus ([`Flag::OutOfFocus`]).
 
 use florastack_core::{Affine, Image, Monitor};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::brightness::gain;
 use crate::ecc::{self, LIMIT_TOLERANCE};
 use crate::error::AlignError;
+use crate::focus::{FocusMap, sharp_fractions};
+use crate::framing::{Canvas, Framing};
 use crate::model::{Geometry, Params, Similarity};
 use crate::prepare::Prepared;
 use crate::settings::{AlignSettings, Term};
@@ -30,7 +35,8 @@ use crate::settings::{AlignSettings, Term};
 const AMBIGUOUS: f64 = 0.5;
 
 /// Whether a frame was aligned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum Status {
     /// The master frame, which the others are aligned to.
     Master,
@@ -39,8 +45,9 @@ pub enum Status {
     Rejected,
 }
 
-/// Something about a frame's alignment that needs a look.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Something about a frame that needs a look: its alignment, or its focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum Flag {
     /// The term reached its limit (relative to the master) and would have gone beyond it.
     Limit(Term),
@@ -53,6 +60,10 @@ pub enum Flag {
     NoMatch,
     /// Refining against the master was asked for, but didn't match well enough: the chained estimate stays.
     NotRefined,
+    /// The frame has no in-focus detail: its sharp-content fraction is less than
+    /// [`AlignSettings::min_sharp_fraction`] (`focus.rs`). Only flagged, never rejected: the user decides whether to
+    /// leave it out.
+    OutOfFocus,
 }
 
 impl Flag {
@@ -82,6 +93,11 @@ pub struct FrameAlignment {
     pub reference: Option<usize>,
     pub status: Status,
     pub flags: Vec<Flag>,
+    /// The share of the stack's in-focus detail on which this frame is among the sharpest, from 0 to 1 (`focus.rs`):
+    /// near 0 for a frame focused where the subject isn't. `None` when it can't be told (fewer than three frames, too
+    /// little detail that some frames show sharp and others blurred, or a rejected frame, whose transform is only its
+    /// reference's), and until the stack is finished.
+    pub sharp_fraction: Option<f64>,
 }
 
 impl FrameAlignment {
@@ -94,6 +110,7 @@ impl FrameAlignment {
             reference: None,
             status: Status::Master,
             flags: Vec::new(),
+            sharp_fraction: None,
         }
     }
 }
@@ -103,6 +120,59 @@ impl FrameAlignment {
 pub struct StackAlignment {
     pub master: usize,
     pub frames: Vec<FrameAlignment>,
+    /// The frames' size, in pixels, which the transforms are in.
+    pub width: usize,
+    pub height: usize,
+}
+
+impl StackAlignment {
+    /// The same alignment relative to frame `master` instead: each frame's transform from the new master's pixels is
+    /// the inverse of the new master's transform followed by its own, and its gain is divided by the new master's.
+    /// Scores, references, flags and sharp-content fractions stay; the new master's status becomes [`Status::Master`]
+    /// and the old one's [`Status::Aligned`]. Rebase onto a frame that was aligned: a rejected frame's transform is
+    /// only its reference's.
+    pub fn rebased(&self, master: usize) -> Result<StackAlignment, AlignError> {
+        let base = self.frames.get(master).ok_or(AlignError::Master { master, frames: self.frames.len() })?;
+        if master == self.master {
+            return Ok(self.clone());
+        }
+        let inverse = base.similarity.inverse();
+        if !inverse.is_finite() {
+            return Err(AlignError::Transform { index: master });
+        }
+        let base_gain = if base.gain.is_finite() && base.gain > 0.0 { base.gain } else { 1.0 };
+        let frames = self
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let similarity = if i == master { Similarity::IDENTITY } else { inverse.then(&f.similarity) };
+                let status = match f.status {
+                    _ if i == master => Status::Master,
+                    Status::Master => Status::Aligned,
+                    other => other,
+                };
+                FrameAlignment {
+                    transform: similarity.to_affine(self.width, self.height),
+                    similarity,
+                    gain: if i == master { 1.0 } else { f.gain / base_gain },
+                    status,
+                    ..f.clone()
+                }
+            })
+            .collect();
+        Ok(StackAlignment { master, frames, width: self.width, height: self.height })
+    }
+
+    /// The output canvas `framing` gives this alignment's frames (`framing.rs`): the frames that weren't rejected,
+    /// with `narrow_frame`, the frame at the stack's narrow end ([`crate::ProcessingOrder::narrow_frame`]), for narrow
+    /// framing.
+    pub fn canvas(&self, framing: Framing, narrow_frame: Option<usize>) -> Result<Canvas, AlignError> {
+        let used: Vec<usize> = (0..self.frames.len()).filter(|&i| self.frames.get(i).is_some_and(|f| f.status != Status::Rejected)).collect();
+        let transforms: Vec<Affine> = used.iter().filter_map(|&i| self.frames.get(i).map(|f| f.transform)).collect();
+        let narrow = narrow_frame.and_then(|n| used.iter().position(|&i| i == n));
+        Canvas::new(framing, &transforms, self.width, self.height, narrow)
+    }
 }
 
 /// The last frame accepted in the current direction: what the next one is aligned to.
@@ -127,6 +197,8 @@ pub struct StackAligner {
     reference: Option<Prepared>,
     last: Option<Link>,
     results: Vec<Option<FrameAlignment>>,
+    /// Each frame's focus map, compared once every frame is in.
+    focus: Vec<Option<FocusMap>>,
 }
 
 impl StackAligner {
@@ -150,6 +222,7 @@ impl StackAligner {
             reference: None,
             last: None,
             results: vec![None; frames],
+            focus: vec![None; frames],
         })
     }
 
@@ -175,6 +248,9 @@ impl StackAligner {
         }
         monitor.checkpoint()?;
         let prepared = Prepared::new(frame, self.settings.resolution as usize, self.settings.brightness)?;
+        if let Some(slot) = self.focus.get_mut(index) {
+            *slot = Some(prepared.focus.clone());
+        }
         monitor.checkpoint()?;
         let result = if index == self.master {
             self.geometry = Some(Geometry::new(w, h, &self.settings));
@@ -191,13 +267,27 @@ impl StackAligner {
         Ok(result)
     }
 
-    /// Every frame's alignment, once every frame has been added.
+    /// Every frame's alignment, once every frame has been added, with their sharp-content fractions, and the frames
+    /// whose fraction is below [`AlignSettings::min_sharp_fraction`] flagged as out of focus.
     pub fn finish(self) -> Result<StackAlignment, AlignError> {
         let frames = self.results.len();
         let added = self.added;
         let results: Option<Vec<FrameAlignment>> = self.results.into_iter().collect();
-        let frames = results.ok_or(AlignError::Incomplete { added, frames })?;
-        Ok(StackAlignment { master: self.master, frames })
+        let mut frames = results.ok_or(AlignError::Incomplete { added, frames })?;
+        let (width, height) = self.geometry.map_or((0, 0), |g| (g.width, g.height));
+        let transforms: Vec<Affine> = frames.iter().map(|f| f.transform).collect();
+        let gains: Vec<f64> = frames.iter().map(|f| f.gain).collect();
+        // A rejected frame's transform is only its reference's: its map can't be laid over the others.
+        let maps: Vec<Option<FocusMap>> = self.focus.into_iter().zip(&frames).map(|(map, f)| map.filter(|_| f.status != Status::Rejected)).collect();
+        let found = sharp_fractions(&maps, &transforms, &gains, self.master);
+        debug!(peaked = found.peaked, cells = found.cells, fractions = ?found.fractions, "focus");
+        for (frame, fraction) in frames.iter_mut().zip(found.fractions) {
+            frame.sharp_fraction = fraction;
+            if fraction.is_some_and(|f| f < self.settings.min_sharp_fraction) {
+                frame.flags.push(Flag::OutOfFocus);
+            }
+        }
+        Ok(StackAlignment { master: self.master, frames, width, height })
     }
 
     /// Aligns frame `index`, which isn't the master, to the last frame accepted on its side of the master.
@@ -259,6 +349,7 @@ impl StackAligner {
             reference: Some(reference_index),
             status: if rejected { Status::Rejected } else { Status::Aligned },
             flags,
+            sharp_fraction: None,
         }
     }
 }

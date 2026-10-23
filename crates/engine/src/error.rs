@@ -4,6 +4,7 @@
 //! channel and MCP server pass on, and a message that says what failed and, where it can, what to do; the underlying
 //! error is kept as its source.
 
+use florastack_align::AlignError;
 use florastack_codecs::CodecError;
 use florastack_core::Cancelled;
 use florastack_project::{Aspects, EditError, ProjectError};
@@ -67,6 +68,9 @@ pub enum CommandError {
     Codec(Box<CodecError>),
     #[error(transparent)]
     Raw(Box<RawError>),
+    /// A stack that can't be aligned, ordered or framed (a frame that can't be matched is no error: it is flagged).
+    #[error(transparent)]
+    Align(Box<AlignError>),
     #[error("cannot start a worker for `{command}`")]
     Spawn {
         command: String,
@@ -95,9 +99,18 @@ macro_rules! boxed_from {
 
 boxed_from!(Project(ProjectError), Data(ProjectDataError), Frame(FrameError), Codec(CodecError), Raw(RawError));
 
+impl From<AlignError> for CommandError {
+    fn from(e: AlignError) -> CommandError {
+        match e {
+            AlignError::Cancelled(_) => CommandError::Cancelled,
+            other => CommandError::Align(Box::new(other)),
+        }
+    }
+}
+
 impl CommandError {
     /// A stable, machine-readable name for the kind of error: `unknownCommand`, `params`, `unavailable`, `conflict`,
-    /// `notFound`, `cancelled`, `project`, `frame`, `codec`, `raw`, `internal`.
+    /// `notFound`, `cancelled`, `project`, `frame`, `codec`, `raw`, `align`, `internal`.
     pub fn code(&self) -> &'static str {
         match self {
             CommandError::UnknownCommand { .. } => "unknownCommand",
@@ -109,10 +122,16 @@ impl CommandError {
             CommandError::Project(_) | CommandError::Edit(_) => "project",
             CommandError::Data(e) => match &**e {
                 ProjectDataError::Project(_) => "project",
-                ProjectDataError::Codec(_) | ProjectDataError::Frame(FrameError::Codec(_)) => "codec",
-                ProjectDataError::Raw(_) | ProjectDataError::Frame(FrameError::Raw(_)) => "raw",
+                ProjectDataError::Codec(_)
+                | ProjectDataError::Frame(FrameError::Codec(_))
+                | ProjectDataError::ReadFrame { source: FrameError::Codec(_), .. } => "codec",
+                ProjectDataError::Raw(_)
+                | ProjectDataError::Frame(FrameError::Raw(_))
+                | ProjectDataError::ReadFrame { source: FrameError::Raw(_), .. } => "raw",
                 ProjectDataError::Op(_) => "internal",
-                ProjectDataError::Frame(FrameError::Image(_)) => "frame",
+                ProjectDataError::Frame(FrameError::Image(_)) | ProjectDataError::ReadFrame { source: FrameError::Image(_), .. } => "frame",
+                ProjectDataError::Align(AlignError::Cancelled(_)) => "cancelled",
+                ProjectDataError::Align(_) => "align",
             },
             CommandError::Frame(e) => match &**e {
                 FrameError::Raw(_) => "raw",
@@ -121,6 +140,7 @@ impl CommandError {
             },
             CommandError::Codec(_) => "codec",
             CommandError::Raw(_) => "raw",
+            CommandError::Align(_) => "align",
             CommandError::Spawn { .. } | CommandError::Internal { .. } => "internal",
         }
     }

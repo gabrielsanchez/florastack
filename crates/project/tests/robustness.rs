@@ -31,15 +31,15 @@ const HASH: &str = "sha256:00000000000000000000000000000000000000000000000000000
 
 fn with(field: &str) -> String {
     format!(
-        r#"{{"format": "florastack-project", "version": 1, "name": null, "created": "2026-10-21T00:00:00Z",
+        r#"{{"format": "florastack-project", "version": 2, "name": null, "created": "2026-10-21T00:00:00Z",
             "modified": "2026-10-21T00:00:00Z", "next_id": 5, {field}}}"#
     )
 }
 
 #[test]
 fn a_newer_project_file_asks_for_an_update() {
-    let e = open(br#"{"format": "florastack-project", "version": 2, "name": "Future", "frames": {"in": "a new shape"}}"#);
-    assert!(matches!(e, ProjectError::Newer { found: 2, supported: 1, .. }), "{e:?}");
+    let e = open(br#"{"format": "florastack-project", "version": 3, "name": "Future", "frames": {"in": "a new shape"}}"#);
+    assert!(matches!(e, ProjectError::Newer { found: 3, supported: 2, .. }), "{e:?}");
     assert!(e.to_string().contains("update FloraStack"), "{e}");
     let e = open(br#"{"format": "florastack-project", "version": 18446744073709551615}"#);
     assert!(matches!(e, ProjectError::Newer { .. }), "{e:?}");
@@ -61,7 +61,7 @@ fn damaged_and_hostile_files_are_errors() {
     // Unknown, missing or ill-typed fields name what is wrong and where.
     let SchemaError::Content { source, .. } = damaged(with(r#""frams": []"#).as_bytes()) else { panic!() };
     assert!(source.to_string().contains("frams") && source.to_string().contains("line"), "{source}");
-    assert!(matches!(damaged(br#"{"format": "florastack-project", "version": 1, "name": null}"#), SchemaError::Content { .. }));
+    assert!(matches!(damaged(br#"{"format": "florastack-project", "version": 2, "name": null}"#), SchemaError::Content { .. }));
     assert!(matches!(damaged(with(r#""frames": "none""#).as_bytes()), SchemaError::Content { .. }));
     // Cache paths that would leave the project folder, and malformed hashes and times.
     let output = |path: &str, hash: &str, created: &str| {

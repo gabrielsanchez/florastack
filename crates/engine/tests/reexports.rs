@@ -4,11 +4,11 @@
 
 use std::any::type_name;
 
-use florastack_engine::model::{Aspects, FolderTrash, FrameId, Group, OutputId, Project, SystemTrash};
+use florastack_engine::model::{AlignedFrame, AlignmentRun, Aspects, FolderTrash, FrameId, Group, OutputId, Project, SystemTrash};
 use florastack_engine::{
-    AnyImage, BitDepth, ColorSpace, CommandError, DevelopSettings, DispatchOptions, Dispatched, Engine, EngineConfig, Event, ExifSummary, Format,
-    Image, InlineExecutor, JobState, Kind, Lane, ManualClock, Orientation, OrientationPolicy, OutputFormat, OutputSpec, ReadOptions, Registry,
-    TiffCompression, Value, WhiteBalance, branding, json,
+    AlignSettings, AnyImage, BitDepth, ColorSpace, CommandError, DevelopSettings, DispatchOptions, Dispatched, End, Engine, EngineConfig, Event,
+    ExifSummary, Flag, Format, Framing, Image, InlineExecutor, JobState, Kind, Lane, ManualClock, Orientation, OrientationPolicy, OutputFormat,
+    OutputSpec, ReadOptions, Registry, Term, TiffCompression, Value, WhiteBalance, branding, json,
 };
 
 #[test]
@@ -34,6 +34,13 @@ fn an_app_finds_what_it_needs_in_the_engine() {
         type_name::<Dispatched>(),
         type_name::<CommandError>(),
         type_name::<DispatchOptions>(),
+        type_name::<AlignSettings>(),
+        type_name::<Framing>(),
+        type_name::<Flag>(),
+        type_name::<End>(),
+        type_name::<Term>(),
+        type_name::<AlignmentRun>(),
+        type_name::<AlignedFrame>(),
     ];
     assert!(names.iter().all(|n| n.starts_with("florastack_")), "{names:?}");
     let image = Image::from_fn(2, 2, 1, ColorSpace::LINEAR, |_, _, _| 0.5_f32).unwrap();

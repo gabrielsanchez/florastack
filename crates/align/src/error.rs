@@ -1,5 +1,6 @@
-//! What can go wrong aligning a stack ([`AlignError`]). A frame that can't be matched is no error: it is flagged in
-//! its [`FrameAlignment`](crate::FrameAlignment), so that one bad frame doesn't stop the stack.
+//! What can go wrong aligning, ordering and framing a stack ([`AlignError`]). A frame that can't be matched, or that
+//! is out of focus, is no error: it is flagged in its [`FrameAlignment`](crate::FrameAlignment), so that one bad frame
+//! doesn't stop the stack.
 
 use florastack_core::ops::OpError;
 use florastack_core::{Cancelled, ImageError};
@@ -24,6 +25,24 @@ pub enum AlignError {
     /// The results were asked for before every frame was added.
     #[error("only {added} of the stack's {frames} frames have been aligned")]
     Incomplete { added: usize, frames: usize },
+    /// A frame's transform isn't finite or can't be inverted, so its field of view can't be placed.
+    #[error("the alignment of frame {index} can't be used for framing: it isn't finite or can't be inverted")]
+    Transform { index: usize },
+    #[error("the aligned frames have no area in common, so the output can't be cropped to it: a frame may be misaligned, or from another scene")]
+    NoCommonArea,
+    /// A framing would make an output far larger than the frames, which only wrong alignments do.
+    #[error(
+        "framing the output this way would make it {width}x{height} pixels, more than four times the frames' {frame_width}x{frame_height} on a side: a frame is misaligned"
+    )]
+    CanvasSize { width: usize, height: usize, frame_width: usize, frame_height: usize },
+    /// A rectangle that isn't inside the canvas it is asked of.
+    #[error("the rectangle {x},{y} {width}x{height} isn't inside the {canvas_width}x{canvas_height} output")]
+    Rect { x: usize, y: usize, width: usize, height: usize, canvas_width: usize, canvas_height: usize },
+    /// The frames' scales are too alike to sort them by.
+    #[error(
+        "the frames' scales differ by {spread:.2} pixels at the frame's corner at most, too little to sort them by: the stack has no focus breathing or magnification change to order it with"
+    )]
+    NoScaleChange { spread: f64 },
     #[error("alignment was cancelled")]
     Cancelled(#[from] Cancelled),
     #[error(transparent)]

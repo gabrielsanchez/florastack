@@ -48,6 +48,38 @@ impl Similarity {
         }
     }
 
+    /// The similarity about the center of a `width` x `height` frame that `transform` is, as [`Similarity::to_affine`]
+    /// makes it: `None` when it isn't one (it shears, mirrors or scales unevenly, beyond rounding) or isn't finite.
+    pub fn from_affine(transform: &Affine, width: usize, height: usize) -> Option<Similarity> {
+        if !transform.m.iter().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
+        // [[s cos, -s sin, ..], [s sin, s cos, ..]]
+        let [[a, b, _], [d, e, _]] = transform.m;
+        let scale = a.hypot(d);
+        let tolerance = 1e-9 * scale.max(1.0);
+        if scale <= 0.0 || (a - e).abs() > tolerance || (b + d).abs() > tolerance {
+            return None;
+        }
+        let c = center(width, height);
+        let (x, y) = transform.apply(c.0, c.1);
+        Some(Similarity { shift_x: x - c.0, shift_y: y - c.1, scale, rotation_deg: d.atan2(a).to_degrees() })
+    }
+
+    /// The transform that undoes this one, about the same center: `self.then(&self.inverse())` is the identity.
+    #[must_use]
+    pub fn inverse(&self) -> Similarity {
+        // x = c + R(-a) (y - c - t) / s: scale 1 / s, rotation -a, shift -R(-a) t / s.
+        let (sin, cos) = self.rotation_deg.to_radians().sin_cos();
+        let s = self.scale;
+        Similarity {
+            shift_x: -(cos * self.shift_x + sin * self.shift_y) / s,
+            shift_y: -(-sin * self.shift_x + cos * self.shift_y) / s,
+            scale: 1.0 / s,
+            rotation_deg: -self.rotation_deg,
+        }
+    }
+
     /// Whether every term is finite.
     pub fn is_finite(&self) -> bool {
         [self.shift_x, self.shift_y, self.scale, self.rotation_deg].iter().all(|v| v.is_finite())
@@ -151,6 +183,36 @@ mod tests {
         }
         assert_eq!(Similarity::IDENTITY.then(&a), a);
         assert!(Similarity::default().to_affine(w, h).is_identity());
+    }
+
+    #[test]
+    fn a_similarity_composed_with_its_inverse_is_the_identity() {
+        let (w, h) = (300, 200);
+        let a = Similarity { shift_x: 4.5, shift_y: -2.25, scale: 1.07, rotation_deg: 1.3 };
+        for both in [a.then(&a.inverse()), a.inverse().then(&a)] {
+            let t = both.to_affine(w, h);
+            for (x, y) in [(0.0, 0.0), (299.0, 199.0), (12.5, 150.0)] {
+                assert!(close(t.apply(x, y), (x, y)), "{both:?}");
+            }
+        }
+        let inverse = a.to_affine(w, h).inverse().unwrap();
+        assert!(close(a.inverse().to_affine(w, h).apply(10.0, 20.0), inverse.apply(10.0, 20.0)));
+    }
+
+    #[test]
+    fn an_affine_similarity_gives_back_its_terms() {
+        let (w, h) = (300, 200);
+        let a = Similarity { shift_x: 4.5, shift_y: -2.25, scale: 0.93, rotation_deg: -1.3 };
+        let back = Similarity::from_affine(&a.to_affine(w, h), w, h).unwrap();
+        for (x, y) in [(back.shift_x, a.shift_x), (back.shift_y, a.shift_y), (back.scale, a.scale), (back.rotation_deg, a.rotation_deg)] {
+            assert!((x - y).abs() < 1e-9, "{back:?}");
+        }
+        assert_eq!(Similarity::from_affine(&Affine::IDENTITY, w, h), Some(Similarity::IDENTITY));
+        let shear = Affine { m: [[1.0, 0.2, 0.0], [0.0, 1.0, 0.0]] };
+        let mirror = Affine { m: [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] };
+        for bad in [shear, mirror, Affine::scaling(0.0), Affine { m: [[f64::NAN; 3]; 2] }] {
+            assert_eq!(Similarity::from_affine(&bad, w, h), None, "{bad:?}");
+        }
     }
 
     #[test]

@@ -85,6 +85,46 @@ pub fn frame_files(dir: &Path, n: u16) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The margin, in pixels, synthetic frames are generated with on every side and cropped of, so that no frame shows the
+/// generator's clamped scene edge.
+const MARGIN: usize = 8;
+
+/// The frames of a synthetic stack (`florastack_core::testutil`) of `width` x `height` pixels, as 16-bit sRGB TIFF files
+/// `dir/<name>/frame-00.tif` and on, in focus order.
+pub fn synthetic_frames(dir: &Path, name: &str, width: usize, height: usize, params: &florastack_core::testutil::StackParams) -> Vec<PathBuf> {
+    use florastack_core::testutil::{generate, scene};
+    let folder = dir.join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    let (sharp, depth) = scene::textured(width + 2 * MARGIN, height + 2 * MARGIN, params.seed).unwrap();
+    let stack = generate(&sharp, &depth, params).unwrap();
+    let spec = OutputSpec::new(florastack_codecs::Format::Tiff).unwrap();
+    stack
+        .frames
+        .iter()
+        .enumerate()
+        .map(|(i, frame)| {
+            let cropped = frame.crop(florastack_core::Rect::new(MARGIN, MARGIN, width, height)).unwrap();
+            let encoded = cropped.to_encoding::<u16>(florastack_core::Encoding::Srgb).unwrap();
+            let path = folder.join(format!("frame-{i:02}.tif"));
+            std::fs::write(&path, florastack_codecs::write(&AnyImage::U16(encoded), &spec, &OutputMetadata::default()).unwrap().bytes).unwrap();
+            path
+        })
+        .collect()
+}
+
+/// A clean stack of `n` frames (`StackParams::clean`) that breathes: each frame `step` larger than the one before (0.01
+/// is 1%), defocused through the scene's depth (`focus` gives the first and last frames' focus depths; the scene's
+/// run from 0 to 1; `None` is the scene's own).
+pub fn breathing(n: usize, step: f32, focus: Option<(f32, f32)>, seed: u64) -> florastack_core::testutil::StackParams {
+    let breathing = step * n.saturating_sub(1) as f32;
+    florastack_core::testutil::StackParams { focus_range: focus, breathing, ..florastack_core::testutil::StackParams::clean(n, seed) }
+}
+
+/// Paths as the JSON list `addFrames` takes.
+pub fn path_list(paths: &[PathBuf]) -> String {
+    paths.iter().map(|p| serde_json::to_string(&p.display().to_string()).unwrap()).collect::<Vec<_>>().join(", ")
+}
+
 /// What a fixture project holds.
 pub struct Fixture {
     pub path: PathBuf,

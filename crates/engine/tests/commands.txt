@@ -1,3 +1,9 @@
+align.get
+align.info
+align.reset
+align.run
+align.set
+align.sortByScale
 develop.get
 develop.reset
 develop.set

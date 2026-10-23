@@ -32,19 +32,47 @@
 //! are the same bit for bit on every run and thread count. Frames that can't be aligned are flagged, not errors;
 //! [`AlignError`] is for what makes the stack itself impossible to align (frames of different sizes, settings out of
 //! range, cancellation).
+//!
+//! # Ordering, framing and focus
+//!
+//! - **Out-of-focus frames** ([`Flag::OutOfFocus`]): while aligning, each frame's focus map is kept, and once the
+//!   stack is aligned, each frame's sharp-content fraction ([`FrameAlignment::sharp_fraction`]) says on how much of
+//!   the stack's in-focus detail it is among the sharpest. Frames with next to none
+//!   ([`AlignSettings::min_sharp_fraction`]), the ones focused in front of the subject or behind it, are flagged for
+//!   the user to exclude (`focus.rs`).
+//! - **Processing order** ([`ProcessingOrder`], [`narrow_end`]): from the end whose frame shows the scene larger, the
+//!   narrow end, so that every frame covers the output; overridable with [`AlignSettings::automatic_order`] and
+//!   [`AlignSettings::reverse_order`]. [`order_stack`] rebases the alignment onto that end's frame
+//!   ([`StackAlignment::rebased`]), and [`align_ordered`] aligns frames in memory that way (`order.rs`).
+//! - **Framing** ([`Framing`], [`Canvas`]): the output's pixel grid, cropped to the narrow end's field of view, keeping
+//!   the widest one, or cropped to what every frame covers (`framing.rs`). Each frame's [`Coverage`] of the canvas,
+//!   which follows from its transform, marks the pixels it has nothing for, so that stacking leaves the frame out
+//!   there instead of smearing its edge pixels into streaks; [`warp_to_canvas`] warps a frame onto a tile of the
+//!   canvas with its coverage (`coverage.rs`).
+//! - **Sorting by scale** ([`scale_order`], [`align_by_scale`]): a first pass recovers each frame's scale, the frames
+//!   are put in scale order, which is focus order, and aligned again (`sort.rs`).
 
 mod brightness;
+mod coverage;
 mod ecc;
 mod error;
 mod fft;
+mod focus;
+mod framing;
 mod model;
+mod order;
 mod phase;
 mod prepare;
 mod settings;
+mod sort;
 mod stack;
 
+pub use coverage::{Coverage, Covered, DEFAULT_FEATHER, coverage_count, warp_to_canvas};
 pub use error::AlignError;
+pub use framing::{Canvas, Framing, MAX_FACTOR};
 pub use model::Similarity;
+pub use order::{End, NARROW_MIN, ProcessingOrder, align_ordered, narrow_end, order_stack};
 pub use prepare::MIN_SIDE;
-pub use settings::{AlignSettings, MAX_RESOLUTION, MIN_RESOLUTION, Term};
+pub use settings::{AlignSettings, DEFAULT_MIN_SHARP_FRACTION, MAX_RESOLUTION, MIN_RESOLUTION, Term};
+pub use sort::{MIN_SPREAD, align_by_scale, measuring_settings, scale_order};
 pub use stack::{Flag, FrameAlignment, StackAligner, StackAlignment, Status, align_frames};
