@@ -54,6 +54,10 @@ proptest = { version = "1.12", default-features = false, features = ["std"] }
 # neither the HTML/plot reports (plotters) nor criterion's own rayon parallelism are needed. 0.7 is the newest release
 # in pure Rust: 0.8 depends on `alloca`, which compiles C (AGENTS.md, Pure Rust).
 criterion ={ version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+# Heap measurement in tests only (dev-dependency): its global allocator counts every allocation, so that a test can
+# compare the peak heap of two runs (florastack-stack's tests/memory.rs) without unsafe code of FloraStack's own, as
+# LightCraft's heap tests do. Pure Rust, MIT OR Apache-2.0.
+dhat = "0.3"
 
 # LightCraft's low-level crates (MIT OR Apache-2.0, pure Rust). They aren't published on crates.io, so they come from
 # git, every one at the same commit: "Release 0.10.0" on main. docs/lightcraft.md says how to move the pin; deny.toml
@@ -138,4 +142,11 @@ undocumented_unsafe_blocks = "warn"
 opt-level = 2
 
 [profile.dev.package.florastack-align]
+opt-level = 2
+
+[profile.dev.package.florastack-stack]
+opt-level = 2
+
+# The metrics score every stacking test against its ground truth (SSIM over every frame of a stack).
+[profile.dev.package.florastack-metrics]
 opt-level = 2

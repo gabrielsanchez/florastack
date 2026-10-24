@@ -12,12 +12,15 @@
 //!   scale (`align.run` and `align.sortByScale`, jobs), and the alignment the project holds (`align.info`);
 //! - [`defects`]: the stack's defect mask, the dust and hot pixels that alignment inpaints (`defects.detect` and
 //!   `defects.import`, jobs, `defects.export`, a job, `defects.clear`, `defects.info`);
+//! - [`stack`]: the stacking settings (`stack.get`, `stack.set`, `stack.reset`), stacking the aligned frames by
+//!   weighted average into a new output (`stack.average`, a job) and its quarter-scale preview (`stack.preview`, a
+//!   preview job);
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
 //! - [`job`]: the jobs (`job.list`, `job.cancel`).
 //!
-//! Stacking and retouching add their areas in their phases (`stack.*`, `retouch.*`).
+//! The other stacking methods and retouching add their commands in their phases (`stack.*`, `retouch.*`).
 
 // Every command function has the signature the registry's constructors take: its parameters by value (most commands
 // consume them) and a `Result` (most can fail), so that commands are written alike.
@@ -33,6 +36,7 @@ pub mod job;
 pub mod output;
 pub mod preset;
 pub mod project;
+pub mod stack;
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +52,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(develop::specs());
     all.extend(align::specs());
     all.extend(defects::specs());
+    all.extend(stack::specs());
     all.extend(preset::specs());
     all.extend(output::specs());
     all.extend(edit::specs());

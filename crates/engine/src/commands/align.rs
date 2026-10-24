@@ -214,6 +214,8 @@ pub(crate) struct Plan {
     detected: Option<(CacheRef, MaskSummary)>,
     /// The previews this job wrote, by frame.
     previews: Vec<(FrameId, CacheRef)>,
+    /// How RAW frames are demosaiced: the fast way for alignment and previews, the settings' way for a full stack.
+    quality: Quality,
 }
 
 impl Plan {
@@ -247,7 +249,27 @@ impl Plan {
             mask: None,
             detected: None,
             previews: Vec::new(),
+            quality: Quality::Preview,
         })
+    }
+
+    /// The plan reading RAW frames with `quality`'s demosaic.
+    pub(crate) fn with_quality(mut self, quality: Quality) -> Plan {
+        self.quality = quality;
+        self
+    }
+
+    /// The enabled frames, in the project's order: the `i` of [`Plan::read`].
+    pub(crate) fn ids(&self) -> &[FrameId] {
+        &self.ids
+    }
+
+    /// Reads the project's defect mask, if it has one, for [`Plan::read`] to inpaint; never detects one.
+    pub(crate) fn load_mask(&mut self) -> Result<(), CommandError> {
+        if let Some(reference) = &self.mask_ref {
+            self.mask = Some(read_defect_mask(&self.cache, reference)?);
+        }
+        Ok(())
     }
 
     /// How many frames the job reads.
@@ -278,7 +300,7 @@ impl Plan {
         let bytes =
             std::fs::read(path).map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: path.clone(), source }))?;
         let had = self.reader.develop().is_some();
-        let frame = self.reader.read(&bytes, Quality::Preview).map_err(|source| ProjectDataError::ReadFrame { path: path.clone(), source })?;
+        let frame = self.reader.read(&bytes, self.quality).map_err(|source| ProjectDataError::ReadFrame { path: path.clone(), source })?;
         if !had && self.reader.develop().is_some() {
             self.developed = Some(id);
         }

@@ -9,6 +9,7 @@ use florastack_codecs::CodecError;
 use florastack_core::Cancelled;
 use florastack_project::{Aspects, EditError, ProjectError};
 use florastack_raw::RawError;
+use florastack_stack::StackError;
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -71,6 +72,10 @@ pub enum CommandError {
     /// A stack that can't be aligned, ordered or framed (a frame that can't be matched is no error: it is flagged).
     #[error(transparent)]
     Align(Box<AlignError>),
+    /// A stack that can't be made: settings out of range, frames that don't fit the canvas, accumulators that can't
+    /// be spilled to disk.
+    #[error(transparent)]
+    Stack(Box<StackError>),
     #[error("cannot start a worker for `{command}`")]
     Spawn {
         command: String,
@@ -108,9 +113,18 @@ impl From<AlignError> for CommandError {
     }
 }
 
+impl From<StackError> for CommandError {
+    fn from(e: StackError) -> CommandError {
+        match e {
+            StackError::Cancelled(_) => CommandError::Cancelled,
+            other => CommandError::Stack(Box::new(other)),
+        }
+    }
+}
+
 impl CommandError {
     /// A stable, machine-readable name for the kind of error: `unknownCommand`, `params`, `unavailable`, `conflict`,
-    /// `notFound`, `cancelled`, `project`, `frame`, `codec`, `raw`, `align`, `internal`.
+    /// `notFound`, `cancelled`, `project`, `frame`, `codec`, `raw`, `align`, `stack`, `internal`.
     pub fn code(&self) -> &'static str {
         match self {
             CommandError::UnknownCommand { .. } => "unknownCommand",
@@ -130,8 +144,9 @@ impl CommandError {
                 | ProjectDataError::ReadFrame { source: FrameError::Raw(_), .. } => "raw",
                 ProjectDataError::Op(_) => "internal",
                 ProjectDataError::Frame(FrameError::Image(_)) | ProjectDataError::ReadFrame { source: FrameError::Image(_), .. } => "frame",
-                ProjectDataError::Align(AlignError::Cancelled(_)) => "cancelled",
+                ProjectDataError::Align(AlignError::Cancelled(_)) | ProjectDataError::Stack(StackError::Cancelled(_)) => "cancelled",
                 ProjectDataError::Align(_) => "align",
+                ProjectDataError::Stack(_) => "stack",
             },
             CommandError::Frame(e) => match &**e {
                 FrameError::Raw(_) => "raw",
@@ -141,6 +156,7 @@ impl CommandError {
             CommandError::Codec(_) => "codec",
             CommandError::Raw(_) => "raw",
             CommandError::Align(_) => "align",
+            CommandError::Stack(_) => "stack",
             CommandError::Spawn { .. } | CommandError::Internal { .. } => "internal",
         }
     }

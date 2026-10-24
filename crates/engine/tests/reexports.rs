@@ -6,9 +6,9 @@ use std::any::type_name;
 
 use florastack_engine::model::{AlignedFrame, AlignmentRun, Aspects, FolderTrash, FrameId, Group, OutputId, Project, SystemTrash};
 use florastack_engine::{
-    AlignSettings, AnyImage, BitDepth, ColorSpace, CommandError, DevelopSettings, DispatchOptions, Dispatched, End, Engine, EngineConfig, Event,
-    ExifSummary, Flag, Format, Framing, Image, InlineExecutor, JobState, Kind, Lane, ManualClock, Orientation, OrientationPolicy, OutputFormat,
-    OutputSpec, ReadOptions, Registry, Term, TiffCompression, Value, WhiteBalance, branding, json,
+    AlignSettings, AnyImage, AverageSettings, BitDepth, ColorSpace, CommandError, DevelopSettings, DispatchOptions, Dispatched, End, Engine,
+    EngineConfig, Event, ExifSummary, Flag, Format, Framing, Image, InlineExecutor, JobState, Kind, Lane, ManualClock, Orientation,
+    OrientationPolicy, OutputFormat, OutputSpec, ReadOptions, Registry, StackSettings, Term, TiffCompression, Value, WhiteBalance, branding, json,
 };
 
 #[test]
@@ -46,6 +46,7 @@ fn an_app_finds_what_it_needs_in_the_engine() {
     let image = Image::from_fn(2, 2, 1, ColorSpace::LINEAR, |_, _, _| 0.5_f32).unwrap();
     let _ = AnyImage::F32(image);
     assert_eq!(DevelopSettings::default().white_balance, WhiteBalance::AsShot);
+    assert_eq!(StackSettings::default().average, AverageSettings::default());
     let spec = OutputSpec::new(Format::Tiff).unwrap();
     assert_eq!(spec.depth, BitDepth::U16);
     assert_ne!(branding::DISPLAY_NAME, "");

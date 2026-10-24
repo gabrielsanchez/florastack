@@ -28,6 +28,7 @@ fn quoted(path: &Path) -> String {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One walk through every command, in the order a user would run them.
 fn every_command_dispatches_from_json() {
     let dir = TempDir::new("every");
     let frames_dir = dir.path().join("frames");
@@ -129,6 +130,15 @@ fn every_command_dispatches_from_json() {
     assert_eq!((&updated["previews"], &updated["alignedPreviews"]), (&json!(6), &json!(6)), "{updated}");
     assert_eq!(calls.run("filmstrip.list", "{}")["stale"], 0);
     assert_eq!(calls.run("defects.clear", "{}")["cleared"], true);
+    // Stacking: the settings, a quarter-size preview, and a weighted average, which becomes an output.
+    assert_eq!(calls.run("stack.get", "{}")["settings"]["average"]["radius"], 3.0);
+    assert_eq!(calls.run("stack.set", r#"{ "average": { "smoothing": 2.0 } }"#)["settings"]["average"]["smoothing"], 2.0);
+    let preview = calls.run("stack.preview", "{}");
+    assert!(Path::new(preview["path"].as_str().unwrap()).is_file(), "{preview}");
+    let stacked = calls.run("stack.average", r#"{ "name": "Average" }"#);
+    assert_eq!((stacked["frames"].as_array().unwrap().len(), &stacked["framing"]), (6, &json!("wide")), "{stacked}");
+    assert_eq!(calls.run("output.list", "{}")["outputs"][0]["method"], "average");
+    assert_eq!(calls.run("stack.reset", "{}")["settings"]["average"]["smoothing"], 8.0);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);
 
@@ -240,10 +250,10 @@ fn presets_are_checked_group_by_group() {
     let mut engine = Engine::new(config(dir.path()));
     run(&mut engine, "project.new", &format!(r#"{{ "name": "Presets", "folder": {} }}"#, quoted(dir.path())));
     let preset = dir.path().join("rail.toml");
-    std::fs::write(&preset, "[preset]\nname = \"Rail\"\n\n[develop]\nexposure = 0.5\n\n[stack]\nradius = 3\n").unwrap();
+    std::fs::write(&preset, "[preset]\nname = \"Rail\"\n\n[develop]\nexposure = 0.5\n\n[output]\nformat = \"tiff\"\n").unwrap();
     let e = engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err();
     assert_eq!(e.code(), "params");
-    assert!(e.info().message.contains("`stack` can't be checked"), "{}", e.info().message);
+    assert!(e.info().message.contains("`output` can't be checked"), "{}", e.info().message);
     assert!(engine.project().unwrap().preferences.is_empty(), "nothing applied");
     let applied = run(&mut engine, "preset.apply", &format!(r#"{{ "path": {}, "groups": ["develop"] }}"#, quoted(&preset)));
     assert_eq!(applied, json!({ "name": "Rail", "groups": ["develop"] }));
@@ -259,6 +269,11 @@ fn presets_are_checked_group_by_group() {
     assert_eq!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err().code(), "params");
     std::fs::write(&preset, "[develop]\nexposre = 1.0\n").unwrap();
     assert!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).is_err(), "a misspelled key");
+    // And the stack group with florastack-stack's.
+    std::fs::write(&preset, "[stack.average]\nradius = 3.0\n").unwrap();
+    assert_eq!(run(&mut engine, "preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset)))["groups"], json!(["stack"]));
+    std::fs::write(&preset, "[stack]\nradius = 3.0\n").unwrap();
+    assert!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).is_err(), "a key of no method");
     let e = engine.dispatch_json("preset.save", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err();
     assert_eq!(e.code(), "unavailable", "{e}: the file exists");
 }
