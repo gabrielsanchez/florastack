@@ -33,3 +33,5 @@ florastack-testkit.workspace = true
 florastack-core = { workspace = true, features = ["testutil"] }
 # Arbitrary JSON thrown at every command.
 proptest.workspace = true
+# Scoring the stacking commands' outputs against the synthetic ground truth (tests/stack.rs).
+florastack-metrics.workspace = true

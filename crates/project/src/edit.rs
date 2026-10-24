@@ -20,8 +20,8 @@ use serde_json::Value;
 use crate::cache::CacheRef;
 use crate::error::Problem;
 use crate::model::{
-    Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, LayerId, MapName, Output, OutputId, Project, RetouchLayer, check_frame_path,
-    check_name,
+    Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, LayerId, MapName, NewOutput, Output, OutputId, Project, RetouchLayer,
+    check_frame_path, check_method, check_name,
 };
 use crate::prefs::{Group, Table};
 
@@ -70,6 +70,9 @@ pub enum Edit {
         preview: Option<CacheRef>,
         aligned_preview: Option<CacheRef>,
     },
+    /// Adds a new output at the end of the list, with a new id and the time now: a stack's result. Its inverse removes
+    /// it.
+    AddOutput(Box<NewOutput>),
     /// Puts an output back at `index`, with its own id (the inverse of [`Edit::RemoveOutput`]).
     InsertOutput {
         index: usize,
@@ -269,7 +272,7 @@ impl Edit {
             Edit::SetAlignment { .. } | Edit::SetProjectMap { .. } => Aspects::ALIGN,
             Edit::SetPreviews { .. } => Aspects::PREVIEWS,
             // An output's layers go with it.
-            Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
+            Edit::AddOutput(_) | Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
             Edit::RenameOutput { .. } => Aspects::OUTPUTS,
             Edit::AddLayer { .. } | Edit::InsertLayer { .. } | Edit::RemoveLayer { .. } | Edit::PushStroke { .. } | Edit::PopStroke { .. } => {
                 Aspects::RETOUCH
@@ -341,6 +344,11 @@ impl Project {
                 let preview = std::mem::replace(&mut f.preview, preview);
                 let aligned_preview = std::mem::replace(&mut f.aligned_preview, aligned_preview);
                 Ok(Edit::SetPreviews { frame, preview, aligned_preview })
+            }
+            Edit::AddOutput(new) => {
+                check_name("output name", &new.name)?;
+                check_method(&new.method)?;
+                Ok(Edit::RemoveOutput(self.add_output(*new)))
             }
             Edit::InsertOutput { index, output } => self.insert_output(index, *output),
             Edit::RemoveOutput(id) => {
@@ -535,22 +543,37 @@ mod tests {
             },
             Edit::SetProjectMap { name: MapName::new("defects").unwrap(), map: Some(cache_ref(1)) },
             Edit::SetPreviews { frame: b, preview: Some(cache_ref(2)), aligned_preview: Some(cache_ref(3)) },
+            Edit::AddOutput(Box::new(NewOutput {
+                name: "Average".into(),
+                method: "average".into(),
+                parameters: serde_json::json!({ "radius": 1.0 }),
+                inputs: vec![crate::model::Input::Frame(a), crate::model::Input::Frame(b)],
+                image: cache_ref(4),
+                preview: Some(cache_ref(5)),
+                maps: crate::model::Maps::new(),
+            })),
         ];
         for edit in edits {
             let mut q = before.clone();
             let inverse = q.apply(edit.clone()).unwrap();
             assert_ne!(q, before, "{edit:?} changed nothing");
             let redo = q.apply(inverse).unwrap();
-            if matches!(edit, Edit::AddFrame { .. }) {
+            if matches!(edit, Edit::AddFrame { .. } | Edit::AddOutput(_)) {
                 // Ids are never reused: the next free id stays where adding the frame moved it.
-                assert_eq!(q.frames, before.frames, "the inverse of {edit:?} undoes it");
+                assert_eq!((&q.frames, &q.outputs), (&before.frames, &before.outputs), "the inverse of {edit:?} undoes it");
             } else {
                 assert_eq!(q, before, "the inverse of {edit:?} undoes it");
             }
             q.apply(redo).unwrap();
             let mut once = before.clone();
             once.apply(edit.clone()).unwrap();
-            assert_eq!(q, once, "redoing {edit:?} makes it again");
+            if matches!(edit, Edit::AddOutput(_)) {
+                // Redone, the output comes back with its id; made afresh, it gets a new time.
+                let strip = |p: &Project| p.outputs.iter().map(|o| (o.id(), o.name.clone(), o.inputs.clone(), o.image.clone())).collect::<Vec<_>>();
+                assert_eq!(strip(&q), strip(&once), "redoing {edit:?} makes it again");
+            } else {
+                assert_eq!(q, once, "redoing {edit:?} makes it again");
+            }
         }
     }
 
@@ -567,6 +590,18 @@ mod tests {
             (Edit::Batch(vec![Edit::SetName(Some("Ok".into())), Edit::RemoveFrame(a), Edit::RemoveFrame(a)]), EditError::NoFrame(a)),
             (Edit::PopStroke { output: OutputId(5), layer: LayerId(6) }, EditError::NoOutput(OutputId(5))),
             (Edit::SetPreviews { frame: FrameId(99), preview: None, aligned_preview: None }, EditError::NoFrame(FrameId(99))),
+            (
+                Edit::AddOutput(Box::new(NewOutput {
+                    name: "Average".into(),
+                    method: "Weighted Average".into(),
+                    parameters: serde_json::json!({}),
+                    inputs: Vec::new(),
+                    image: cache_ref(4),
+                    preview: None,
+                    maps: crate::model::Maps::new(),
+                })),
+                EditError::Invalid(Problem::Text { what: "output method", reason: "must be 1 to 64 lower-case letters, digits, '-' and '.'" }),
+            ),
             (
                 Edit::SetAlignment {
                     run: None,

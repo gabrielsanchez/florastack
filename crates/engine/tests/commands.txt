@@ -39,3 +39,8 @@ project.rename
 project.save
 project.setFramesEnabled
 project.trashOrphans
+stack.average
+stack.get
+stack.preview
+stack.reset
+stack.set

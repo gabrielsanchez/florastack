@@ -2,9 +2,10 @@
 //! them, and read.
 //!
 //! A preset's groups are checked with the types of the crates that own them before they are applied: `develop` with
-//! florastack-raw's `DevelopSettings`, `align` with florastack-align's `AlignSettings`. The groups that no crate has
-//! settings for yet (`stack` and `output`, until their phases) can't be checked, so a preset that sets them is refused
-//! rather than stored unchecked: the error names the group, and `groups` can leave it out.
+//! florastack-raw's `DevelopSettings`, `align` with florastack-align's `AlignSettings`, `stack` with florastack-stack's
+//! `StackSettings`. The group that no crate has settings for yet (`output`, until roadmap 5.4) can't be checked, so a
+//! preset that sets it is refused rather than stored unchecked: the error names the group, and `groups` can leave it
+//! out.
 
 use florastack_project::{Edit, Group, Preferences, Preset, Value};
 use schemars::JsonSchema;
@@ -22,7 +23,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                 .help(
                     "Tables merge key by key and other values replace what was there, so presets layer: one for \
                      develop settings, another for output. `groups` applies only some of the preset's groups. A group \
-                     that this version can't check yet (stack and output have no settings yet) is refused.",
+                     that this version can't check yet (output has no settings yet) is refused.",
                 )
                 .undoable()
                 .examples(&[r#"{ "path": "C:/Presets/rail.toml" }"#, r#"{ "path": "C:/Presets/insect.toml", "groups": ["develop"] }"#]),
@@ -55,7 +56,11 @@ fn check_group(session: &Session, group: Group, preferences: &Preferences) -> Re
             let settings: florastack_align::AlignSettings = preferences.get(Group::Align)?;
             settings.validate().map_err(|e| session.invalid("align", e.to_string()))
         }
-        Group::Stack | Group::Output => Err(session.invalid(
+        Group::Stack => {
+            let settings: florastack_stack::StackSettings = preferences.get(Group::Stack)?;
+            settings.validate().map_err(|e| session.invalid("stack", e.to_string()))
+        }
+        Group::Output => Err(session.invalid(
             group.name(),
             format!(
                 "can't be checked: this version of FloraStack has no {} settings yet, so a preset can't set them; apply its other groups with `groups`",

@@ -276,6 +276,11 @@ fn the_shapes_stored_in_project_files_are_pinned() {
             "detect_defects": false,
         })
     );
+    // What stacking stores: its settings, one table per method.
+    assert_eq!(
+        to_data("stack settings", &florastack_engine::StackSettings::default()).unwrap(),
+        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 } })
+    );
     let id = |n: u64| serde_json::from_value::<FrameId>(json!(n)).unwrap();
     let frame = FrameReport {
         status: Status::Rejected,

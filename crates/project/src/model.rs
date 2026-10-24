@@ -595,11 +595,7 @@ impl Project {
         for o in &self.outputs {
             id(o.id.0)?;
             check_name("output name", &o.name)?;
-            let method_ok = (1..=64).contains(&o.method.len())
-                && o.method.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
-            if !method_ok {
-                return Err(Problem::Text { what: "output method", reason: "must be 1 to 64 lower-case letters, digits, '-' and '.'" });
-            }
+            check_method(&o.method)?;
             for input in &o.inputs {
                 if let Input::Output(other) = input
                     && other.0 >= o.id.0
@@ -614,6 +610,12 @@ impl Project {
         }
         self.preferences.validate()
     }
+}
+
+/// Checks an output's method name: 1 to 64 lower-case letters, digits, '-' and '.'.
+pub(crate) fn check_method(method: &str) -> Result<(), Problem> {
+    let ok = (1..=64).contains(&method.len()) && method.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
+    if ok { Ok(()) } else { Err(Problem::Text { what: "output method", reason: "must be 1 to 64 lower-case letters, digits, '-' and '.'" }) }
 }
 
 /// Checks a frame's stored path.

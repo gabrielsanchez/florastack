@@ -4,6 +4,7 @@
 //!
 //! - the develop settings, a preference group ([`develop_settings`], [`set_develop_settings`]), and the stack's
 //!   development resolved with them ([`store_develop`], [`develop`]), florastack-raw's types;
+//! - the stacking settings, a preference group ([`stack_settings`]), florastack-stack's type;
 //! - the alignment settings, a preference group ([`align_settings`]), and an alignment run with what it found about
 //!   each frame and about the stack ([`alignment_edit`], [`stored_alignment`]; [`FrameReport`] and [`RunReport`] are
 //!   the shapes the reports take, with the motion found in each frame, [`FrameMotion`]), florastack-align's types;
@@ -36,6 +37,7 @@ use florastack_project::{
     ProjectError, Value, from_data, to_data,
 };
 use florastack_raw::{DevelopSettings, RawDevelop, RawError, Resolved};
+use florastack_stack::{StackError, StackSettings};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +64,8 @@ pub enum ProjectDataError {
     },
     #[error(transparent)]
     Align(#[from] AlignError),
+    #[error(transparent)]
+    Stack(#[from] StackError),
 }
 
 /// The develop settings the preferences hold, every key they don't set at its default, checked.
@@ -157,8 +161,19 @@ fn lossless(format: SampleFormat) -> OutputSpec {
 /// Writes `image` into the project's cache, losslessly, as a file named after `stem` (`output-7`, `frame-3-aligned`),
 /// and returns its reference for the project, with `key` (what it was made from).
 pub fn write_image(folder: &impl AsRef<CacheDir>, stem: &str, image: &AnyImage, key: Option<String>) -> Result<CacheRef, ProjectDataError> {
+    write_image_in(folder, Area::Cache, stem, image, key)
+}
+
+/// [`write_image`] into `area`: `previews/` for a stack's preview, which nothing in the project refers to.
+pub fn write_image_in(
+    folder: &impl AsRef<CacheDir>,
+    area: Area,
+    stem: &str,
+    image: &AnyImage,
+    key: Option<String>,
+) -> Result<CacheRef, ProjectDataError> {
     let encoded = florastack_codecs::write(image, &lossless(image.format()), &OutputMetadata::default())?;
-    Ok(folder.as_ref().store(Area::Cache, stem, "tiff", &encoded.bytes, key)?)
+    Ok(folder.as_ref().store(area, stem, "tiff", &encoded.bytes, key)?)
 }
 
 /// Reads an image from the project's cache, after checking the file against its reference.
@@ -198,6 +213,13 @@ pub fn write_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f3
 /// The alignment settings the preferences hold, every key they don't set at its default, checked.
 pub fn align_settings(project: &Project) -> Result<AlignSettings, ProjectDataError> {
     let settings: AlignSettings = project.preferences.get(Group::Align)?;
+    settings.validate()?;
+    Ok(settings)
+}
+
+/// The stacking settings the preferences hold, every key they don't set at its default, checked.
+pub fn stack_settings(project: &Project) -> Result<StackSettings, ProjectDataError> {
+    let settings: StackSettings = project.preferences.get(Group::Stack)?;
     settings.validate()?;
     Ok(settings)
 }

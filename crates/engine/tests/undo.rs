@@ -79,6 +79,17 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             setup: vec![("defects.import", format!(r#"{{ "path": {} }}"#, quoted(&mask))), ("project.save", "{}".into())],
             params: "{}".into(),
         },
+        Case { name: "stack.set", setup: none(), params: r#"{ "average": { "radius": 2.0 } }"#.into() },
+        Case {
+            name: "stack.reset",
+            setup: vec![("stack.set", r#"{ "average": { "power": 4.0 } }"#.into()), ("project.save", "{}".into())],
+            params: "{}".into(),
+        },
+        Case {
+            name: "stack.average",
+            setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
+            params: r#"{ "smoothing": 2.0 }"#.into(),
+        },
         Case { name: "output.rename", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Renamed" }}"#) },
         Case { name: "output.remove", setup: none(), params: format!(r#"{{ "output": {output} }}"#) },
         Case {
