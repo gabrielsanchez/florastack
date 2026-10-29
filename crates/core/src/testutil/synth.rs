@@ -32,7 +32,7 @@ pub const MAX_FRAMES: usize = 10_000;
 /// The largest blur, in pixels of standard deviation, that `max_blur` may ask for.
 pub const MAX_BLUR: f32 = 64.0;
 /// The most blur levels one stack may need (`max_blur / blur_step`).
-const MAX_LEVELS: usize = 512;
+pub(super) const MAX_LEVELS: usize = 512;
 
 /// A dust spot on the sensor: a soft round shadow centered on `(x, y)` (frame pixels) that darkens by `opacity`
 /// at its center and falls off as a Gaussian of standard deviation `radius` pixels.
@@ -144,7 +144,7 @@ impl StackParams {
         }
     }
 
-    fn validate(&self) -> Result<(), SynthError> {
+    pub(super) fn validate(&self) -> Result<(), SynthError> {
         if self.frames == 0 || self.frames > MAX_FRAMES {
             return Err(SynthError::Frames(self.frames));
         }
@@ -201,6 +201,9 @@ pub enum SynthError {
     DepthShape { width: usize, height: usize, depth_width: usize, depth_height: usize, depth_channels: usize },
     #[error("the depth map holds a value that is not finite")]
     DepthValue,
+    /// A layer of a [`super::layered::LayeredScene`] that doesn't fit its background.
+    #[error("layer {index} needs a one-channel alpha of the background's size, a color for each of its channels and a finite depth")]
+    Layer { index: usize },
     #[error("blurring up to {sigma} px in steps of {step} px needs more than {MAX_LEVELS} levels: raise blur_step")]
     Levels { sigma: f32, step: f32 },
     #[error(transparent)]
@@ -278,7 +281,26 @@ pub fn transform_error(estimated: &Affine, truth: &Affine, width: usize, height:
 /// Makes a focus stack from `sharp` (any channel count, linear) and `depth` (one channel, the same size).
 pub fn generate(sharp: &Image<f32>, depth: &Image<f32>, params: &StackParams) -> Result<SyntheticStack, SynthError> {
     params.validate()?;
-    let (w, h, c) = (sharp.width(), sharp.height(), sharp.channels());
+    let (w, h) = (sharp.width(), sharp.height());
+    let depths = checked_depths(depth, w, h)?;
+    let (lowest, highest) = depth_range(&depths);
+    let (near, far) = params.focus_range.unwrap_or((lowest, highest));
+    let truths = draw_truths(params, near, far, w, h);
+
+    // The blur levels every frame interpolates between.
+    let base = packed(sharp)?;
+    let levels = blur_levels(&base, &truths, (lowest, highest), params)?;
+
+    let mut frames = Vec::with_capacity(params.frames);
+    for (i, truth) in truths.iter().enumerate() {
+        let frame = if levels.len() == 1 { base.clone() } else { defocus(&levels, &depths, truth.focus_depth, params)? };
+        frames.push(finish_frame(frame, truth, params, i)?);
+    }
+    Ok(SyntheticStack { frames, truth: GroundTruth { sharp: sharp.clone(), depth: depth.clone(), frames: truths, dust: params.dust.clone() } })
+}
+
+/// The samples of `depth`, checked to be one finite channel of a `w` x `h` image.
+pub(super) fn checked_depths(depth: &Image<f32>, w: usize, h: usize) -> Result<Vec<f32>, SynthError> {
     if depth.channels() != 1 || depth.width() != w || depth.height() != h {
         return Err(SynthError::DepthShape {
             width: w,
@@ -292,16 +314,22 @@ pub fn generate(sharp: &Image<f32>, depth: &Image<f32>, params: &StackParams) ->
     if depths.iter().any(|d| !d.is_finite()) {
         return Err(SynthError::DepthValue);
     }
-    let (lowest, highest) = depths.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &d| (lo.min(d), hi.max(d)));
-    let (near, far) = params.focus_range.unwrap_or((lowest, highest));
+    Ok(depths)
+}
+
+/// The smallest and largest of `depths`.
+pub(super) fn depth_range(depths: &[f32]) -> (f32, f32) {
+    depths.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &d| (lo.min(d), hi.max(d)))
+}
+
+/// Each frame's focus depth, transform and gain, for frames of `w` x `h` focused from `near` to `far`: drawn in frame
+/// order whatever the other parameters, so that turning one effect on doesn't change the others.
+pub(super) fn draw_truths(params: &StackParams, near: f32, far: f32, w: usize, h: usize) -> Vec<FrameTruth> {
     let n = params.frames;
     let progress = |i: usize| if n == 1 { 0.0 } else { i as f64 / (n - 1) as f64 };
-
-    // The transforms and gains, drawn in frame order whatever the other parameters, so that turning one effect on
-    // doesn't change the others.
     let mut rng = Rng::new(params.seed);
     let center = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
-    let truths: Vec<FrameTruth> = (0..n)
+    (0..n)
         .map(|i| {
             let t = progress(i);
             let max_shift = f64::from(params.max_shift);
@@ -319,62 +347,65 @@ pub fn generate(sharp: &Image<f32>, depth: &Image<f32>, params: &StackParams) ->
                 gain,
             }
         })
-        .collect();
+        .collect()
+}
 
-    // The blur levels every frame interpolates between.
-    let base = packed(sharp)?;
+/// The blur levels `0, blur_step, 2 blur_step, ...` of `base` that frames focused as `truths` say need, for depths
+/// from `range.0` to `range.1`; one level (the image itself) when nothing is blurred.
+pub(super) fn blur_levels(base: &Image<f32>, truths: &[FrameTruth], range: (f32, f32), params: &StackParams) -> Result<Vec<Image<f32>>, SynthError> {
+    let (lowest, highest) = range;
     let max_defocus = truths.iter().map(|f| (f.focus_depth - lowest).abs().max((f.focus_depth - highest).abs())).fold(0.0, f32::max);
     let sigma_needed = (params.blur_per_depth * max_defocus).min(params.max_blur);
     let level_count = if sigma_needed > 0.0 { to_index(f64::from(sigma_needed / params.blur_step).floor()).saturating_add(2) } else { 1 };
     if level_count > MAX_LEVELS {
         return Err(SynthError::Levels { sigma: sigma_needed, step: params.blur_step });
     }
+    if level_count == 1 {
+        return Ok(vec![base.clone()]);
+    }
     // The exact kernel, so that the stack doesn't change when the fast approximation for large radii does.
-    let levels = (0..level_count)
+    (0..level_count)
         .map(|l| {
             let mut level = base.clone();
             gaussian_blur_in_place(&mut level, l as f64 * f64::from(params.blur_step), BlurMethod::Exact)?;
             Ok(level)
         })
-        .collect::<Result<Vec<_>, SynthError>>()?;
+        .collect()
+}
 
-    let mut frames = Vec::with_capacity(n);
-    for (i, truth) in truths.iter().enumerate() {
-        let mut frame = if level_count == 1 { base.clone() } else { defocus(&levels, &depths, truth.focus_depth, params)? };
-        if !truth.transform.is_identity() {
-            // A similarity transform with a scale in [0.5, 1.5] is invertible.
-            let inverse = truth.transform.inverse().unwrap_or(Affine::IDENTITY);
-            frame = warp(&frame, &inverse, Interpolation::Bicubic, Border::Clamp)?;
-        }
-        if !is_one(truth.gain) {
-            for v in frame.rows_mut().flatten() {
-                *v *= truth.gain;
-            }
-        }
-        apply_dust(&mut frame, &params.dust);
-        if params.read_noise > 0.0 || params.shot_noise > 0.0 {
-            let mut noise = Rng::new(params.seed ^ (0x6e6f_6973_6500_0000 + i as u64));
-            let (read, shot) = (f64::from(params.read_noise), f64::from(params.shot_noise));
-            for v in frame.rows_mut().flatten() {
-                let signal = f64::from(*v);
-                *v = to_f32(signal + read * noise.normal() + shot * signal.max(0.0).sqrt() * noise.normal());
-            }
-        }
-        debug_assert_eq!((frame.width(), frame.height(), frame.channels()), (w, h, c));
-        frames.push(frame);
+/// The steps after defocus, in a camera's order: the frame's geometry, its gain, the dust and the noise of frame `i`.
+pub(super) fn finish_frame(mut frame: Image<f32>, truth: &FrameTruth, params: &StackParams, i: usize) -> Result<Image<f32>, SynthError> {
+    if !truth.transform.is_identity() {
+        // A similarity transform with a scale in [0.5, 1.5] is invertible.
+        let inverse = truth.transform.inverse().unwrap_or(Affine::IDENTITY);
+        frame = warp(&frame, &inverse, Interpolation::Bicubic, Border::Clamp)?;
     }
-    Ok(SyntheticStack { frames, truth: GroundTruth { sharp: sharp.clone(), depth: depth.clone(), frames: truths, dust: params.dust.clone() } })
+    if !is_one(truth.gain) {
+        for v in frame.rows_mut().flatten() {
+            *v *= truth.gain;
+        }
+    }
+    apply_dust(&mut frame, &params.dust);
+    if params.read_noise > 0.0 || params.shot_noise > 0.0 {
+        let mut noise = Rng::new(params.seed ^ (0x6e6f_6973_6500_0000 + i as u64));
+        let (read, shot) = (f64::from(params.read_noise), f64::from(params.shot_noise));
+        for v in frame.rows_mut().flatten() {
+            let signal = f64::from(*v);
+            *v = to_f32(signal + read * noise.normal() + shot * signal.max(0.0).sqrt() * noise.normal());
+        }
+    }
+    Ok(frame)
 }
 
 /// A copy of `image` with packed rows.
-fn packed(image: &Image<f32>) -> Result<Image<f32>, ImageError> {
+pub(super) fn packed(image: &Image<f32>) -> Result<Image<f32>, ImageError> {
     let data: Vec<f32> = image.rows().flatten().copied().collect();
     Image::from_vec(image.width(), image.height(), image.channels(), image.color_space().clone(), data)
 }
 
 /// The scene defocused for a frame focused at `focus`: each pixel interpolated between the blur levels around its
 /// own sigma. The levels have packed rows.
-fn defocus(levels: &[Image<f32>], depths: &[f32], focus: f32, params: &StackParams) -> Result<Image<f32>, ImageError> {
+pub(super) fn defocus(levels: &[Image<f32>], depths: &[f32], focus: f32, params: &StackParams) -> Result<Image<f32>, ImageError> {
     let Some(first) = levels.first() else {
         return Err(ImageError::Empty { width: 0, height: 0 });
     };

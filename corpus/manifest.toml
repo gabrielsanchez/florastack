@@ -5,7 +5,7 @@
 #
 # Each [[stack]] has:
 #   name          its folder name: lower-case letters, digits and dashes
-#   subject       insect, flower, coin, landscape or microscopy
+#   subject       insect, flower, fungus, coin, landscape or microscopy
 #   frame_order   near-to-far, far-to-near or unknown: which way focus moves through the files, in the order listed
 #   description   free text (optional)
 #   source        the page the stack comes from (required unless a placeholder)

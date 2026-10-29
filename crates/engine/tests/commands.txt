@@ -42,5 +42,6 @@ project.trashOrphans
 stack.average
 stack.get
 stack.preview
+stack.pyramid
 stack.reset
 stack.set

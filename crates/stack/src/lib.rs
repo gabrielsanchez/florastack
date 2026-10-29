@@ -35,6 +35,14 @@
 //!   sharpness there, the Laplacian's energy averaged over `radius` and raised to `power`, the weights smoothed over
 //!   `smoothing` and normalized. Fast, with no halos of its own but some softness where near and far detail overlap:
 //!   the quick preview method, and a fallback for simple subjects.
+//! - **Pyramid** ([`PyramidSettings`], [`Pyramid`], `pyramid/`): every frame's Laplacian pyramid, and at each level
+//!   and position the coefficients of the frame with the most local energy, the finest level blended to keep grit
+//!   down, the result held within the frames' range at each pixel. The method for hair, bristles and overlapping fine
+//!   structure, without the veils the weighted average leaves around a subject's out-of-focus edges. Its result is
+//!   unclipped; [`compress_range`] brings it into `[0, 1]`.
+//!
+//! The methods are scored on synthetic stacks whose layers occlude one another
+//! (`florastack_core::testutil::layered`), which have the veils and halos real subjects leave.
 //!
 //! # Previews
 //!
@@ -48,6 +56,7 @@ mod average;
 mod error;
 mod method;
 mod preview;
+pub mod pyramid;
 mod settings;
 mod source;
 mod tiled;
@@ -58,6 +67,9 @@ pub use average::{
 pub use error::StackError;
 pub use method::{FrameProgress, Method, StackShape, Stacked, Stacker, stack};
 pub use preview::{PREVIEW_FACTOR, Preview, preview, preview_size, reduce, reduce_patch};
+pub use pyramid::{
+    Decisions, GRIT_RANGE, MAX_COARSE_LIMIT, MAX_LEVELS, PYRAMID, Pyramid, PyramidSettings, TILED_LEVELS, Tone, compress_range, out_of_range,
+};
 pub use settings::StackSettings;
 pub use source::{CoveredFrame, FrameSource, Gained, Patch};
-pub use tiled::{TileKernel, Tiled, Tiling};
+pub use tiled::{Share, StatePlane, TileKernel, TileView, Tiled, Tiling};

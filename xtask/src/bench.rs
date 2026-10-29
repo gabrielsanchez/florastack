@@ -5,6 +5,11 @@
 //! `estimates.json`, times in nanoseconds). The summary takes the benchmarks whose estimates this run wrote, so stale
 //! results of renamed or deleted benchmarks never leak in, and adds what the numbers depend on: git revision, rustc,
 //! OS, architecture and CPU count.
+//!
+//! Benches that score quality as well as time, such as florastack-stack's `quality.rs`, write metric records (an `id`
+//! and numbers such as `ssim` and `halo`) as JSON files into the folder named by `FLORASTACK_BENCH_METRICS`, which this
+//! sets to `<target>/bench-metrics/` and empties first: the summary's `metrics` lists the records, and a table of them
+//! is printed after the timings.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -17,7 +22,8 @@ usage: cargo xtask bench [--quick] [-p PACKAGE]... [FILTER] [-- CRITERION_ARGS..
 
 Runs the criterion benchmarks (`cargo bench --bench '*'`: every bench target of the workspace, or of the packages
 named) and writes target/bench-summary.json, with criterion's mean, median, standard deviation and throughput for
-each benchmark measured in this run, and the git revision, rustc version and machine they were measured on.
+each benchmark measured in this run, the quality metrics that benches recorded (SSIM, halo, noise, color shift...),
+and the git revision, rustc version and machine they were measured on.
 
   --quick              criterion's --quick mode: sample only until the estimate is significant
   -p, --package NAME   only the benches of this package (repeatable)
@@ -28,8 +34,12 @@ each benchmark measured in this run, and the git revision, rustc version and mac
 
 /// The summary's file name in the target directory.
 pub const SUMMARY: &str = "bench-summary.json";
-/// The summary format; bump it when a field changes meaning.
-const SCHEMA_VERSION: u32 = 1;
+/// The folder, in the target directory, that benches write their metric records into.
+pub const METRICS: &str = "bench-metrics";
+/// The environment variable that names that folder for the benches.
+pub const METRICS_VAR: &str = "FLORASTACK_BENCH_METRICS";
+/// The summary format; bump it when a field changes meaning. 2 added `metrics`.
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Default, PartialEq)]
 struct Options<'a> {
@@ -82,9 +92,16 @@ pub fn run(meta: &Value, args: &[&str]) -> Result<(), String> {
     }
     cargo_args.extend(&options.criterion);
     cargo_args.extend(options.filter);
+    let metrics_dir = target.join(METRICS);
+    clear_metrics(&metrics_dir)?;
     eprintln!("$ cargo {}", cargo_args.iter().map(|a| if *a == "*" { "'*'" } else { a }).collect::<Vec<_>>().join(" "));
     let started = SystemTime::now();
-    let status = crate::cargo().args(&cargo_args).current_dir(&root).status().map_err(|e| format!("cannot run cargo bench: {e}"))?;
+    let status = crate::cargo()
+        .args(&cargo_args)
+        .env(METRICS_VAR, &metrics_dir)
+        .current_dir(&root)
+        .status()
+        .map_err(|e| format!("cannot run cargo bench: {e}"))?;
     if !status.success() {
         return Err(format!("cargo bench exited with {status}"));
     }
@@ -95,6 +112,7 @@ pub fn run(meta: &Value, args: &[&str]) -> Result<(), String> {
     if benchmarks.is_empty() {
         return Err(format!("cargo bench ran, but no benchmark wrote its estimates under {} in this run", criterion_dir.display()));
     }
+    let metrics = collect_metrics(&metrics_dir)?;
     let summary = json!({
         "schema_version": SCHEMA_VERSION,
         "tool": "cargo xtask bench",
@@ -108,12 +126,16 @@ pub fn run(meta: &Value, args: &[&str]) -> Result<(), String> {
         },
         "options": { "quick": options.quick, "packages": options.packages, "filter": options.filter, "criterion_args": options.criterion },
         "benchmarks": benchmarks,
+        "metrics": metrics,
     });
     let path = target.join(SUMMARY);
     let text = serde_json::to_string_pretty(&summary).map_err(|e| format!("cannot write the summary: {e}"))?;
     std::fs::write(&path, text + "\n").map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     print!("{}", table(&benchmarks));
-    println!("bench: {} benchmark(s) summarized in {}", benchmarks.len(), path.display());
+    if !metrics.is_empty() {
+        print!("{}", metrics_table(&metrics));
+    }
+    println!("bench: {} benchmark(s) and {} metric record(s) summarized in {}", benchmarks.len(), metrics.len(), path.display());
     Ok(())
 }
 
@@ -197,6 +219,75 @@ fn git(root: &Path) -> Value {
     let revision = command_line(root, "git", &["rev-parse", "HEAD"]);
     let dirty = command_line(root, "git", &["status", "--porcelain", "--untracked-files=no"]).map(|status| !status.is_empty());
     json!({ "revision": revision, "dirty": dirty })
+}
+
+/// Removes the metric files of an earlier run, so that only this run's are summarized.
+fn clear_metrics(dir: &Path) -> Result<(), String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            std::fs::remove_file(&path).map_err(|e| format!("cannot remove {}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// The metric records of every JSON file in `dir` (`{"records": [{"id": ..., ...}]}`), sorted by id.
+fn collect_metrics(dir: &Path) -> Result<Vec<Value>, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("cannot read {}: {e}", dir.display())),
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let file: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let records = file["records"].as_array().ok_or_else(|| format!("{}: no `records` array", path.display()))?;
+        for record in records {
+            if record["id"].as_str().is_none() {
+                return Err(format!("{}: a record without an `id`", path.display()));
+            }
+            out.push(record.clone());
+        }
+    }
+    out.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    Ok(out)
+}
+
+/// The printed table of metric records: their id, then SSIM, halo, noise, color shift (dE), PSNR and the share of
+/// pixels out of range, where a record has them.
+fn metrics_table(records: &[Value]) -> String {
+    let columns =
+        [("ssim", "SSIM", 4), ("halo", "halo", 4), ("noise", "noise", 5), ("delta_e", "dE", 3), ("psnr", "PSNR", 2), ("out_of_range", "out", 4)];
+    let width = records.iter().filter_map(|r| r["id"].as_str()).map(str::len).max().unwrap_or(0);
+    let mut s = format!("  {:<width$}", "metrics");
+    for (_, name, _) in columns {
+        let _ = write!(s, "  {name:>8}");
+    }
+    s.push('\n');
+    for r in records {
+        let _ = write!(s, "  {:<width$}", r["id"].as_str().unwrap_or("?"));
+        for (key, _, digits) in columns {
+            match r[key].as_f64() {
+                Some(v) => {
+                    let _ = write!(s, "  {v:>8.digits$}");
+                }
+                None => s.push_str("         -"),
+            }
+        }
+        s.push('\n');
+    }
+    s
 }
 
 /// The trimmed standard output of a successful command, if it ran.
@@ -295,6 +386,31 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0]["id"], "g/new_one");
         assert!(missing.is_empty(), "{missing:?}");
+    }
+
+    #[test]
+    fn metric_records_are_collected_sorted_and_printed() {
+        let dir = std::env::temp_dir().join(format!("florastack-bench-metrics-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(collect_metrics(&dir).unwrap().is_empty(), "no folder: no records");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = json!({ "records": [
+            { "id": "stack/quality/b", "ssim": 0.95, "halo": 0.08, "noise": 0.004 },
+            { "id": "stack/quality/a", "ssim": 0.9, "psnr": 31.2 },
+        ] });
+        std::fs::write(dir.join("one.json"), file.to_string()).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a record").unwrap();
+        let records = collect_metrics(&dir).unwrap();
+        assert_eq!(records.iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["stack/quality/a", "stack/quality/b"]);
+        let table = metrics_table(&records);
+        assert!(table.contains("stack/quality/b") && table.contains("0.9500") && table.contains("0.00400"), "{table}");
+        assert!(table.lines().nth(1).unwrap().contains("31.20"), "{table}");
+        std::fs::write(dir.join("bad.json"), r#"{ "records": [{ "ssim": 1 }] }"#).unwrap();
+        assert!(collect_metrics(&dir).unwrap_err().contains("without an `id`"));
+        clear_metrics(&dir).unwrap();
+        assert!(collect_metrics(&dir).unwrap().is_empty(), "the JSON files are cleared");
+        assert!(dir.join("notes.txt").exists(), "and only those");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

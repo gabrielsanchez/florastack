@@ -21,10 +21,10 @@ schemars.workspace = true
 [dev-dependencies]
 # Synthetic stacks with known sharp images, for the quality tests and the benches.
 florastack-core = { workspace = true, features = ["testutil"] }
-# Scoring stacks against the ground truth: SSIM, PSNR.
+# Scoring stacks against the ground truth: SSIM, PSNR, halo, noise and color shift.
 florastack-metrics.workspace = true
 criterion.workspace = true
-# The settings' serde round trips, as a project file (JSON) and a preset (TOML) store them.
+# The settings' serde round trips, as a project file (JSON) and a preset (TOML) store them; the quality bench's records.
 serde_json.workspace = true
 toml.workspace = true
 # The peak heap of a stack of 20 frames against one of 200 (tests/memory.rs).
@@ -32,4 +32,8 @@ dhat.workspace = true
 
 [[bench]]
 name = "stack"
+harness = false
+
+[[bench]]
+name = "quality"
 harness = false

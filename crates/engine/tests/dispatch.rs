@@ -130,7 +130,7 @@ fn every_command_dispatches_from_json() {
     assert_eq!((&updated["previews"], &updated["alignedPreviews"]), (&json!(6), &json!(6)), "{updated}");
     assert_eq!(calls.run("filmstrip.list", "{}")["stale"], 0);
     assert_eq!(calls.run("defects.clear", "{}")["cleared"], true);
-    // Stacking: the settings, a quarter-size preview, and a weighted average, which becomes an output.
+    // Stacking: the settings, a quarter-size preview, and a weighted average and a pyramid, which become outputs.
     assert_eq!(calls.run("stack.get", "{}")["settings"]["average"]["radius"], 3.0);
     assert_eq!(calls.run("stack.set", r#"{ "average": { "smoothing": 2.0 } }"#)["settings"]["average"]["smoothing"], 2.0);
     let preview = calls.run("stack.preview", "{}");
@@ -138,6 +138,9 @@ fn every_command_dispatches_from_json() {
     let stacked = calls.run("stack.average", r#"{ "name": "Average" }"#);
     assert_eq!((stacked["frames"].as_array().unwrap().len(), &stacked["framing"]), (6, &json!("wide")), "{stacked}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][0]["method"], "average");
+    let pyramid = calls.run("stack.pyramid", r#"{ "grit": 0.25 }"#);
+    assert_eq!((pyramid["frames"].as_array().unwrap().len(), &pyramid["settings"]["grit"]), (6, &json!(0.25)), "{pyramid}");
+    assert_eq!(calls.run("output.list", "{}")["outputs"][1]["method"], "pyramid");
     assert_eq!(calls.run("stack.reset", "{}")["settings"]["average"]["smoothing"], 8.0);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);

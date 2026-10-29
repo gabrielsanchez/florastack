@@ -90,6 +90,11 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
             params: r#"{ "smoothing": 2.0 }"#.into(),
         },
+        Case {
+            name: "stack.pyramid",
+            setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
+            params: r#"{ "grit": 0.25 }"#.into(),
+        },
         Case { name: "output.rename", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Renamed" }}"#) },
         Case { name: "output.remove", setup: none(), params: format!(r#"{{ "output": {output} }}"#) },
         Case {
