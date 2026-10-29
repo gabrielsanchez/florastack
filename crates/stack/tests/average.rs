@@ -400,6 +400,7 @@ fn settings_round_trip_as_project_files_and_presets_store_them() {
         serde_json::json!({
             "average": { "radius": 3.0, "smoothing": 1.5, "power": 2.5 },
             "pyramid": { "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" },
+            "depth_map": { "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 },
         })
     );
     assert_eq!(serde_json::from_value::<StackSettings>(json).unwrap(), settings);

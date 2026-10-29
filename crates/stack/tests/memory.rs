@@ -1,5 +1,5 @@
 //! Memory stays flat as the stack grows: the peak heap of a stack of 200 frames is that of 20 frames, for the weighted
-//! average and the pyramid method.
+//! average, the pyramid method and both passes of the depth-map method.
 //!
 //! The measure is the heap, counted by `dhat`'s global allocator (this test binary's only), which records every
 //! allocation and its peak in bytes: the memory that depends on FloraStack's code, the same on every platform and run.
@@ -11,7 +11,7 @@
 
 use florastack_core::testutil::{StackParams, generate, scene};
 use florastack_core::{Image, Unmonitored};
-use florastack_stack::{AverageSettings, FrameProgress, Method, PyramidSettings, StackShape, Tiling};
+use florastack_stack::{AverageSettings, DepthSettings, FrameProgress, Method, PyramidSettings, StackShape, Stacker, Tiling};
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -48,12 +48,19 @@ fn peak_memory_does_not_grow_with_the_stack() {
     // The bytes a method may hold at its peak besides the frame: the weighted average's accumulators (16 bytes a
     // pixel for RGB), the pyramid's (33 bytes a pixel, its tiles' inner regions a little larger than their cores) and
     // whole-canvas part, the result, and the scratch of the tiles in flight; far from the 200 frames' 352 MiB.
+    //
+    // Every method runs on one thread. With several, a frame's tiles in flight overlap their scratch planes more or
+    // less from frame to frame, as the threads happen to run, and a longer stack only has more chances to meet the
+    // worst overlap: nothing grows, but the peaks differ. Measured: the pyramid at 46.46 MiB for 20 frames and 47.00
+    // for 200 on 16 threads; the weighted average at 20.88 and 21.76 MiB on the 4-core Windows CI runner, though 21.76
+    // for both on 4 threads elsewhere; nothing left allocated after any of them. On one thread every frame allocates in
+    // the same order.
     for (name, bound, peak) in [
-        ("weighted average", 8 * frame_bytes, measure_pair(&AverageSettings::default(), &distinct)),
-        // On one thread: with several, the pyramid's tiles in flight interleave their scratch planes differently from
-        // frame to frame, and a longer stack only meets a less lucky interleaving (46.46 MiB for 20 frames, 47.00 for
-        // 200 on 16 threads, with nothing left allocated after either).
+        ("weighted average", 8 * frame_bytes, on_one_thread(|| measure_pair(&AverageSettings::default(), &distinct))),
         ("pyramid", 20 * frame_bytes, on_one_thread(|| measure_pair(&PyramidSettings::default(), &distinct))),
+        // Both passes: pass 1's records (32 bytes a pixel), the focus statistics, the depth map and the confidence map
+        // (4 bytes a pixel each), and pass 2's sums (32 bytes a pixel for RGB).
+        ("depth map", 12 * frame_bytes, on_one_thread(|| (measure_depth(&distinct, 20), measure_depth(&distinct, 200)))),
     ] {
         let ((shallow, left_shallow), (deep, left_deep)) = peak;
         println!(
@@ -67,6 +74,40 @@ fn peak_memory_does_not_grow_with_the_stack() {
         assert!(deep <= shallow + shallow / 100, "{name}: {shallow} bytes for 20 frames, {deep} for 200");
         assert!(deep < bound, "{name}: {deep} bytes");
     }
+}
+
+/// The peak heap, in bytes, while stacking `depth` frames from `distinct` by the depth-map method, each pass making
+/// its frames afresh, and the bytes left at the end.
+fn measure_depth(distinct: &[Image<f32>], depth: usize) -> (usize, usize) {
+    let profiler = dhat::Profiler::builder().testing().build();
+    let settings = DepthSettings::default();
+    let tiling = Tiling { tile_size: 256, ..Tiling::default() };
+    let shape = StackShape { width: WIDTH, height: HEIGHT, channels: 3 };
+    let progress = |i: usize| FrameProgress { inner: &Unmonitored, frame: i as u64, frames: depth as u64 };
+    let mut estimator = settings.estimator(&tiling).unwrap();
+    estimator.begin(shape).unwrap();
+    for i in 0..depth {
+        let frame = distinct[i % distinct.len()].clone();
+        estimator.add_frame(&frame, &progress(i)).unwrap();
+        drop(frame);
+    }
+    let stats = estimator.finish(&Unmonitored).unwrap();
+    drop(estimator);
+    let map = stats.resolve(settings.contrast_threshold(), settings.smoothing, None).unwrap();
+    drop(stats);
+    let mut compositor = map.compositor(&tiling).unwrap();
+    compositor.begin(shape).unwrap();
+    for i in 0..depth {
+        let frame = distinct[i % distinct.len()].clone();
+        compositor.add_frame(&frame, &progress(i)).unwrap();
+        drop(frame);
+    }
+    let result = compositor.finish(&Unmonitored).unwrap();
+    assert_eq!(result.frames, depth);
+    drop((result, compositor, map));
+    let stats = dhat::HeapStats::get();
+    drop(profiler);
+    (stats.max_bytes, stats.curr_bytes)
 }
 
 /// `f`, run on a pool of one thread.

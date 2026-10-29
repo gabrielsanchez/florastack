@@ -135,7 +135,7 @@ impl Method for AverageSettings {
 /// How far, in pixels, a Gaussian blur of standard deviation `sigma` reaches with [`BlurMethod::Auto`]: `ceil(3 sigma)`
 /// for the exact kernel, and for the four box passes beyond [`AUTO_EXACT_MAX_SIGMA`], four boxes of radius about
 /// `0.87 sigma` plus their extended end taps.
-fn reach(sigma: f64) -> usize {
+pub(crate) fn reach(sigma: f64) -> usize {
     let r = if sigma <= 0.0 {
         0.0
     } else if sigma <= AUTO_EXACT_MAX_SIGMA {
@@ -162,7 +162,7 @@ pub struct WeightedAverage {
 
 /// The Rec. 709 luminance of a pixel of `c` channels: the first channel of gray images, the first three of color
 /// ones. `None` when a sample isn't finite.
-fn luminance(pixel: &[f32]) -> Option<f32> {
+pub(crate) fn luminance(pixel: &[f32]) -> Option<f32> {
     if !pixel.iter().all(|v| v.is_finite()) {
         return None;
     }

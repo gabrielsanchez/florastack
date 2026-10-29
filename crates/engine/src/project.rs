@@ -379,6 +379,21 @@ pub fn extended_map() -> Option<MapName> {
     MapName::new(EXTENDED).ok()
 }
 
+/// The name, among an output's maps, of the depth-map method's depth map: each pixel's frame index, scaled to 16 bits.
+pub const DEPTH: &str = "depth";
+/// The name, among an output's maps, of the depth-map method's confidence map, 16-bit.
+pub const CONFIDENCE: &str = "confidence";
+
+/// The depth map's name, as a [`MapName`] (always a valid one).
+pub fn depth_map() -> Option<MapName> {
+    MapName::new(DEPTH).ok()
+}
+
+/// The confidence map's name, as a [`MapName`] (always a valid one).
+pub fn confidence_map() -> Option<MapName> {
+    MapName::new(CONFIDENCE).ok()
+}
+
 /// The name of the stack's defect mask among the project's maps.
 pub const DEFECTS: &str = "defects";
 

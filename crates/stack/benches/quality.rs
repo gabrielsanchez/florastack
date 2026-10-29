@@ -1,6 +1,7 @@
 //! The stacking methods' quality on synthetic stacks whose layers occlude one another, scored against their ground
 //! truth: SSIM, halo, flat-region noise, color shift (mean CIEDE2000), PSNR and the share of pixels outside `[0, 1]`,
-//! for the weighted average and the pyramid method with its defaults and with each of its weakness settings changed.
+//! for the weighted average, the pyramid method with its defaults and with each of its weakness settings changed, and
+//! the depth-map method with its defaults, a higher threshold and no smoothing.
 //! The scores are computed once and, when `cargo xtask bench` runs this, written as JSON records into the folder that
 //! `FLORASTACK_BENCH_METRICS` names, which xtask adds to `target/bench-summary.json` and prints; criterion times one
 //! whole stack per method.
@@ -13,7 +14,9 @@ use criterion::{BenchmarkId, Criterion, SamplingMode, Throughput, criterion_grou
 use florastack_core::testutil::{Backdrop, StackParams, SyntheticStack, generate_layered, scene};
 use florastack_core::{Image, Unmonitored};
 use florastack_metrics::{HaloParams, NoiseParams, color_shift, halo, noise, psnr, ssim};
-use florastack_stack::{AverageSettings, Decisions, Method, PyramidSettings, Tiling, compress_range, out_of_range, stack};
+use florastack_stack::{
+    AverageSettings, Decisions, DepthSettings, Method, PyramidSettings, Threshold, Tiling, compress_range, depth_stack, out_of_range, stack,
+};
 use serde_json::{Value, json};
 
 /// The environment variable `cargo xtask bench` names its metrics folder in.
@@ -51,12 +54,14 @@ fn output(method: &Variant, frames: &[Image<f32>]) -> Image<f32> {
             compress_range(&mut image, settings.tone).unwrap();
             image
         }
+        Variant::DepthMap(settings) => depth_stack(settings, &Tiling::default(), frames, None, &Unmonitored).unwrap().stacked.image,
     }
 }
 
 enum Variant {
     Average(AverageSettings),
     Pyramid(PyramidSettings),
+    DepthMap(DepthSettings),
 }
 
 fn record(id: &str, image: &Image<f32>, truth: &Image<f32>) -> Value {
@@ -85,6 +90,8 @@ fn metrics() -> Vec<Value> {
         let truth = &synthetic.truth.sharp;
         let average = if scale >= 3.0 { AverageSettings::default() } else { AverageSettings { radius: 1.0, smoothing: 1.0, power: 3.0 } };
         let defaults = PyramidSettings::default();
+        // The depth map's defaults are for camera frames, three times the scenes' own lengths.
+        let depth = DepthSettings::default().reduced(3.0 / scale);
         let variants = [
             ("average", Variant::Average(average)),
             ("pyramid", Variant::Pyramid(defaults.clone())),
@@ -92,6 +99,9 @@ fn metrics() -> Vec<Value> {
             ("pyramid-no-range-limit", Variant::Pyramid(PyramidSettings { range_limit: 0.0, ..defaults.clone() })),
             ("pyramid-channel-decisions", Variant::Pyramid(PyramidSettings { decisions: Decisions::Channels, ..defaults.clone() })),
             ("pyramid-coarse-limit-1", Variant::Pyramid(PyramidSettings { coarse_limit: Some(1), ..defaults.clone() })),
+            ("depth-map", Variant::DepthMap(depth.clone())),
+            ("depth-map-percentile-60", Variant::DepthMap(depth.with_threshold(Threshold::Percentile(60.0)))),
+            ("depth-map-smoothing-0", Variant::DepthMap(DepthSettings { smoothing: 0.0, ..depth.clone() })),
         ];
         let best = synthetic.frames.iter().map(|f| ssim(f, truth).unwrap()).fold(0.0, f64::max);
         out.push(json!({ "id": format!("stack/quality/{name}/best-frame"), "ssim": best }));
@@ -125,6 +135,9 @@ fn quality(c: &mut Criterion) {
     });
     group.bench_function(BenchmarkId::new("average", "12x720x540"), |b| {
         b.iter(|| output(&Variant::Average(AverageSettings::default()), &synthetic.frames));
+    });
+    group.bench_function(BenchmarkId::new("depth-map", "12x720x540"), |b| {
+        b.iter(|| output(&Variant::DepthMap(DepthSettings::default()), &synthetic.frames));
     });
     group.finish();
 }

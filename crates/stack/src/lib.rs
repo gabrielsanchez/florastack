@@ -4,12 +4,13 @@
 //!
 //! # The streaming framework
 //!
-//! Every method is a [`Stacker`]: [`Stacker::begin`] starts a stack on a canvas ([`StackShape`]: the output's size and
-//! the frames' channels), [`Stacker::add_frame`] folds the next frame into the method's accumulators, and
-//! [`Stacker::finish`] turns them into the result ([`Stacked`]). Frames arrive aligned, linear and `f32`, already on the
-//! output's canvas, as [`FrameSource`]s that hand out any rectangle of themselves with their coverage ([`Patch`]): an
-//! image in memory, a [`CoveredFrame`], or the engine's frame, which it warps onto each rectangle as it is read. The
-//! caller reads one frame, adds it and drops it, so a stack of any depth holds one frame and the accumulators.
+//! Every method is a [`Stacker`] (the depth-map method one per pass over the frames): [`Stacker::begin`] starts a
+//! stack on a canvas ([`StackShape`]: the output's size and the frames' channels), [`Stacker::add_frame`] folds the
+//! next frame into the method's accumulators, and [`Stacker::finish`] turns them into the result ([`Stacked`]).
+//! Frames arrive aligned, linear and `f32`, already on the output's canvas, as [`FrameSource`]s that hand out any
+//! rectangle of themselves with their coverage ([`Patch`]): an image in memory, a [`CoveredFrame`], or the engine's
+//! frame, which it warps onto each rectangle as it is read. The caller reads one frame, adds it and drops it, so a
+//! stack of any depth holds one frame and the accumulators.
 //! [`stack`] drives a stacker over frames in memory. Each method's settings make its stackers ([`Method`]).
 //!
 //! The methods are built on [`Tiled`] (`tiled.rs`), which keeps a method's accumulators tile by tile, in florastack-core's
@@ -40,6 +41,12 @@
 //!   down, the result held within the frames' range at each pixel. The method for hair, bristles and overlapping fine
 //!   structure, without the veils the weighted average leaves around a subject's out-of-focus edges. Its result is
 //!   unclipped; [`compress_range`] brings it into `[0, 1]`.
+//! - **Depth map** ([`DepthSettings`], `depth/`): for every pixel the frame in which it is sharpest, smoothed by an
+//!   edge-aware filter and filled from around where no frame stands out, and each pixel taken from the two frames at
+//!   its depth: smooth tones, and color and contrast left as the frames have them. It reads the frames twice, with two
+//!   stackers ([`Estimator`] for the focus statistics, [`DepthMap::compositor`] for the composite) and the depth map
+//!   made between them ([`FocusStats::resolve`]), again for every new threshold without reading a frame;
+//!   [`depth_stack`] runs it on frames in memory.
 //!
 //! The methods are scored on synthetic stacks whose layers occlude one another
 //! (`florastack_core::testutil::layered`), which have the veils and halos real subjects leave.
@@ -53,6 +60,7 @@
 //! The stack's settings, as a project's preferences hold them, are [`StackSettings`].
 
 mod average;
+pub mod depth;
 mod error;
 mod method;
 mod preview;
@@ -63,6 +71,10 @@ mod tiled;
 
 pub use average::{
     AVERAGE, AverageSettings, ENERGY_CAP, ENERGY_FLOOR, ENERGY_SCALE, MAX_RADIUS, MAX_SAMPLE, MIN_COVERAGE, POWER_RANGE, WeightedAverage,
+};
+pub use depth::{
+    CompositeKernel, DEPTH_MAP, DepthMap, DepthSettings, DepthStack, Estimator, FocusKernel, FocusStats, MAX_FRAMES, MAX_SMOOTHING, Threshold,
+    ThresholdMode, depth_stack,
 };
 pub use error::StackError;
 pub use method::{FrameProgress, Method, StackShape, Stacked, Stacker, stack};

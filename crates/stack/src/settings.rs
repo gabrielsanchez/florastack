@@ -1,11 +1,11 @@
 //! The stack's settings as a project stores them (the `stack` preference group): [`StackSettings`], one table per
-//! method, so that a preset can set `stack.average.radius` and leave everything else as it was. The depth-map method of
-//! roadmap 3.3 adds its own table.
+//! method, so that a preset can set `stack.average.radius` and leave everything else as it was.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::average::AverageSettings;
+use crate::depth::DepthSettings;
 use crate::error::StackError;
 use crate::pyramid::PyramidSettings;
 
@@ -17,12 +17,15 @@ pub struct StackSettings {
     pub average: AverageSettings,
     /// The pyramid method's: `levels`, `grit`, `decisions`, `range_limit`, `tone` and `coarse_limit`.
     pub pyramid: PyramidSettings,
+    /// The depth-map method's: `radius`, `smoothing`, `threshold`, `level` and `percentile`.
+    pub depth_map: DepthSettings,
 }
 
 impl StackSettings {
     /// Checks every method's settings.
     pub fn validate(&self) -> Result<(), StackError> {
         self.average.validate()?;
-        self.pyramid.validate()
+        self.pyramid.validate()?;
+        self.depth_map.validate()
     }
 }
