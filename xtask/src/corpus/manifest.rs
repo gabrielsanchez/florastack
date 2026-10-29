@@ -17,6 +17,8 @@ pub const MAX_FILE_BYTES: u64 = 4 << 30;
 pub enum Subject {
     Insect,
     Flower,
+    /// Mushrooms, molds and lichens: soft, low-contrast surfaces with fine gills and pores.
+    Fungus,
     Coin,
     Landscape,
     Microscopy,
@@ -27,6 +29,7 @@ impl Subject {
         match self {
             Subject::Insect => "insect",
             Subject::Flower => "flower",
+            Subject::Fungus => "fungus",
             Subject::Coin => "coin",
             Subject::Landscape => "landscape",
             Subject::Microscopy => "microscopy",

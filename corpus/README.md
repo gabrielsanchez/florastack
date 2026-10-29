@@ -16,7 +16,7 @@ corpus/
 ```sh
 cargo xtask corpus               # download every stack and fixture in the manifest that is missing or fails its check, then list them
 cargo xtask corpus bee-head      # only that stack (or fixture set)
-cargo xtask corpus --fixtures    # only the format fixtures, which is what the codec and RAW tests need (CI runs this)
+cargo xtask corpus --fixtures    # only the format fixtures, which is what the codec and RAW tests need (CI runs this; local stacks that aren't ready are only warned about)
 cargo xtask corpus --check       # download nothing; fail if a pinned file is missing or wrong
 cargo xtask corpus --hash DIR    # print the [[stack.files]] entries for the files in DIR
 cargo xtask corpus --hash --inline DIR   # the same as one-line entries, for a fixture's files or an archive's members
@@ -61,7 +61,7 @@ A test finds its files with `florastack_testkit::fixture(set, name)` or `fixture
 For stacks that you can't or don't want to publish, make a folder `local/<name>/`, copy the frames into it and add a `stack.toml`:
 
 ```toml
-subject = "insect"              # insect, flower, coin, landscape or microscopy
+subject = "insect"              # insect, flower, fungus, coin, landscape or microscopy
 frame_order = "near-to-far"     # which way focus moves through the frames: near-to-far, far-to-near or unknown
 description = "Weevil at 4x, rail, 120 frames, ISO 100"   # optional
 

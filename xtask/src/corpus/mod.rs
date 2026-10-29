@@ -40,7 +40,8 @@ or a fixture. Everything but the manifest and the README is gitignored.
 
   NAME...          only these stacks and fixtures (default: every stack that is not a placeholder, and every fixture)
   --check          download nothing: verify the files that are there, and fail if any is missing or wrong
-  --fixtures       only the format fixtures (what the codec tests need), not the stacks
+  --fixtures       only the format fixtures (what the codec tests need), not the stacks; local stacks that aren't
+                   ready are only warned about
   --manifest FILE  read FILE instead of corpus/manifest.toml; its files go into stacks/ and fixtures/ next to it
   --hash PATH...   print a [[stack.files]] entry (name, sha256, size) for each file, or each file in a folder
   --inline         with --hash: one-line entries, for a fixture's `files` or an archive's `members` list
@@ -147,6 +148,9 @@ pub fn run(workspace: &Path, args: &[&str]) -> Result<(), String> {
 struct Selection<'m> {
     stacks: Vec<&'m str>,
     fixtures: Vec<&'m str>,
+    /// `--fixtures`: only the fixtures matter, so a local stack that isn't ready (no stack.toml yet, say) is a warning
+    /// rather than a failure, and doesn't stop `cargo xtask ci`.
+    fixtures_only: bool,
 }
 
 /// The stacks and fixtures named, or every stack that isn't a placeholder and every fixture (only the fixtures with
@@ -154,9 +158,9 @@ struct Selection<'m> {
 fn select<'m>(manifest: &'m Manifest, names: &[&str], fixtures_only: bool) -> Result<Selection<'m>, String> {
     if names.is_empty() {
         let stacks = if fixtures_only { Vec::new() } else { manifest.stacks.iter().filter(|s| !s.placeholder).map(|s| s.name.as_str()).collect() };
-        return Ok(Selection { stacks, fixtures: manifest.fixtures.iter().map(|f| f.name.as_str()).collect() });
+        return Ok(Selection { stacks, fixtures: manifest.fixtures.iter().map(|f| f.name.as_str()).collect(), fixtures_only });
     }
-    let mut selection = Selection::default();
+    let mut selection = Selection { fixtures_only, ..Selection::default() };
     for &name in names {
         if let Some(fixture) = manifest.fixtures.iter().find(|f| f.name == name) {
             selection.fixtures.push(fixture.name.as_str());
@@ -257,6 +261,9 @@ fn report(
                     info.frame_order.as_str(),
                     count(stack.frames.len(), "frame")
                 );
+            }
+            Err((name, problem)) if selected.fixtures_only => {
+                println!("  {name:<width$}  WARNING      {problem} (not needed for --fixtures)");
             }
             Err((name, problem)) => {
                 println!("  {name:<width$}  FAILED       {problem}");
@@ -711,13 +718,14 @@ mod tests {
     fn selection_and_reports_cover_placeholders_fixtures_and_local_stacks() {
         let tmp = TempDir::new();
         let manifest = two_frame_manifest();
-        assert_eq!(select(&manifest, &[], false).unwrap(), Selection { stacks: vec!["bee"], fixtures: vec![] });
+        assert_eq!(select(&manifest, &[], false).unwrap(), Selection { stacks: vec!["bee"], fixtures: vec![], fixtures_only: false });
         assert!(select(&manifest, &["later"], false).unwrap_err().contains("placeholder"));
         assert!(select(&manifest, &["wasp"], false).unwrap_err().contains("no stack or fixture `wasp`"));
         assert!(select(&manifest, &["bee"], true).unwrap_err().contains("--fixtures"));
         let fixtures = fixture_manifest();
-        assert_eq!(select(&fixtures, &[], true).unwrap(), Selection { stacks: vec![], fixtures: vec!["tiff", "suite"] });
-        assert_eq!(select(&fixtures, &["suite"], false).unwrap(), Selection { stacks: vec![], fixtures: vec!["suite"] });
+        assert_eq!(select(&fixtures, &[], true).unwrap(), Selection { stacks: vec![], fixtures: vec!["tiff", "suite"], fixtures_only: true });
+        assert_eq!(select(&fixtures, &["suite"], false).unwrap(), Selection { stacks: vec![], fixtures: vec!["suite"], fixtures_only: false });
+        assert!(select(&fixtures, &["suite"], true).unwrap().fixtures_only);
         let mut calls = 0;
         let mut download = server(served(&[("f1.jpg", b"frame one"), ("f2.jpg", b"frame two")]), &mut calls);
         let selected = select(&manifest, &["bee"], false).unwrap();
@@ -728,9 +736,15 @@ mod tests {
         // A local stack without its stack.toml is reported.
         std::fs::create_dir_all(tmp.0.join(LOCAL).join("coin")).unwrap();
         assert_eq!(report(&tmp.0, &manifest, &Selection::default(), true, &mut download, &mut no_extract).unwrap(), ["local/coin"]);
-        // A fixture that isn't there fails a check.
+        // A fixture that isn't there fails a check. With --fixtures, the local stack that isn't ready is only a warning,
+        // so it can't stop `cargo xtask ci`; without it, it still fails.
         let all = select(&fixtures, &[], true).unwrap();
-        assert_eq!(report(&tmp.0, &fixtures, &all, true, &mut download, &mut no_extract).unwrap(), ["fixtures/tiff", "fixtures/suite", "local/coin"]);
+        assert_eq!(report(&tmp.0, &fixtures, &all, true, &mut download, &mut no_extract).unwrap(), ["fixtures/tiff", "fixtures/suite"]);
+        let named = select(&fixtures, &["tiff", "suite"], false).unwrap();
+        assert_eq!(
+            report(&tmp.0, &fixtures, &named, true, &mut download, &mut no_extract).unwrap(),
+            ["fixtures/tiff", "fixtures/suite", "local/coin"]
+        );
     }
 
     #[test]
