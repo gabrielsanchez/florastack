@@ -48,15 +48,19 @@ fn peak_memory_does_not_grow_with_the_stack() {
     // The bytes a method may hold at its peak besides the frame: the weighted average's accumulators (16 bytes a
     // pixel for RGB), the pyramid's (33 bytes a pixel, its tiles' inner regions a little larger than their cores) and
     // whole-canvas part, the result, and the scratch of the tiles in flight; far from the 200 frames' 352 MiB.
+    //
+    // Every method runs on one thread. With several, a frame's tiles in flight overlap their scratch planes more or
+    // less from frame to frame, as the threads happen to run, and a longer stack only has more chances to meet the
+    // worst overlap: nothing grows, but the peaks differ. Measured: the pyramid at 46.46 MiB for 20 frames and 47.00
+    // for 200 on 16 threads; the weighted average at 20.88 and 21.76 MiB on the 4-core Windows CI runner, though 21.76
+    // for both on 4 threads elsewhere; nothing left allocated after any of them. On one thread every frame allocates in
+    // the same order.
     for (name, bound, peak) in [
-        ("weighted average", 8 * frame_bytes, measure_pair(&AverageSettings::default(), &distinct)),
-        // On one thread: with several, the pyramid's tiles in flight interleave their scratch planes differently from
-        // frame to frame, and a longer stack only meets a less lucky interleaving (46.46 MiB for 20 frames, 47.00 for
-        // 200 on 16 threads, with nothing left allocated after either).
+        ("weighted average", 8 * frame_bytes, on_one_thread(|| measure_pair(&AverageSettings::default(), &distinct))),
         ("pyramid", 20 * frame_bytes, on_one_thread(|| measure_pair(&PyramidSettings::default(), &distinct))),
-        // Both passes: pass 1's records (28 bytes a pixel), the focus statistics, the depth map and the confidence map
+        // Both passes: pass 1's records (32 bytes a pixel), the focus statistics, the depth map and the confidence map
         // (4 bytes a pixel each), and pass 2's sums (32 bytes a pixel for RGB).
-        ("depth map", 12 * frame_bytes, (measure_depth(&distinct, 20), measure_depth(&distinct, 200))),
+        ("depth map", 12 * frame_bytes, on_one_thread(|| (measure_depth(&distinct, 20), measure_depth(&distinct, 200)))),
     ] {
         let ((shallow, left_shallow), (deep, left_deep)) = peak;
         println!(
