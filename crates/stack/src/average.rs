@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::StackError;
 use crate::method::{Method, Stacker};
 use crate::source::Patch;
-use crate::tiled::{TileKernel, Tiled, Tiling};
+use crate::tiled::{Share, StatePlane, TileKernel, TileView, Tiled, Tiling};
 
 /// The method's name, as outputs and commands record it.
 pub const AVERAGE: &str = "average";
@@ -252,9 +252,9 @@ impl WeightedAverage {
 }
 
 /// The weighted average's two planes: the weighted sum of the frames, and the sum of the weights.
-fn planes(state: &[Image<f32>]) -> Result<(&Image<f32>, &Image<f32>), StackError> {
+fn planes(state: &[StatePlane]) -> Result<(&Image<f32>, &Image<f32>), StackError> {
     match state {
-        [sum, weight] => Ok((sum, weight)),
+        [StatePlane::F32(sum), StatePlane::F32(weight)] => Ok((sum, weight)),
         _ => Err(StackError::Shape { width: 0, height: 0, channels: state.len() }),
     }
 }
@@ -269,15 +269,19 @@ impl TileKernel for WeightedAverage {
         1 + reach(self.settings.radius) + reach(self.settings.smoothing)
     }
 
-    fn state(&self, width: usize, height: usize, channels: usize) -> Result<Vec<Image<f32>>, StackError> {
-        Ok(vec![Image::new(width, height, channels, ColorSpace::LINEAR)?, Image::new(width, height, 1, ColorSpace::LINEAR)?])
+    fn state(&self, inner: Rect, channels: usize) -> Result<Vec<StatePlane>, StackError> {
+        Ok(vec![
+            StatePlane::F32(Image::new(inner.width, inner.height, channels, ColorSpace::LINEAR)?),
+            StatePlane::F32(Image::new(inner.width, inner.height, 1, ColorSpace::LINEAR)?),
+        ])
     }
 
-    fn fold(&self, state: &mut [Image<f32>], patch: &Patch, inner: Rect) -> Result<(), StackError> {
+    fn fold(&self, state: &mut [StatePlane], patch: &Patch, view: &TileView) -> Result<Option<Share>, StackError> {
         let weights = self.weights(patch)?;
-        let [sum, total] = state else {
+        let [StatePlane::F32(sum), StatePlane::F32(total)] = state else {
             return Err(StackError::Shape { width: 0, height: 0, channels: state.len() });
         };
+        let inner = view.inner_in_patch();
         let c = patch.image.channels();
         // The patch's rows and columns that the state keeps.
         let pixels = patch.image.rows().skip(inner.y).take(inner.height).map(|row| row.get(inner.x * c..(inner.x + inner.width) * c).unwrap_or(&[]));
@@ -294,17 +298,17 @@ impl TileKernel for WeightedAverage {
                 }
             }
         });
-        Ok(())
+        Ok(None)
     }
 
-    fn covered(&self, state: &[Image<f32>]) -> Result<Image<f32>, StackError> {
+    fn covered(&self, state: &[StatePlane]) -> Result<Image<f32>, StackError> {
         let (_, total) = planes(state)?;
         let mut covered = total.clone();
         covered.par_rows_mut().for_each(|row| row.iter_mut().for_each(|t| *t = if *t > 0.0 { 1.0 } else { 0.0 }));
         Ok(covered)
     }
 
-    fn result(&self, state: &[Image<f32>], channels: usize) -> Result<Image<f32>, StackError> {
+    fn result(&self, state: &[StatePlane], _inner: Rect, channels: usize) -> Result<Image<f32>, StackError> {
         let (sum, total) = planes(state)?;
         let mut out = sum.clone();
         let c = channels.max(1);

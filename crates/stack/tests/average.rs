@@ -393,14 +393,26 @@ fn mean(image: &Image<f32>) -> f64 {
 
 #[test]
 fn settings_round_trip_as_project_files_and_presets_store_them() {
-    let settings = StackSettings { average: AverageSettings { radius: 3.0, smoothing: 1.5, power: 2.5 } };
+    let settings = StackSettings { average: AverageSettings { radius: 3.0, smoothing: 1.5, power: 2.5 }, ..StackSettings::default() };
     let json = serde_json::to_value(&settings).unwrap();
-    assert_eq!(json, serde_json::json!({ "average": { "radius": 3.0, "smoothing": 1.5, "power": 2.5 } }));
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "average": { "radius": 3.0, "smoothing": 1.5, "power": 2.5 },
+            "pyramid": { "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" },
+        })
+    );
     assert_eq!(serde_json::from_value::<StackSettings>(json).unwrap(), settings);
-    let partial: StackSettings = toml::from_str("[average]\nradius = 5.0\n").unwrap();
+    let partial: StackSettings = toml::from_str(
+        "[average]
+radius = 5.0
+",
+    )
+    .unwrap();
     assert_eq!(partial.average, AverageSettings { radius: 5.0, ..AverageSettings::default() });
     assert!(serde_json::from_value::<StackSettings>(serde_json::json!({ "average": { "radious": 1.0 } })).is_err());
-    assert!(serde_json::from_value::<StackSettings>(serde_json::json!({ "pyramid": {} })).is_err());
-    assert!(StackSettings { average: AverageSettings { smoothing: -1.0, ..AverageSettings::default() } }.validate().is_err());
+    assert!(serde_json::from_value::<StackSettings>(serde_json::json!({ "depthmap": {} })).is_err());
+    let invalid = StackSettings { average: AverageSettings { smoothing: -1.0, ..AverageSettings::default() }, ..StackSettings::default() };
+    assert!(invalid.validate().is_err());
     assert_eq!(AverageSettings::default().name(), "average");
 }

@@ -234,6 +234,16 @@ fn previews_are_small_srgb_jpegs() {
 /// changed its serialized form: raise `florastack_project::schema::VERSION`, add a migration that rewrites the old
 /// form, and then update the expectation here.
 #[test]
+fn the_pyramid_s_coarse_limit_is_stored_only_when_it_is_on() {
+    let limited = florastack_engine::StackSettings {
+        pyramid: florastack_engine::PyramidSettings { coarse_limit: Some(2), ..florastack_engine::PyramidSettings::default() },
+        ..florastack_engine::StackSettings::default()
+    };
+    assert_eq!(to_data("stack settings", &limited).unwrap()["pyramid"]["coarse_limit"], 2);
+    assert!(to_data("stack settings", &florastack_engine::StackSettings::default()).unwrap()["pyramid"].get("coarse_limit").is_none());
+}
+
+#[test]
 fn the_shapes_stored_in_project_files_are_pinned() {
     assert_eq!(
         to_data("develop settings", &DevelopSettings::default()).unwrap(),
@@ -279,7 +289,10 @@ fn the_shapes_stored_in_project_files_are_pinned() {
     // What stacking stores: its settings, one table per method.
     assert_eq!(
         to_data("stack settings", &florastack_engine::StackSettings::default()).unwrap(),
-        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 } })
+        json!({
+            "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 },
+            "pyramid": { "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" },
+        })
     );
     let id = |n: u64| serde_json::from_value::<FrameId>(json!(n)).unwrap();
     let frame = FrameReport {

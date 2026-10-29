@@ -23,8 +23,8 @@ commands:
                 tests skipped for want of hardware or corpus files (cargo-deny and cargo-audit must be installed)
   corpus        download the sample focus stacks pinned in corpus/manifest.toml (sha256-verified) and check
                 the local stacks in corpus/local/ (`cargo xtask corpus --help` for the options)
-  bench         run the criterion benchmarks and write target/bench-summary.json
-                (`cargo xtask bench --help` for the options)
+  bench         run the criterion benchmarks and write target/bench-summary.json, with the quality metrics
+                that benches record (`cargo xtask bench --help` for the options)
   help          show this message
 ";
 

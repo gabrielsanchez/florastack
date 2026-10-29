@@ -47,6 +47,9 @@ fn an_app_finds_what_it_needs_in_the_engine() {
     let _ = AnyImage::F32(image);
     assert_eq!(DevelopSettings::default().white_balance, WhiteBalance::AsShot);
     assert_eq!(StackSettings::default().average, AverageSettings::default());
+    let pyramid = florastack_engine::PyramidSettings::default();
+    assert_eq!((pyramid.decisions, pyramid.tone), (florastack_engine::Decisions::Luminance, florastack_engine::Tone::Compress));
+    assert_eq!(StackSettings::default().pyramid, pyramid);
     let spec = OutputSpec::new(Format::Tiff).unwrap();
     assert_eq!(spec.depth, BitDepth::U16);
     assert_ne!(branding::DISPLAY_NAME, "");

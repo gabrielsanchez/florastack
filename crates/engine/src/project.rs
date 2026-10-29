@@ -370,6 +370,15 @@ pub fn frame_report(frame: &Frame) -> Option<FrameReport> {
     frame.report.as_ref().and_then(|r| from_data("frame alignment", r).ok())
 }
 
+/// The name, among an output's maps, of its result before tone compression (the pyramid method's unclipped float
+/// result), kept for "retain extended range" files when tone compression changed any pixel.
+pub const EXTENDED: &str = "extended";
+
+/// The extended-range map's name, as a [`MapName`] (always a valid one).
+pub fn extended_map() -> Option<MapName> {
+    MapName::new(EXTENDED).ok()
+}
+
 /// The name of the stack's defect mask among the project's maps.
 pub const DEFECTS: &str = "defects";
 

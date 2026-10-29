@@ -3,7 +3,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use florastack_codecs::{OutputMetadata, OutputSpec};
+use florastack_codecs::{BitDepth, OutputMetadata, OutputSpec};
 use florastack_core::Monitor;
 use florastack_project::{Edit, FrameId, Input, LayerId, OutputId, ProjectError, Value};
 use schemars::JsonSchema;
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::{absolute, check_name, check_path, display};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobPlan, Lane, commit};
+use crate::project::extended_map;
 use crate::registry::{CommandSpec, Effects, Meta, NoParams, Params, Requires};
 use crate::session::Session;
 
@@ -37,15 +38,19 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             Meta::new("output.save", "Save output", "Writes an output to an image file, in the format, depth and color profile given.")
                 .help(
                     "The metadata (EXIF, IPTC, XMP) comes from `metadataFrom`, or by default from the first of the \
-                     output's frames, with the frame count in XMP. The file is written whole to a temporary file and \
-                     then renamed, so a failed write leaves nothing behind; an existing file is replaced only with \
-                     `overwrite`. Runs as a job, which can be cancelled until writing starts.",
+                     output's frames, with the frame count in XMP. With `extended_range` in the spec and a 32-bit \
+                     float depth (TIFF or OpenEXR), values outside [0, 1] are kept: for an output whose tone \
+                     compression brought it into range (the pyramid method's), the result from before it is written \
+                     (\"retain extended range\"). The file is written whole to a temporary file and then renamed, so \
+                     a failed write leaves nothing behind; an existing file is replaced only with `overwrite`. Runs as \
+                     a job, which can be cancelled until writing starts.",
                 )
                 .requires(Requires::Project)
                 .effects(Effects::Files)
                 .examples(&[
                     r#"{ "output": 4, "path": "C:/Stacks/bee.tif", "spec": { "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16" } }"#,
                     r#"{ "output": 4, "path": "C:/Stacks/bee.jpg", "spec": { "format": { "format": "jpeg", "quality": 92, "subsampling": "s444" }, "depth": "u8", "profile": "srgb" }, "overwrite": true }"#,
+                    r#"{ "output": 5, "path": "C:/Stacks/bee.exr", "spec": { "format": { "format": "open-exr", "compression": "zip", "half": false }, "depth": "f32", "extended_range": true } }"#,
                 ]),
             Lane::Heavy,
             save,
@@ -225,7 +230,17 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandE
 fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandError> {
     let (project, folder) = (session.project()?, session.folder()?);
     let output = find(session, p.output)?;
-    let image = output.image.clone();
+    // "Retain extended range": the output's result from before its tone compression, when it has one.
+    let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();
+    let mut early = Vec::new();
+    let image = match extended {
+        Some(extended) if p.spec.extended_range && p.spec.depth == BitDepth::F32 => extended,
+        Some(_) if p.spec.extended_range => {
+            early.push("extended range is kept in 32-bit float files only: this file holds the output brought into [0, 1]".to_owned());
+            output.image.clone()
+        }
+        _ => output.image.clone(),
+    };
     let frames: Vec<FrameId> = output.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect();
     let source = match p.metadata_from {
         Some(id) => Some(project.frame(id).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?),
@@ -243,7 +258,7 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
         ctx.stage(0);
         let pixels = crate::project::read_image(&cache, &image)?;
         ctx.checkpoint()?;
-        let mut warnings = Vec::new();
+        let mut warnings = early;
         let metadata = match &source {
             Some(frame) => match std::fs::read(frame) {
                 Ok(bytes) => Some(florastack_codecs::read_metadata(&bytes)),
