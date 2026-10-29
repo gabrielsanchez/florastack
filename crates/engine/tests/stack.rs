@@ -1,8 +1,9 @@
 //! The stacking commands on synthetic stacks written as frame files: `stack.average` stacks the aligned frames into a
 //! new output, sharper than any frame, as one undo step; `stack.pyramid` does better on a scene whose layers occlude
 //! one another, and keeps its unclipped result for extended-range files when tone compression changes it; wide framing
-//! leaves the pixels no frame covers transparent; `stack.preview` makes a quarter-size preview of either method without
-//! touching the project; and stacks without a current alignment, or cancelled, change nothing.
+//! leaves the pixels no frame covers transparent; `stack.depthMap` makes an output with its depth and confidence maps,
+//! which `output.save` writes as data; `stack.preview` makes a quarter-size preview of any method without touching the
+//! project; and stacks without a current alignment, or cancelled, change nothing.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -152,7 +153,7 @@ fn stacking_needs_a_current_alignment_and_cancelling_changes_nothing() {
     let dir = TempDir::new("stack-stale");
     let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 24));
     let (mut engine, _) = project_with(dir.path(), &files[..4]);
-    for name in ["stack.average", "stack.pyramid", "stack.preview"] {
+    for name in ["stack.average", "stack.pyramid", "stack.depthMap", "stack.preview"] {
         let e = engine.dispatch_json(name, "{}").unwrap_err();
         assert_eq!(e.code(), "unavailable", "{name}: {e}");
         assert!(e.to_string().contains("align.run"), "{e}");
@@ -164,7 +165,7 @@ fn stacking_needs_a_current_alignment_and_cancelling_changes_nothing() {
     run(&mut engine, "align.run", "{}");
 
     let before = state(&engine);
-    for name in ["stack.average", "stack.pyramid", "stack.preview"] {
+    for name in ["stack.average", "stack.pyramid", "stack.depthMap", "stack.preview"] {
         let job = common::job_of(engine.dispatch_json(name, "{}").unwrap());
         // Cancelling wins over a job that finishes anyway: its commit is dropped.
         assert!(engine.cancel(job));
@@ -179,13 +180,24 @@ fn settings_merge_are_checked_and_go_into_presets() {
     let mut engine = Engine::new(config(dir.path()));
     run(&mut engine, "project.new", &format!(r#"{{ "name": "Settings", "folder": {} }}"#, quoted(dir.path())));
     let pyramid = json!({ "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" });
+    let depth_map = json!({ "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 });
     assert_eq!(
         run(&mut engine, "stack.get", "{}")["settings"],
-        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 }, "pyramid": pyramid })
+        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 }, "pyramid": pyramid, "depth_map": depth_map })
     );
     run(&mut engine, "stack.set", r#"{ "average": { "radius": 3.0 } }"#);
     let s = run(&mut engine, "stack.set", r#"{ "average": { "power": 1.5 } }"#)["settings"].clone();
-    assert_eq!(s, json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 1.5 }, "pyramid": pyramid }));
+    assert_eq!(s, json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 1.5 }, "pyramid": pyramid, "depth_map": depth_map }));
+    let s = run(&mut engine, "stack.set", r#"{ "depth_map": { "threshold": "level", "level": 0.003 } }"#)["settings"].clone();
+    assert_eq!((&s["depth_map"]["threshold"], &s["depth_map"]["level"], &s["depth_map"]["radius"]), (&json!("level"), &json!(0.003), &json!(2.0)));
+    // Regression: the threshold changes kind over the stored one, key by key, as presets layer.
+    let s = run(&mut engine, "stack.set", r#"{ "depth_map": { "threshold": "percentile", "percentile": 60 } }"#)["settings"].clone();
+    assert_eq!(
+        (&s["depth_map"]["threshold"], &s["depth_map"]["percentile"], &s["depth_map"]["level"]),
+        (&json!("percentile"), &json!(60.0), &json!(0.003))
+    );
+    let s = run(&mut engine, "stack.set", r#"{ "depth_map": { "threshold": "auto" } }"#)["settings"].clone();
+    assert_eq!(s["depth_map"]["threshold"], "auto");
     let s = run(&mut engine, "stack.set", r#"{ "pyramid": { "grit": 0.25, "coarse_limit": 2 } }"#)["settings"].clone();
     assert_eq!((&s["pyramid"]["grit"], &s["pyramid"]["coarse_limit"], &s["average"]["power"]), (&json!(0.25), &json!(2), &json!(1.5)));
     for bad in [
@@ -195,6 +207,10 @@ fn settings_merge_are_checked_and_go_into_presets() {
         r#"{ "pyramid": { "grit": 0.1 } }"#,
         r#"{ "pyramid": { "grits": 0.5 } }"#,
         r#"{ "depthmap": {} }"#,
+        r#"{ "depth_map": { "percentile": 101 } }"#,
+        r#"{ "depth_map": { "threshold": { "level": 1 } } }"#,
+        r#"{ "depth_map": { "level": -1 } }"#,
+        r#"{ "depth_map": { "smoothing": -2 } }"#,
     ] {
         assert_eq!(engine.dispatch_json("stack.set", bad).unwrap_err().code(), "params", "{bad}");
     }
@@ -286,6 +302,98 @@ fn a_pyramid_stack_is_sharper_than_the_average_on_occluding_layers_and_becomes_a
     }
 }
 
+#[test]
+fn a_depth_map_stack_becomes_an_output_with_its_depth_and_confidence_maps() {
+    let dir = TempDir::new("stack-depth");
+    let (frames, truth) = layered_frames(240, 180, 1.0, 10, 31, 1.0);
+    let files = common::write_frames(dir.path(), "stack", &frames);
+    let (mut engine, ids) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    let before = state(&engine);
+    let steps = run(&mut engine, "edit.history", "{}")["undo"].as_array().unwrap().len();
+    // Settings for the scene's own scale, for both methods: a third of the depth map's defaults for camera frames.
+    let average = run(&mut engine, "stack.average", r#"{ "radius": 1.0, "smoothing": 1.0 }"#);
+    let depth = run(&mut engine, "stack.depthMap", r#"{ "name": "Depth", "radius": 0.7, "smoothing": 2.7 }"#);
+    println!("{depth}");
+    let score = |summary: &serde_json::Value| ssim(&output_image(&engine, summary["output"].as_u64().unwrap()), &truth).unwrap();
+    let (a, d) = (score(&average), score(&depth));
+    println!("SSIM: weighted average {a:.4}, depth map {d:.4}");
+    assert!(d > a, "{d:.4} against {a:.4}");
+    assert_eq!((depth["width"].as_u64(), depth["height"].as_u64(), depth["uncovered"].as_u64()), (Some(240), Some(180), Some(0)));
+    assert_eq!(depth["settings"], json!({ "radius": 0.7, "smoothing": 2.7, "threshold": "auto", "level": 0.001, "percentile": 30.0 }));
+    let filled = depth["depth"]["filled"].as_u64().unwrap();
+    assert!(filled > 0 && filled < 240 * 180, "{filled}");
+    assert!(depth["depth"]["level"].as_f64().unwrap() > 0.0);
+    assert!(depth.get("range").is_none() && depth.get("levels").is_none(), "{depth}");
+    let mut used: Vec<u64> = depth["frames"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    used.sort_unstable();
+    assert_eq!(used, ids);
+
+    // Listed with its method, its parameters and its two maps; one undo step.
+    let listed = run(&mut engine, "output.list", "{}");
+    let entry = &listed["outputs"][1];
+    assert_eq!((&entry["name"], &entry["method"]), (&json!("Depth"), &json!("depth-map")));
+    assert_eq!(
+        entry["parameters"],
+        json!({ "radius": 0.7, "smoothing": 2.7, "threshold": "auto", "level": 0.001, "percentile": 30.0, "framing": "narrow" })
+    );
+    assert_eq!(entry["maps"], json!(["confidence", "depth"]));
+    let output = depth["output"].as_u64().unwrap();
+
+    // The maps are saved as data, 16-bit: the depth map is the frame index scaled, 0 for the first frame.
+    let untagged = json!({ "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16", "profile": "untagged" });
+    let mut read_map = |map: &str| {
+        let path = dir.path().join(format!("{map}.tif"));
+        run(&mut engine, "output.save", &json!({ "output": output, "map": map, "path": path, "spec": untagged }).to_string());
+        match florastack_codecs::read_file(&path, &florastack_codecs::ReadOptions::default()).unwrap().image {
+            AnyImage::U16(image) => image,
+            other => panic!("a 16-bit map, not {:?}", other.format()),
+        }
+    };
+    let (depth_map, confidence) = (read_map("depth"), read_map("confidence"));
+    assert_eq!((depth_map.width(), depth_map.height(), depth_map.channels()), (240, 180, 1));
+    let (low, high) = (depth_map.as_raw().iter().min().copied().unwrap(), depth_map.as_raw().iter().max().copied().unwrap());
+    assert!(low < 10_000 && high > 50_000, "near and far layers: {low} to {high}");
+    assert!(confidence.as_raw().iter().any(|&c| c > 32768) && confidence.as_raw().iter().any(|&c| c < 32768));
+    let srgb = json!({ "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16", "profile": "srgb" });
+    let path = dir.path().join("wrong.tif");
+    for (map, spec, code) in [("depth", &srgb, "params"), ("motion", &untagged, "params"), ("Depth", &untagged, "params")] {
+        let e = engine.dispatch_json("output.save", &json!({ "output": output, "map": map, "path": path, "spec": spec }).to_string()).unwrap_err();
+        assert_eq!(e.code(), code, "{map}: {e}");
+    }
+    let e = engine
+        .dispatch_json("output.save", &json!({ "output": average["output"], "map": "depth", "path": path, "spec": untagged }).to_string())
+        .unwrap_err();
+    assert!(format!("{e:?}").contains("has none"), "{e:?}");
+
+    assert_eq!(run(&mut engine, "edit.history", "{}")["undo"].as_array().unwrap().len(), steps + 2);
+    assert_eq!(run(&mut engine, "edit.undo", "{}")["label"], "Stack by depth map");
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(state(&engine), before);
+
+    // Settings for one stack apply to it alone, and are checked; the project's come from the `depth_map` table.
+    let level = run(&mut engine, "stack.depthMap", r#"{ "threshold": "level", "level": 0.0, "smoothing": 0.0 }"#);
+    assert_eq!(level["depth"]["level"], 0.0);
+    assert!(level["depth"]["filled"].as_u64().unwrap() < filled);
+    let share = run(&mut engine, "stack.depthMap", r#"{ "threshold": "percentile", "percentile": 30 }"#);
+    let filled = share["depth"]["filled"].as_u64().unwrap() as f64 / (240.0 * 180.0);
+    assert!((0.29..0.5).contains(&filled), "a percentile of 30 fills at least 30%: {filled}");
+    run(&mut engine, "stack.set", r#"{ "depth_map": { "threshold": "percentile", "percentile": 60 } }"#);
+    let project = run(&mut engine, "stack.depthMap", "{}");
+    assert_eq!((&project["settings"]["threshold"], &project["settings"]["percentile"]), (&json!("percentile"), &json!(60.0)));
+    for bad in [
+        r#"{ "radius": -1 }"#,
+        r#"{ "smoothing": 300 }"#,
+        r#"{ "percentile": 120 }"#,
+        r#"{ "level": -1 }"#,
+        r#"{ "threshold": 30 }"#,
+        r#"{ "threshold": { "level": 0.001 } }"#,
+        r#"{ "grit": 0.5 }"#,
+    ] {
+        assert_eq!(engine.dispatch_json("stack.depthMap", bad).unwrap_err().code(), "params", "{bad}");
+    }
+}
+
 /// Linear frames as 32-bit float TIFF files, values beyond 1 kept: a RAW development with exposure added.
 fn write_float_frames(dir: &Path, name: &str, frames: &[Image<f32>]) -> Vec<PathBuf> {
     let folder = dir.join(name);
@@ -364,10 +472,26 @@ fn the_preview_takes_either_method_and_its_settings() {
     assert_eq!((previewed["width"].as_u64(), previewed["height"].as_u64()), (Some(40), Some(30)), "{previewed}");
     assert_eq!((&previewed["method"], &previewed["settings"]["grit"]), (&json!("pyramid"), &json!(0.25)));
     assert_eq!(run(&mut engine, "stack.preview", "{}")["method"], "average", "the weighted average by default");
+    let previewed = run(&mut engine, "stack.preview", r#"{ "method": "depth-map", "smoothing": 16, "threshold": "level", "level": 0.002 }"#);
+    assert_eq!((previewed["width"].as_u64(), previewed["height"].as_u64()), (Some(40), Some(30)), "{previewed}");
+    assert_eq!(
+        previewed["settings"],
+        json!({ "radius": 2.0, "smoothing": 16.0, "threshold": "level", "level": 0.002, "percentile": 30.0 }),
+        "full-scale settings"
+    );
     assert_eq!(state(&engine), before);
-    for bad in
-        [r#"{ "method": "pyramid", "radius": 2 }"#, r#"{ "grit": 0.5 }"#, r#"{ "method": "depthmap" }"#, r#"{ "method": "pyramid", "grit": 0.1 }"#]
-    {
+    for bad in [
+        r#"{ "method": "pyramid", "radius": 2 }"#,
+        r#"{ "grit": 0.5 }"#,
+        r#"{ "method": "depthmap" }"#,
+        r#"{ "method": "pyramid", "grit": 0.1 }"#,
+        r#"{ "threshold": "level" }"#,
+        r#"{ "method": "pyramid", "percentile": 20 }"#,
+        r#"{ "method": "depth-map", "power": 2 }"#,
+        r#"{ "method": "depth-map", "tone": "clip" }"#,
+        r#"{ "method": "depth-map", "smoothing": 300 }"#,
+        r#"{ "method": "depth-map", "percentile": -5 }"#,
+    ] {
         assert_eq!(engine.dispatch_json("stack.preview", bad).unwrap_err().code(), "params", "{bad}");
     }
 }

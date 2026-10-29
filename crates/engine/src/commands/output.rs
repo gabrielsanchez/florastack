@@ -3,9 +3,9 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use florastack_codecs::{BitDepth, OutputMetadata, OutputSpec};
+use florastack_codecs::{BitDepth, OutputMetadata, OutputProfile, OutputSpec};
 use florastack_core::Monitor;
-use florastack_project::{Edit, FrameId, Input, LayerId, OutputId, ProjectError, Value};
+use florastack_project::{Edit, FrameId, Input, LayerId, MapName, OutputId, ProjectError, Value};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -41,9 +41,12 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      output's frames, with the frame count in XMP. With `extended_range` in the spec and a 32-bit \
                      float depth (TIFF or OpenEXR), values outside [0, 1] are kept: for an output whose tone \
                      compression brought it into range (the pyramid method's), the result from before it is written \
-                     (\"retain extended range\"). The file is written whole to a temporary file and then renamed, so \
-                     a failed write leaves nothing behind; an existing file is replaced only with `overwrite`. Runs as \
-                     a job, which can be cancelled until writing starts.",
+                     (\"retain extended range\"). With `map`, one of the output's maps (`output.list` names them) is \
+                     written instead, such as a depth-map output's `depth` and `confidence` maps: maps are data, so \
+                     the spec's profile must be `untagged`, and a 16-bit depth keeps every level. The file is written \
+                     whole to a temporary file and then renamed, so a failed write leaves nothing behind; an existing \
+                     file is replaced only with `overwrite`. Runs as a job, which can be cancelled until writing \
+                     starts.",
                 )
                 .requires(Requires::Project)
                 .effects(Effects::Files)
@@ -51,6 +54,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                     r#"{ "output": 4, "path": "C:/Stacks/bee.tif", "spec": { "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16" } }"#,
                     r#"{ "output": 4, "path": "C:/Stacks/bee.jpg", "spec": { "format": { "format": "jpeg", "quality": 92, "subsampling": "s444" }, "depth": "u8", "profile": "srgb" }, "overwrite": true }"#,
                     r#"{ "output": 5, "path": "C:/Stacks/bee.exr", "spec": { "format": { "format": "open-exr", "compression": "zip", "half": false }, "depth": "f32", "extended_range": true } }"#,
+                    r#"{ "output": 6, "map": "depth", "path": "C:/Stacks/bee-depth.tif", "spec": { "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16", "profile": "untagged" } }"#,
                 ]),
             Lane::Heavy,
             save,
@@ -187,6 +191,10 @@ struct SaveParams {
     /// The frame whose metadata the file gets; by default the first of the output's frames.
     #[serde(default)]
     metadata_from: Option<FrameId>,
+    /// One of the output's maps to write instead of the output, such as `depth` or `confidence`; the spec's profile
+    /// must then be `untagged`.
+    #[serde(default)]
+    map: Option<String>,
     /// Replace the file if it exists.
     #[serde(default)]
     overwrite: bool,
@@ -195,6 +203,12 @@ struct SaveParams {
 impl Params for SaveParams {
     fn check(&self) -> Result<(), Invalid> {
         check_path("path", &self.path)?;
+        if let Some(map) = &self.map {
+            MapName::new(map).map_err(|e| Invalid::new("map", e.to_string()))?;
+            if self.spec.profile != OutputProfile::Untagged {
+                return Err(Invalid::new("spec", "a map is data, not a picture: write it with the profile \"untagged\", which keeps its values"));
+            }
+        }
         self.spec.validate().map_err(|e| Invalid::new("spec", e.to_string()))
     }
 }
@@ -233,13 +247,27 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
     // "Retain extended range": the output's result from before its tone compression, when it has one.
     let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();
     let mut early = Vec::new();
-    let image = match extended {
-        Some(extended) if p.spec.extended_range && p.spec.depth == BitDepth::F32 => extended,
-        Some(_) if p.spec.extended_range => {
+    let image = match (&p.map, extended) {
+        (Some(map), _) => {
+            let name = MapName::new(map).map_err(|e| session.invalid("map", e.to_string()))?;
+            output.maps.get(&name).cloned().ok_or_else(|| {
+                let names: Vec<&str> = output.maps.keys().map(MapName::as_str).collect();
+                session.invalid(
+                    "map",
+                    format!(
+                        "output {} has no map {map}: {}",
+                        p.output,
+                        if names.is_empty() { "it has none".to_owned() } else { format!("it has {}", names.join(", ")) }
+                    ),
+                )
+            })?
+        }
+        (None, Some(extended)) if p.spec.extended_range && p.spec.depth == BitDepth::F32 => extended,
+        (None, Some(_)) if p.spec.extended_range => {
             early.push("extended range is kept in 32-bit float files only: this file holds the output brought into [0, 1]".to_owned());
             output.image.clone()
         }
-        _ => output.image.clone(),
+        (None, _) => output.image.clone(),
     };
     let frames: Vec<FrameId> = output.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect();
     let source = match p.metadata_from {

@@ -80,6 +80,15 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("stack.set", json!({ "pyramid": { "tone": "squash" } })),
         ("stack.set", json!({ "pyramid": { "coarse_limit": -3 } })),
         ("stack.set", json!({ "depthmap": {} })),
+        ("stack.set", json!({ "depth_map": { "level": -1e30 } })),
+        ("stack.set", json!({ "depth_map": { "threshold": "high" } })),
+        ("stack.set", json!({ "depth_map": { "threshold": { "level": 1 } } })),
+        ("stack.set", json!({ "depth_map": { "radius": 1e9 } })),
+        ("stack.depthMap", json!({ "smoothing": 1e30 })),
+        ("stack.depthMap", json!({ "percentile": 1e300 })),
+        ("stack.depthMap", json!({ "threshold": "otsu" })),
+        ("stack.depthMap", json!({ "name": "" })),
+        ("stack.preview", json!({ "method": "depth-map", "radius": -1 })),
         ("stack.pyramid", json!({ "grit": -1 })),
         ("stack.pyramid", json!({ "rangeLimit": 1e30 })),
         ("stack.pyramid", json!({ "coarseLimit": 1e12 })),
@@ -106,6 +115,14 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ),
         ("output.save", json!({ "output": 1, "path": "x.png", "spec": { "format": { "format": "png" }, "depth": "u12" } })),
         ("output.save", json!({ "output": 1, "path": "x.png", "spec": { "format": { "format": "gif" }, "depth": "u8" } })),
+        (
+            "output.save",
+            json!({ "output": 1, "map": "../depth", "path": "x.tif", "spec": { "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16", "profile": "untagged" } }),
+        ),
+        (
+            "output.save",
+            json!({ "output": 1, "map": "depth", "path": "x.tif", "spec": { "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16" } }),
+        ),
     ];
     for (name, params) in cases {
         let e = engine.dispatch(name, params.clone()).unwrap_err();

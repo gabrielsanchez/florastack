@@ -1,6 +1,7 @@
 //! Stacking: the stacking settings, a preference group of the project (`stack.get`, `stack.set`, `stack.reset`), the
-//! weighted average and the pyramid method of the aligned frames as new outputs (`stack.average`, `stack.pyramid`,
-//! jobs), and a quarter-scale preview of either (`stack.preview`, a preview job).
+//! weighted average, the pyramid method and the depth-map method of the aligned frames as new outputs
+//! (`stack.average`, `stack.pyramid`, `stack.depthMap`, jobs), and a quarter-scale preview of any of them
+//! (`stack.preview`, a preview job).
 //!
 //! Every job stacks the enabled frames of the stored alignment run, in the run's processing order, on the canvas of the
 //! framing the alignment settings choose, as `align.info` shows it; frames whose alignment was rejected are left out
@@ -10,15 +11,18 @@
 //! measured, and handed to florastack-stack's stacker, then dropped: memory holds one frame and the accumulators,
 //! whatever the depth of the stack.
 //!
-//! - **The full stack** (`stack.average`, `stack.pyramid`) warps each frame onto the canvas a tile at a time, as the
-//!   stacker reads it ([`Warped`]: florastack-align's `warp_to_canvas`, bicubic, with the frame's coverage, so that in
-//!   wide framing a frame adds nothing where it has no pixels), and RAW frames get the settings' demosaic. Its commit
-//!   adds the output (`Edit::AddOutput`, one undo step): the stacked image in the cache, linear `f32` TIFF, with an
-//!   alpha channel when some pixels are covered by no frame (only wide framing has them), and a small JPEG preview for
-//!   lists, with the method's parameters and the frames it was made from.
+//! - **The full stack** (`stack.average`, `stack.pyramid`, `stack.depthMap`) warps each frame onto the canvas a tile at
+//!   a time, as the stacker reads it ([`Warped`]: florastack-align's `warp_to_canvas`, bicubic, with the frame's
+//!   coverage, so that in wide framing a frame adds nothing where it has no pixels), and RAW frames get the settings'
+//!   demosaic. Its commit adds the output (`Edit::AddOutput`, one undo step): the stacked image in the cache, linear
+//!   `f32` TIFF, with an alpha channel when some pixels are covered by no frame (only wide framing has them), and a
+//!   small JPEG preview for lists, with the method's parameters and the frames it was made from.
 //! - **Range** (the pyramid method): the stack comes out unclipped and is brought into `[0, 1]` as its `tone` setting
 //!   says (florastack-stack's `compress_range`). When that changes any pixel, the result before it is kept as the
 //!   output's `extended` map, which `output.save` writes for "retain extended range" files.
+//! - **Two passes** (the depth-map method): every frame is read twice, once to measure its focus and once to
+//!   composite, with the depth map made between them from the focus statistics. The output keeps the depth map and the
+//!   confidence map as its `depth` and `confidence` maps, 16-bit (`output.save` with `map`).
 //! - **The preview** (`stack.preview`) reduces each frame to a quarter of its size as soon as it is read
 //!   (florastack-align's `thumbnail`, which the filmstrip uses too: block averages, then Lanczos3) and warps the small
 //!   copy onto the quarter-size canvas as the full stack warps the frame (tile by tile, bicubic, with its feathered
@@ -34,8 +38,9 @@ use florastack_core::{Affine, AnyImage, Image, Monitor, Rect};
 use florastack_project::{Area, CacheDir, Edit, FrameId, Group, Input, Maps, NewOutput, OutputId, Preferences, Table};
 use florastack_raw::Quality;
 use florastack_stack::{
-    AVERAGE, AverageSettings, Decisions, FrameProgress, FrameSource, Gained, MAX_RADIUS, Method, PREVIEW_FACTOR, PYRAMID, Patch, PyramidSettings,
-    StackError, StackSettings, StackShape, Stacked, Stacker, Tiling, Tone, compress_range, out_of_range,
+    AVERAGE, AverageSettings, DEPTH_MAP, Decisions, DepthMap, DepthSettings, FrameProgress, FrameSource, Gained, MAX_RADIUS, Method, PREVIEW_FACTOR,
+    PYRAMID, Patch, PyramidSettings, StackError, StackSettings, StackShape, Stacked, Stacker, ThresholdMode, Tiling, Tone, compress_range,
+    out_of_range,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -44,7 +49,10 @@ use super::align::Plan;
 use super::check_name;
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
-use crate::project::{align_settings, develop_record, extended_map, stack_settings, stored_alignment, write_image, write_image_in, write_preview};
+use crate::project::{
+    align_settings, confidence_map, depth_map, develop_record, extended_map, stack_settings, stored_alignment, write_image, write_image_in,
+    write_preview,
+};
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
 
@@ -57,7 +65,9 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      (`average`), the radius sharpness is measured over, the smoothing of the blend and the power that \
                      sets how strongly the sharpest frame wins; for the pyramid method (`pyramid`), the number of \
                      levels, the grit suppression, the decisions (luminance or channels), the range limit, the tone \
-                     compression and the coarse limit.",
+                     compression and the coarse limit; for the depth-map method (`depth_map`), the estimation radius, \
+                     the smoothing radius and the contrast threshold: how it is chosen (`threshold`: auto, level or \
+                     percentile), and its `level` and `percentile`.",
                 )
                 .requires(Requires::Project),
             get,
@@ -70,13 +80,26 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      misspelled key is an error. The settings apply to the next stack and preview.",
                 )
                 .undoable()
-                .examples(&[r#"{ "average": { "radius": 2.0 } }"#, r#"{ "pyramid": { "grit": 0.25, "tone": "clip" } }"#]),
+                .examples(&[
+                    r#"{ "average": { "radius": 2.0 } }"#,
+                    r#"{ "pyramid": { "grit": 0.25, "tone": "clip" } }"#,
+                    r#"{ "depth_map": { "threshold": "percentile", "percentile": 40 } }"#,
+                ]),
             set,
         ),
         CommandSpec::instant(
             Meta::new("stack.reset", "Reset stacking settings", "Puts every stacking setting back at its default.").undoable(),
             reset,
         ),
+    ]
+    .into_iter()
+    .chain(stacking())
+    .collect()
+}
+
+/// The stacking jobs: one per method, and the preview.
+fn stacking() -> Vec<CommandSpec> {
+    vec![
         CommandSpec::job(
             Meta::new("stack.average", "Stack by weighted average", "Stacks the aligned frames by weighted average into a new output.")
                 .help(
@@ -117,19 +140,52 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             pyramid,
         ),
         CommandSpec::job(
+            Meta::new("stack.depthMap", "Stack by depth map", "Stacks the aligned frames by the depth-map method into a new output.")
+                .help(
+                    "Finds, for every pixel, the frame in which it is sharpest, smooths that depth map with an \
+                     edge-aware filter and takes each pixel from the frames at its depth, blending the two on either \
+                     side: every pixel's color and contrast are its frames', for smooth tones and accurate color. Where \
+                     the confidence (how clearly the sharpest frame stands out) is below the threshold, as in an \
+                     out-of-focus background or on a smooth surface, the depth is filled from the confident pixels \
+                     around instead. `radius` is the estimation radius the focus is measured over, `smoothing` the \
+                     reach of the depth map's smoothing, and `threshold` how the contrast threshold is chosen: `auto` \
+                     (from the statistics: the pixels whose depth follows noise, or else the 10th percentile), `level` \
+                     (the absolute `level`) or `percentile` (`percentile` percent of the pixels). Reads every frame \
+                     twice. The output keeps the depth map (the frame index scaled to 16 bits, 0 for the first frame) \
+                     and the confidence map (0.5 at the threshold) as its `depth` and `confidence` maps, which \
+                     `output.save` writes with `map`. Where near and far detail overlap \
+                     (hair, bristles), the pyramid method is sharper. Uses the project's settings (`stack.get`), or the \
+                     ones given for this stack only, and the stored alignment, as `stack.average` does. Runs as a job; \
+                     the output is added in one undo step when it ends, or not at all when it is cancelled.",
+                )
+                .undoable()
+                .examples(&[
+                    "{}",
+                    r#"{ "threshold": "percentile", "percentile": 50, "name": "Depth map, more filled" }"#,
+                    r#"{ "radius": 3.0, "smoothing": 16.0 }"#,
+                ]),
+            Lane::Heavy,
+            depth,
+        ),
+        CommandSpec::job(
             Meta::new("stack.preview", "Preview stack", "Stacks the aligned frames at a quarter of their size, as a quick preview.")
                 .help(
-                    "The weighted average of `stack.average`, or with `method` \"pyramid\" the pyramid method of \
-                     `stack.pyramid`, on frames reduced to a quarter of their size on each side with the settings \
-                     scaled to match, so that it shows in seconds what the full stack will look like. Takes the same \
-                     settings as that method's command. The result is a linear 32-bit float TIFF in the project's \
-                     `previews/` folder, as a path, kept until the project is closed: no output, no undo step. Runs \
-                     beside other jobs as a preview; a newer call replaces an older one still running, so call it \
-                     after every change of a setting.",
+                    "The weighted average of `stack.average`, or with `method` \"pyramid\" or \"depth-map\" the \
+                     method of `stack.pyramid` or `stack.depthMap`, on frames reduced to a quarter of their size on \
+                     each side with the settings scaled to match, so that it shows in seconds what the full stack will \
+                     look like. Takes the same settings as that method's command. The result is a linear 32-bit float \
+                     TIFF in the project's `previews/` folder, as a path, kept until the project is closed: no output, \
+                     no undo step. Runs beside other jobs as a preview; a newer call replaces an older one still \
+                     running, so call it after every change of a setting.",
                 )
                 .requires(Requires::Project)
                 .supersede()
-                .examples(&["{}", r#"{ "smoothing": 3.0 }"#, r#"{ "method": "pyramid", "grit": 0.25 }"#]),
+                .examples(&[
+                    "{}",
+                    r#"{ "smoothing": 3.0 }"#,
+                    r#"{ "method": "pyramid", "grit": 0.25 }"#,
+                    r#"{ "method": "depth-map", "threshold": "level", "level": 0.002 }"#,
+                ]),
             Lane::Preview,
             preview,
         ),
@@ -285,6 +341,42 @@ impl PyramidOverrides {
     }
 }
 
+/// The depth-map method's settings for one stack, on top of the project's: each one left out is the project's.
+#[derive(Debug, Default)]
+struct DepthOverrides {
+    radius: Option<f64>,
+    smoothing: Option<f64>,
+    threshold: Option<ThresholdMode>,
+    level: Option<f64>,
+    percentile: Option<f64>,
+}
+
+impl DepthOverrides {
+    fn settings(&self, base: &DepthSettings) -> DepthSettings {
+        DepthSettings {
+            radius: self.radius.unwrap_or(base.radius),
+            smoothing: self.smoothing.unwrap_or(base.smoothing),
+            threshold: self.threshold.unwrap_or(base.threshold),
+            level: self.level.unwrap_or(base.level),
+            percentile: self.percentile.unwrap_or(base.percentile),
+        }
+    }
+
+    /// The first threshold setting given, if any.
+    fn given_threshold(&self) -> Option<&'static str> {
+        [("threshold", self.threshold.is_some()), ("level", self.level.is_some()), ("percentile", self.percentile.is_some())]
+            .into_iter()
+            .find_map(|(name, given)| given.then_some(name))
+    }
+
+    fn check(&self) -> Result<(), Invalid> {
+        self.settings(&DepthSettings::default()).validate().map_err(|e| match e {
+            StackError::Setting { name, .. } => Invalid::new(name, e.to_string()),
+            other => Invalid::new("settings", other.to_string()),
+        })
+    }
+}
+
 /// A present value, even `null`: tells `"coarseLimit": null` (off for this stack) from a missing key (the project's).
 fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
@@ -375,6 +467,50 @@ impl Params for PyramidParams {
     }
 }
 
+/// A depth map stacked into a new output.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DepthParams {
+    /// The output's name; "Depth map" when left out.
+    #[serde(default)]
+    name: Option<String>,
+    /// The estimation radius, in pixels, from 0 to 64; the project's (`stack.get`) when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 64.0))]
+    radius: Option<f64>,
+    /// The depth map's smoothing radius, in pixels, from 0 to 256; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 256.0))]
+    smoothing: Option<f64>,
+    /// How the contrast threshold is chosen: auto, level or percentile; the project's when left out.
+    #[serde(default)]
+    threshold: Option<ThresholdMode>,
+    /// The threshold's absolute level, from 0, for `"threshold": "level"`; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    level: Option<f64>,
+    /// The share of the pixels to fill at least, in percent from 0 to 100, for `"threshold": "percentile"`; the
+    /// project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 100.0))]
+    percentile: Option<f64>,
+}
+
+impl DepthParams {
+    fn overrides(&self) -> DepthOverrides {
+        DepthOverrides { radius: self.radius, smoothing: self.smoothing, threshold: self.threshold, level: self.level, percentile: self.percentile }
+    }
+}
+
+impl Params for DepthParams {
+    fn check(&self) -> Result<(), Invalid> {
+        if let Some(name) = &self.name {
+            check_name("name", name)?;
+        }
+        self.overrides().check()
+    }
+}
+
 /// A stacking method, by its name in outputs and commands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -384,23 +520,27 @@ enum MethodName {
     Average,
     /// The pyramid method of `stack.pyramid`.
     Pyramid,
+    /// The depth-map method of `stack.depthMap`.
+    #[serde(rename = "depth-map")]
+    DepthMap,
 }
 
 /// A preview of a stack.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct PreviewParams {
-    /// The method, "average" (the default) or "pyramid"; the settings below are that method's.
+    /// The method, "average" (the default), "pyramid" or "depth-map"; the settings below are that method's.
     #[serde(default)]
     method: Option<MethodName>,
-    /// The weighted average's radius, in pixels of the full-size frames, from 0 to 64; the project's (`stack.get`)
-    /// when left out.
+    /// The weighted average's or the depth-map method's radius, in pixels of the full-size frames, from 0 to 64; the
+    /// project's (`stack.get`) when left out.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 64.0))]
     radius: Option<f64>,
-    /// The weighted average's smoothing, in pixels of the full-size frames, from 0 to 64; the project's when left out.
+    /// The weighted average's smoothing, in pixels of the full-size frames, from 0 to 64, or the depth-map method's,
+    /// from 0 to 256; the project's when left out.
     #[serde(default)]
-    #[schemars(range(min = 0.0, max = 64.0))]
+    #[schemars(range(min = 0.0, max = 256.0))]
     smoothing: Option<f64>,
     /// The weighted average's power, from 0.5 to 4; the project's when left out.
     #[serde(default)]
@@ -429,6 +569,17 @@ struct PreviewParams {
     #[schemars(range(max = 1000))]
     #[allow(clippy::option_option)] // Missing (the project's), `null` (off for this stack) or a limit.
     coarse_limit: Option<Option<u32>>,
+    /// How the depth-map method's contrast threshold is chosen: auto, level or percentile; the project's when left out.
+    #[serde(default)]
+    threshold: Option<ThresholdMode>,
+    /// The depth-map method's threshold level, from 0; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    level: Option<f64>,
+    /// The depth-map method's threshold percentile, from 0 to 100; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 100.0))]
+    percentile: Option<f64>,
 }
 
 impl PreviewParams {
@@ -446,22 +597,36 @@ impl PreviewParams {
             coarse_limit: self.coarse_limit,
         }
     }
+
+    fn depth(&self) -> DepthOverrides {
+        DepthOverrides { radius: self.radius, smoothing: self.smoothing, threshold: self.threshold, level: self.level, percentile: self.percentile }
+    }
 }
 
 impl Params for PreviewParams {
     fn check(&self) -> Result<(), Invalid> {
+        let threshold = self.depth().given_threshold();
         match self.method.unwrap_or_default() {
             MethodName::Average => {
                 if let Some(name) = self.pyramid().given() {
                     return Err(Invalid::new(name, "is a setting of the pyramid method: pass `\"method\": \"pyramid\"`"));
                 }
+                if let Some(name) = threshold {
+                    return Err(Invalid::new(name, "is a setting of the depth-map method: pass `\"method\": \"depth-map\"`"));
+                }
                 self.average().check()
             }
             MethodName::Pyramid => {
-                if let Some(name) = self.average().given() {
-                    return Err(Invalid::new(name, "is a setting of the weighted average, not of the pyramid method"));
+                if let Some(name) = self.average().given().or(threshold) {
+                    return Err(Invalid::new(name, "is a setting of another method, not of the pyramid method"));
                 }
                 self.pyramid().check()
+            }
+            MethodName::DepthMap => {
+                if let Some(name) = self.pyramid().given().or(self.power.map(|_| "power")) {
+                    return Err(Invalid::new(name, "is a setting of another method, not of the depth-map method"));
+                }
+                self.depth().check()
             }
         }
     }
@@ -472,6 +637,7 @@ impl Params for PreviewParams {
 enum Chosen {
     Average(AverageSettings),
     Pyramid(PyramidSettings),
+    DepthMap(DepthSettings),
 }
 
 /// The settings a stack was made with, as its result reports them.
@@ -480,6 +646,7 @@ enum Chosen {
 enum UsedSettings {
     Average(AverageSettings),
     Pyramid(PyramidSettings),
+    DepthMap(DepthSettings),
 }
 
 impl Chosen {
@@ -487,6 +654,7 @@ impl Chosen {
         match self {
             Chosen::Average(_) => AVERAGE,
             Chosen::Pyramid(_) => PYRAMID,
+            Chosen::DepthMap(_) => DEPTH_MAP,
         }
     }
 
@@ -494,6 +662,7 @@ impl Chosen {
         match self {
             Chosen::Average(s) => s.validate(),
             Chosen::Pyramid(s) => s.validate(),
+            Chosen::DepthMap(s) => s.validate(),
         }
     }
 
@@ -503,27 +672,32 @@ impl Chosen {
         match self {
             Chosen::Average(s) => Chosen::Average(s.reduced(factor)),
             Chosen::Pyramid(s) => Chosen::Pyramid(s.reduced(factor)),
+            Chosen::DepthMap(s) => Chosen::DepthMap(s.reduced(factor)),
         }
     }
 
-    fn stacker(&self, tiling: &Tiling) -> Result<Box<dyn Stacker>, StackError> {
-        match self {
-            Chosen::Average(s) => s.stacker(tiling),
-            Chosen::Pyramid(s) => s.stacker(tiling),
-        }
+    /// A one-pass stacker; `None` for the depth-map method, which reads the frames twice.
+    fn stacker(&self, tiling: &Tiling) -> Result<Option<Box<dyn Stacker>>, StackError> {
+        Ok(match self {
+            Chosen::Average(s) => Some(s.stacker(tiling)?),
+            Chosen::Pyramid(s) => Some(s.stacker(tiling)?),
+            Chosen::DepthMap(_) => None,
+        })
     }
 
     fn used(&self) -> UsedSettings {
         match self {
             Chosen::Average(s) => UsedSettings::Average(s.clone()),
             Chosen::Pyramid(s) => UsedSettings::Pyramid(s.clone()),
+            Chosen::DepthMap(s) => UsedSettings::DepthMap(s.clone()),
         }
     }
 
-    /// How the stack is brought into range: the weighted average's blends never leave its frames' range.
+    /// How the stack is brought into range: the weighted average's and the depth map's blends never leave their
+    /// frames' range.
     fn tone(&self) -> Tone {
         match self {
-            Chosen::Average(_) => Tone::Keep,
+            Chosen::Average(_) | Chosen::DepthMap(_) => Tone::Keep,
             Chosen::Pyramid(s) => s.tone,
         }
     }
@@ -531,7 +705,7 @@ impl Chosen {
     /// The pyramid's levels on a `width` x `height` canvas.
     fn levels(&self, width: usize, height: usize) -> Option<usize> {
         match self {
-            Chosen::Average(_) => None,
+            Chosen::Average(_) | Chosen::DepthMap(_) => None,
             Chosen::Pyramid(s) => Some(s.levels_for(width, height)),
         }
     }
@@ -547,6 +721,14 @@ impl Chosen {
                 "rangeLimit": s.range_limit,
                 "tone": s.tone,
                 "coarseLimit": s.coarse_limit,
+                "framing": framing,
+            }),
+            Chosen::DepthMap(s) => serde_json::json!({
+                "radius": s.radius,
+                "smoothing": s.smoothing,
+                "threshold": s.threshold,
+                "level": s.level,
+                "percentile": s.percentile,
                 "framing": framing,
             }),
         }
@@ -710,12 +892,14 @@ impl StackPlan {
         Ok(image)
     }
 
-    /// Stacks every frame, at full size or, `reduced`, at a quarter of it. Each frame is read, folded in and dropped.
-    fn stack(&mut self, ctx: &JobContext, reduced: bool) -> Result<Stacked, CommandError> {
-        ctx.stage(0);
-        self.reader.load_mask()?;
-        let settings = if reduced { self.settings.reduced() } else { self.settings.clone() };
-        let mut stacker = settings.stacker(&Tiling::default())?;
+    /// Reads every frame in order, at full size or, `reduced`, at a quarter of it, warped onto the canvas as it is
+    /// read, and hands it to `fold` with the progress within the frames, and whether it is the first; then drops it.
+    fn each_frame(
+        &mut self,
+        ctx: &JobContext,
+        reduced: bool,
+        mut fold: impl FnMut(&dyn FrameSource, &dyn Monitor, bool) -> Result<(), CommandError>,
+    ) -> Result<(), CommandError> {
         let n = self.frames.len();
         let (w, h) = self.size;
         let side = w.max(h).div_ceil(PREVIEW_FACTOR);
@@ -728,22 +912,74 @@ impl StackPlan {
                 let small = thumbnail(&image, side)?;
                 drop(image);
                 let (canvas, transform, feather) = reduced_geometry(&self.canvas, &f.transform, (w, h), (small.width(), small.height()));
-                let source = Gained { frame: Warped { frame: &small, transform, canvas, feather }, gain: f.gain };
-                if k == 0 {
-                    stacker.begin(StackShape::of(&source))?;
-                }
-                stacker.add_frame(&source, &progress)?;
+                fold(&Gained { frame: Warped { frame: &small, transform, canvas, feather }, gain: f.gain }, &progress, k == 0)?;
             } else {
-                let source =
-                    Gained { frame: Warped { frame: &image, transform: f.transform, canvas: self.canvas, feather: DEFAULT_FEATHER }, gain: f.gain };
-                if k == 0 {
-                    stacker.begin(StackShape::of(&source))?;
-                }
-                stacker.add_frame(&source, &progress)?;
+                let frame = Warped { frame: &image, transform: f.transform, canvas: self.canvas, feather: DEFAULT_FEATHER };
+                fold(&Gained { frame, gain: f.gain }, &progress, k == 0)?;
             }
         }
+        Ok(())
+    }
+
+    /// Stacks every frame with a one-pass method, at full size or, `reduced`, at a quarter of it. Each frame is read,
+    /// folded in and dropped.
+    fn stack(&mut self, ctx: &JobContext, reduced: bool) -> Result<Stacked, CommandError> {
+        ctx.stage(0);
+        self.reader.load_mask()?;
+        let settings = if reduced { self.settings.reduced() } else { self.settings.clone() };
+        let mut stacker = settings.stacker(&Tiling::default())?.ok_or(CommandError::Internal { command: self.command.to_owned() })?;
+        self.each_frame(ctx, reduced, |source, progress, first| {
+            if first {
+                stacker.begin(StackShape::of(source))?;
+            }
+            Ok(stacker.add_frame(source, progress)?)
+        })?;
         ctx.stage(1);
         Ok(stacker.finish(ctx)?)
+    }
+
+    /// Stacks every frame by the depth-map method, at full size or, `reduced`, at a quarter of it: pass 1 reads them
+    /// for their focus (stage 0), the depth map is made from it, and pass 2 reads them again to composite (stage 1,
+    /// then stage 2 for the end). The composite and the depth map.
+    fn stack_depth(&mut self, ctx: &JobContext, reduced: bool) -> Result<(Stacked, DepthMap), CommandError> {
+        let Chosen::DepthMap(settings) = (if reduced { self.settings.reduced() } else { self.settings.clone() }) else {
+            return Err(CommandError::Internal { command: self.command.to_owned() });
+        };
+        ctx.stage(0);
+        self.reader.load_mask()?;
+        let tiling = Tiling::default();
+        let mut estimator = settings.estimator(&tiling)?;
+        self.each_frame(ctx, reduced, |source, progress, first| {
+            if first {
+                estimator.begin(StackShape::of(source))?;
+            }
+            Ok(estimator.add_frame(source, progress)?)
+        })?;
+        let stats = estimator.finish(ctx)?;
+        drop(estimator);
+        ctx.checkpoint()?;
+        let map = stats.resolve(settings.contrast_threshold(), settings.smoothing, None)?;
+        drop(stats);
+        ctx.stage(1);
+        let mut compositor = map.compositor(&tiling)?;
+        self.each_frame(ctx, reduced, |source, progress, first| {
+            if first {
+                compositor.begin(StackShape::of(source))?;
+            }
+            Ok(compositor.add_frame(source, progress)?)
+        })?;
+        ctx.stage(2);
+        Ok((compositor.finish(ctx)?, map))
+    }
+
+    /// Stacks every frame with the plan's method: the stack and, for the depth-map method, its depth map.
+    fn stack_any(&mut self, ctx: &JobContext, reduced: bool) -> Result<(Stacked, Option<DepthMap>), CommandError> {
+        if matches!(self.settings, Chosen::DepthMap(_)) {
+            let (stacked, map) = self.stack_depth(ctx, reduced)?;
+            Ok((stacked, Some(map)))
+        } else {
+            Ok((self.stack(ctx, reduced)?, None))
+        }
     }
 
     fn ids(&self) -> Vec<FrameId> {
@@ -807,6 +1043,19 @@ struct StackSummary {
     /// How the pyramid's result was brought into range.
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<RangeSummary>,
+    /// The depth-map method's threshold and the pixels it filled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    depth: Option<DepthSummary>,
+}
+
+/// What the depth-map method's threshold did.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DepthSummary {
+    /// The threshold's level of confidence: the level given, or the percentile's.
+    level: f32,
+    /// How many covered pixels were below it, whose depth was filled from the confident pixels around.
+    filled: usize,
 }
 
 /// What stacking reads: the frame list, the development, the alignment (and the defect mask). The settings aren't
@@ -826,16 +1075,34 @@ fn pyramid(session: &Session, p: PyramidParams) -> Result<JobPlan<StackSummary>,
     stack_job(session, "stack.pyramid", settings, p.name.clone().unwrap_or_else(|| "Pyramid".to_owned()))
 }
 
+fn depth(session: &Session, p: DepthParams) -> Result<JobPlan<StackSummary>, CommandError> {
+    let settings = Chosen::DepthMap(p.overrides().settings(&stack_settings(session.project()?)?.depth_map));
+    stack_job(session, "stack.depthMap", settings, p.name.clone().unwrap_or_else(|| "Depth map".to_owned()))
+}
+
 /// A full stack with `settings` into a new output named `name`.
 fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: String) -> Result<JobPlan<StackSummary>, CommandError> {
     let mut plan = StackPlan::new(session, command, settings, Quality::Output)?;
+    let two_passes = matches!(plan.settings, Chosen::DepthMap(_));
     let job = JobPlan::new(move |ctx| {
-        let Stacked { mut image, alpha, uncovered, .. } = plan.stack(ctx, false)?;
+        let (Stacked { mut image, alpha, uncovered, .. }, depth) = plan.stack_any(ctx, false)?;
         ctx.checkpoint()?;
         let method = plan.settings.name();
         let (width, height) = (image.width(), image.height());
         // The pyramid's unclipped result is kept as the `extended` map when tone compression changes it.
         let mut maps = Maps::new();
+        // The depth map's maps, 16-bit.
+        let depth = match depth {
+            Some(map) => {
+                let internal = || CommandError::Internal { command: command.to_owned() };
+                let stored = write_image(&plan.cache, &format!("{method}-depth"), &AnyImage::U16(map.depth_u16()?), None)?;
+                maps.insert(depth_map().ok_or_else(internal)?, stored);
+                let stored = write_image(&plan.cache, &format!("{method}-confidence"), &AnyImage::U16(map.confidence_u16()?), None)?;
+                maps.insert(confidence_map().ok_or_else(internal)?, stored);
+                Some(DepthSummary { level: map.level, filled: map.filled })
+            }
+            None => None,
+        };
         let tone = plan.settings.tone();
         let range = if matches!(plan.settings, Chosen::Pyramid(_)) {
             let mut summary = RangeSummary { out_of_range: 0, extended: false };
@@ -882,10 +1149,19 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
                 .last()
                 .map(florastack_project::Output::id)
                 .ok_or(CommandError::Internal { command: command.to_owned() })?;
-            Ok(StackSummary { output, width, height, frames: ids, skipped, uncovered, settings, framing, levels, range })
+            Ok(StackSummary { output, width, height, frames: ids, skipped, uncovered, settings, framing, levels, range, depth })
         }))
     });
-    Ok(job.stages(&[("Stacking frames", 0.95), ("Finishing", 0.05)]).locks(locks()))
+    Ok(job.stages(stages(two_passes)).locks(locks()))
+}
+
+/// A stacking job's stages: one pass over the frames and the end, or the depth-map method's two passes.
+fn stages(two_passes: bool) -> &'static [(&'static str, f32)] {
+    if two_passes {
+        &[("Measuring focus", 0.45), ("Compositing", 0.5), ("Finishing", 0.05)]
+    } else {
+        &[("Stacking frames", 0.95), ("Finishing", 0.05)]
+    }
 }
 
 /// A stack's preview.
@@ -903,7 +1179,7 @@ struct Previewed {
     skipped: Vec<FrameId>,
     /// How many pixels no frame covers.
     uncovered: usize,
-    /// The method, "average" or "pyramid".
+    /// The method, "average", "pyramid" or "depth-map".
     method: &'static str,
     /// The settings at full scale, and the framing.
     settings: UsedSettings,
@@ -915,10 +1191,12 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
     let settings = match p.method.unwrap_or_default() {
         MethodName::Average => Chosen::Average(p.average().settings(&project.average)),
         MethodName::Pyramid => Chosen::Pyramid(p.pyramid().settings(&project.pyramid)),
+        MethodName::DepthMap => Chosen::DepthMap(p.depth().settings(&project.depth_map)),
     };
     let mut plan = StackPlan::new(session, "stack.preview", settings, Quality::Preview)?;
+    let two_passes = matches!(plan.settings, Chosen::DepthMap(_));
     let job = JobPlan::new(move |ctx| {
-        let Stacked { mut image, alpha, uncovered, .. } = plan.stack(ctx, true)?;
+        let (Stacked { mut image, alpha, uncovered, .. }, _) = plan.stack_any(ctx, true)?;
         ctx.checkpoint()?;
         let tone = plan.settings.tone();
         if tone != Tone::Keep {
@@ -938,5 +1216,5 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
         };
         Ok(commit(move |_: &mut Session| Ok(previewed)))
     });
-    Ok(job.stages(&[("Stacking frames", 0.95), ("Finishing", 0.05)]))
+    Ok(job.stages(stages(two_passes)))
 }

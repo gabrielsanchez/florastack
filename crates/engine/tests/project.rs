@@ -292,8 +292,11 @@ fn the_shapes_stored_in_project_files_are_pinned() {
         json!({
             "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 },
             "pyramid": { "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" },
+            "depth_map": { "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 },
         })
     );
+    let level = florastack_engine::DepthSettings { threshold: florastack_engine::ThresholdMode::Level, level: 0.002, ..Default::default() };
+    assert_eq!(to_data("depth-map settings", &level).unwrap()["threshold"], "level");
     let id = |n: u64| serde_json::from_value::<FrameId>(json!(n)).unwrap();
     let frame = FrameReport {
         status: Status::Rejected,

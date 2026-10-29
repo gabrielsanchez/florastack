@@ -120,6 +120,8 @@ pub struct TileView {
     pub inner: Rect,
     /// The tile's core: the cores partition the canvas.
     pub core: Rect,
+    /// The frame's place in the stack: 0 for the first frame added since [`Stacker::begin`].
+    pub frame: usize,
 }
 
 impl TileView {
@@ -335,6 +337,7 @@ impl<K: TileKernel> Tiled<K> {
         let batch = rayon::current_num_threads().max(1);
         let grid = &stack.grid.clone();
         let (w, h) = (stack.shape.width, stack.shape.height);
+        let index = stack.frames;
         let mut shares = Vec::new();
         let mut done = 0;
         for chunk in tiles.chunks(batch) {
@@ -348,7 +351,7 @@ impl<K: TileKernel> Tiled<K> {
                 .into_par_iter()
                 .map(|(tile, mut state)| {
                     let region = kernel.read_region(tile.outer, w, h);
-                    let view = TileView { region, inner: inner(grid, tile), core: tile.core };
+                    let view = TileView { region, inner: inner(grid, tile), core: tile.core, frame: index };
                     let patch = read_checked(frame, region)?;
                     let share = kernel.fold(&mut state, &patch, &view)?;
                     Ok((tile, state, share, (tile.index == 0).then(|| patch.image.color_space().clone())))

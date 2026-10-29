@@ -130,7 +130,8 @@ fn every_command_dispatches_from_json() {
     assert_eq!((&updated["previews"], &updated["alignedPreviews"]), (&json!(6), &json!(6)), "{updated}");
     assert_eq!(calls.run("filmstrip.list", "{}")["stale"], 0);
     assert_eq!(calls.run("defects.clear", "{}")["cleared"], true);
-    // Stacking: the settings, a quarter-size preview, and a weighted average and a pyramid, which become outputs.
+    // Stacking: the settings, a quarter-size preview, and a weighted average, a pyramid and a depth map, which become
+    // outputs.
     assert_eq!(calls.run("stack.get", "{}")["settings"]["average"]["radius"], 3.0);
     assert_eq!(calls.run("stack.set", r#"{ "average": { "smoothing": 2.0 } }"#)["settings"]["average"]["smoothing"], 2.0);
     let preview = calls.run("stack.preview", "{}");
@@ -141,6 +142,9 @@ fn every_command_dispatches_from_json() {
     let pyramid = calls.run("stack.pyramid", r#"{ "grit": 0.25 }"#);
     assert_eq!((pyramid["frames"].as_array().unwrap().len(), &pyramid["settings"]["grit"]), (6, &json!(0.25)), "{pyramid}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][1]["method"], "pyramid");
+    let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
+    assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
+    assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth"]));
     assert_eq!(calls.run("stack.reset", "{}")["settings"]["average"]["smoothing"], 8.0);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);

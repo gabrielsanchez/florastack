@@ -27,6 +27,17 @@ pub enum StackError {
     /// A frame source returned a patch of another size than the region asked for.
     #[error("a frame source returned {got_width}x{got_height} pixels with {got_channels} channels for a {width}x{height} region with {channels}")]
     Patch { width: usize, height: usize, channels: usize, got_width: usize, got_height: usize, got_channels: usize },
+    /// A depth map's pass 2 was given another number of frames than its pass 1 measured, or a stack has more frames
+    /// than a depth map can index.
+    #[error("the depth-map method composites the {expected} frames pass 1 measured, in the same order, but got {got}")]
+    FrameCount { expected: usize, got: usize },
+    #[error("a depth map indexes at most {max} frames")]
+    TooManyFrames { max: usize },
+    /// A mask or a depth map that isn't one plane of the canvas's size.
+    #[error(
+        "the {what} is {width}x{height} with {channels} channels, but it must be one channel of {expected_width}x{expected_height}, the canvas's size"
+    )]
+    Plane { what: &'static str, width: usize, height: usize, channels: usize, expected_width: usize, expected_height: usize },
     #[error("stacking was cancelled")]
     Cancelled(#[from] Cancelled),
     #[error(transparent)]
