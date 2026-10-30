@@ -100,6 +100,11 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
             params: r#"{ "threshold": "percentile", "percentile": 40 }"#.into(),
         },
+        Case {
+            name: "stack.slabbed",
+            setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
+            params: r#"{ "slabSize": 3, "overlap": 1, "final": { "method": "average" } }"#.into(),
+        },
         Case { name: "output.rename", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Renamed" }}"#) },
         Case { name: "output.remove", setup: none(), params: format!(r#"{{ "output": {output} }}"#) },
         Case {

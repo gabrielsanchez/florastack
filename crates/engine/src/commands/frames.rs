@@ -90,7 +90,7 @@ struct Added {
 }
 
 /// The files that `paths` name: files as they are, folders' frame files sorted by name.
-fn expand(paths: &[PathBuf], skipped: &mut Vec<NotDone>) -> Result<Vec<PathBuf>, CommandError> {
+pub(super) fn expand(command: &str, paths: &[PathBuf], skipped: &mut Vec<NotDone>) -> Result<Vec<PathBuf>, CommandError> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
@@ -107,7 +107,7 @@ fn expand(paths: &[PathBuf], skipped: &mut Vec<NotDone>) -> Result<Vec<PathBuf>,
             files.push(path.clone());
         }
         if files.len() > MAX_ITEMS {
-            return Err(CommandError::Invalid { command: "project.addFrames".into(), source: Invalid::new("paths", "name more than 100000 files") });
+            return Err(CommandError::Invalid { command: command.into(), source: Invalid::new("paths", "name more than 100000 files") });
         }
     }
     Ok(files)
@@ -119,7 +119,7 @@ fn add_frames(session: &Session, p: AddFramesParams) -> Result<JobPlan<Added>, C
     let plan = JobPlan::new(move |ctx| {
         ctx.stage(0);
         let mut skipped = Vec::new();
-        let files = expand(&paths, &mut skipped)?;
+        let files = expand("project.addFrames", &paths, &mut skipped)?;
         ctx.stage(1);
         let total = files.len() as u64;
         let mut read: Vec<FrameRead> = Vec::with_capacity(files.len());

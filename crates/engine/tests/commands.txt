@@ -29,6 +29,7 @@ preset.save
 project.addFrames
 project.close
 project.findOrphans
+project.findStacks
 project.frames
 project.info
 project.moveFrames
@@ -46,3 +47,4 @@ stack.preview
 stack.pyramid
 stack.reset
 stack.set
+stack.slabbed

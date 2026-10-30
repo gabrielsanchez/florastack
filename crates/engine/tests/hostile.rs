@@ -35,6 +35,7 @@ fn unknown_keys_are_refused_by_every_command() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One list of hostile parameters, command by command.
 fn hostile_values_are_refused_with_what_is_wrong() {
     let dir = TempDir::new("values");
     let (mut engine, fixture) = open_fixture(dir.path(), Registry::standard());
@@ -105,6 +106,26 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("stack.preview", json!({ "radius": 65 })),
         ("stack.preview", json!({ "power": "high" })),
         ("stack.preview", json!({ "name": "x" })),
+        ("stack.slabbed", json!({ "slabSize": 1 })),
+        ("stack.slabbed", json!({ "slabSize": 1e12 })),
+        ("stack.slabbed", json!({ "slabSize": 4, "overlap": 4 })),
+        ("stack.slabbed", json!({ "overlap": -1 })),
+        ("stack.slabbed", json!({ "overlap": 200_000 })),
+        ("stack.slabbed", json!({ "slabs": { "method": "pyramid", "grit": 0.1 } })),
+        ("stack.slabbed", json!({ "slabs": { "smoothing": 2 } })),
+        ("stack.slabbed", json!({ "final": { "power": 2 } })),
+        ("stack.slabbed", json!({ "final": { "method": "median" } })),
+        ("stack.slabbed", json!({ "final": { "percentile": 1e300 } })),
+        ("stack.slabbed", json!({ "slabs": null })),
+        ("stack.slabbed", json!({ "reuse": "yes" })),
+        ("stack.slabbed", json!({ "name": "" })),
+        ("project.findStacks", json!({ "paths": [] })),
+        ("project.findStacks", json!({ "paths": ["a\u{0}b"] })),
+        ("project.findStacks", json!({ "paths": ["x"], "split": { "minScore": 2 } })),
+        ("project.findStacks", json!({ "paths": ["x"], "split": { "gap": -5 } })),
+        ("project.findStacks", json!({ "paths": ["x"], "split": { "maxShift": 1e300 } })),
+        ("project.findStacks", json!({ "paths": ["x"], "split": { "minSimilarity": -2 } })),
+        ("project.findStacks", json!({ "paths": ["x"], "split": { "max_shift": 5 } })),
         ("defects.import", json!({ "path": "" })),
         ("defects.import", json!({ "path": "a\u{0}b" })),
         ("defects.export", json!({ "path": " " })),

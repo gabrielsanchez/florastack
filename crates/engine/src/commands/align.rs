@@ -264,6 +264,26 @@ impl Plan {
         &self.ids
     }
 
+    /// What the `i`-th frame is read from, for the keys of what is made from it: its file's contents, the develop
+    /// settings and the defect mask, as its preview's key says them ([`preview_key`]).
+    pub(crate) fn frame_key(&self, i: usize) -> Result<String, CommandError> {
+        let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
+        Ok(preview_key(frame, &self.develop_settings, self.mask_ref.as_ref())?)
+    }
+
+    /// What RAW frames are developed with, for the same keys: the stack's development when the project holds it,
+    /// hashed, or "unresolved" when this job resolves it on the first RAW frame it reads.
+    pub(crate) fn develop_key(&self) -> Result<String, CommandError> {
+        match (self.resolved, self.reader.develop()) {
+            (true, Some(develop)) => {
+                let bytes = serde_json::to_vec(&(develop.settings(), develop.resolved()))
+                    .map_err(|source| florastack_project::ProjectError::Data { what: "resolved development", source })?;
+                Ok(format!("resolved {}", florastack_project::ContentHash::of(&bytes)))
+            }
+            _ => Ok("unresolved".to_owned()),
+        }
+    }
+
     /// Reads the project's defect mask, if it has one, for [`Plan::read`] to inpaint; never detects one.
     pub(crate) fn load_mask(&mut self) -> Result<(), CommandError> {
         if let Some(reference) = &self.mask_ref {
