@@ -29,9 +29,11 @@ rayon.workspace = true
 
 [dev-dependencies]
 florastack-testkit.workspace = true
-# Synthetic stacks, written as frame files, for the alignment commands' tests.
+# Synthetic stacks, written as frame files, for the commands' tests and the quality runner.
 florastack-core = { workspace = true, features = ["testutil"] }
 # Arbitrary JSON thrown at every command.
 proptest.workspace = true
-# Scoring the stacking commands' outputs against the synthetic ground truth (tests/stack.rs).
+# Scoring the stacking commands' outputs against the synthetic ground truth (tests/stack.rs, examples/quality).
 florastack-metrics.workspace = true
+# The peak heap of each command the quality runner (examples/quality, run by `cargo xtask quality`) times.
+peak_alloc.workspace = true

@@ -75,3 +75,5 @@ notes = "The antenna tips are sharp only in frames 90 to 100; frame 57 shows the
 ```
 
 `cargo xtask corpus` checks every local stack (that `stack.toml` parses, that the frames it lists exist, that there is at least one frame) and lists it next to the downloaded ones. Local stacks are never downloaded, hashed or changed.
+
+`cargo xtask quality` stacks every local stack by every method, with the downloaded ones (`--stack local/<name>` for one, `--no-local` for none), and scores the outputs against the `reference` when there is one. Its report and crops stay in the gitignored `target/quality/`, and local stacks never go into the committed baseline, `quality/baseline.json`.

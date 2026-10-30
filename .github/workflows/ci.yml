@@ -1,5 +1,5 @@
-# FloraStack CI: formatting, Clippy, the crate layering check, the test fixtures and the tests on Linux, macOS and
-# Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit). `cargo xtask ci` runs the same
+# FloraStack CI: formatting, Clippy, the crate layering check, the test fixtures, the tests and the quality gate on
+# Linux, macOS and Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit). `cargo xtask ci` runs the same
 # cargo commands locally; a test in xtask/src/ci.rs keeps its list and this file's `run:` lines the same, so keep
 # every cargo command on a single `run:` line.
 #
@@ -77,6 +77,13 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      # Every stacking method and slab combination on the synthetic stacks, scored against their ground truth and
+      # compared with quality/baseline.json: fails when a measure is worse than the baseline by more than its tolerance
+      # (runtimes aren't compared here, the baseline being measured on another machine). It runs the dev-profile build
+      # of florastack-engine's `quality` example, which the tests above have built.
+      - name: Quality gate
+        run: cargo xtask quality --gate
 
   dependencies:
     name: dependency policy

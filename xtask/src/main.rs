@@ -6,6 +6,7 @@ mod branding;
 mod ci;
 mod corpus;
 mod layers;
+mod quality;
 mod sha256;
 
 use std::path::Path;
@@ -19,12 +20,16 @@ commands:
                 check that every crate inherits the workspace lints, that test-only crates and features are
                 used from [dev-dependencies] only, and that the binaries named in branding.toml exist
   ci            run what CI runs (.github/workflows/ci.yml): cargo fmt --check, clippy, check-layers, the tests,
-                cargo deny and cargo audit, stopping at the first failure, then print a summary that lists the
-                tests skipped for want of hardware or corpus files (cargo-deny and cargo-audit must be installed)
+                the quality gate, cargo deny and cargo audit, stopping at the first failure, then print a summary
+                that lists the tests skipped for want of hardware or corpus files (cargo-deny and cargo-audit must
+                be installed)
   corpus        download the sample focus stacks pinned in corpus/manifest.toml (sha256-verified) and check
                 the local stacks in corpus/local/ (`cargo xtask corpus --help` for the options)
   bench         run the criterion benchmarks and write target/bench-summary.json, with the quality metrics
                 that benches record (`cargo xtask bench --help` for the options)
+  quality       stack every synthetic and corpus stack by every method and slab combination, score and time
+                each run, write an HTML report with 100% crops to target/quality/index.html, and fail when a
+                measure is worse than quality/baseline.json beyond its tolerance (`--gate` in CI; `--help`)
   help          show this message
 ";
 
@@ -38,6 +43,7 @@ fn main() -> ExitCode {
         ["ci", ..] => Err("ci takes no arguments".to_owned()),
         ["corpus", rest @ ..] => workspace_root().and_then(|root| corpus::run(&root, rest)),
         ["bench", rest @ ..] => cargo_metadata().and_then(|meta| bench::run(&meta, rest)),
+        ["quality", rest @ ..] => cargo_metadata().and_then(|meta| quality::run(&meta, rest)),
         [] | ["help" | "-h" | "--help"] => {
             print!("{USAGE}");
             Ok(())
