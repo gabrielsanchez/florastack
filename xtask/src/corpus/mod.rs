@@ -143,6 +143,54 @@ pub fn run(workspace: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// A real stack for `cargo xtask quality`: a downloaded stack of the manifest (`corpus/<name>`) or a local stack
+/// (`local/<name>`), its frames in focus order and its reference, the trusted result to score against.
+pub struct RealStack {
+    pub id: String,
+    pub frames: Vec<PathBuf>,
+    pub reference: Option<PathBuf>,
+}
+
+/// The manifest's stacks that are downloaded and verify, and with `local` the local stacks; and, for each of the others,
+/// why it can't run.
+pub fn real_stacks(workspace: &Path, local: bool) -> Result<(Vec<RealStack>, Vec<String>), String> {
+    let root = workspace.join("corpus");
+    let manifest_path = root.join("manifest.toml");
+    let text = std::fs::read_to_string(&manifest_path).map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
+    let manifest = manifest::parse(&text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let (mut stacks, mut missing) = (Vec::new(), Vec::new());
+    for stack in manifest.stacks.iter().filter(|s| !s.placeholder) {
+        if let Err(e) = verify_stack(&root, stack) {
+            missing.push(format!("corpus/{}: {e} (`cargo xtask corpus` downloads it)", stack.name));
+            continue;
+        }
+        let dir = root.join(STACKS).join(&stack.name);
+        let reference = stack.ground_truth.as_ref().and_then(|truth| truth.reference.as_deref());
+        stacks.push(RealStack {
+            id: format!("corpus/{}", stack.name),
+            frames: stack.files.iter().filter(|f| Some(f.name.as_str()) != reference).map(|f| dir.join(&f.name)).collect(),
+            reference: reference.map(|r| dir.join(r)),
+        });
+    }
+    if local {
+        for entry in local::load_all(&root.join(LOCAL))? {
+            match entry {
+                Ok(stack) => {
+                    let dir = root.join(LOCAL).join(&stack.name);
+                    let reference = stack.info.ground_truth.as_ref().and_then(|truth| truth.reference.as_deref()).map(|r| dir.join(r));
+                    stacks.push(RealStack {
+                        id: format!("local/{}", stack.name),
+                        frames: stack.frames.iter().map(|f| dir.join(f)).collect(),
+                        reference,
+                    });
+                }
+                Err((name, problem)) => missing.push(format!("local/{name}: {problem}")),
+            }
+        }
+    }
+    Ok((stacks, missing))
+}
+
 /// The manifest's stacks and fixtures to fetch or check.
 #[derive(Debug, Default, PartialEq)]
 struct Selection<'m> {

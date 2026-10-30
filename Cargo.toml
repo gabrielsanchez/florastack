@@ -58,6 +58,10 @@ criterion ={ version = "0.7", default-features = false, features = ["cargo_bench
 # compare the peak heap of two runs (florastack-stack's tests/memory.rs) without unsafe code of FloraStack's own, as
 # LightCraft's heap tests do. Pure Rust, MIT OR Apache-2.0.
 dhat = "0.3"
+# Peak heap in the quality runner only (dev-dependency of florastack-engine, for examples/quality): a global allocator
+# that counts the bytes in use and their peak with two atomics, which the runner resets before each command; dhat's
+# lock and backtrace on every allocation would slow the commands it times. Pure Rust, no dependencies, MIT.
+peak_alloc = "0.3"
 
 # LightCraft's low-level crates (MIT OR Apache-2.0, pure Rust). They aren't published on crates.io, so they come from
 # git, every one at the same commit: "Release 0.10.0" on main. docs/lightcraft.md says how to move the pin; deny.toml
@@ -149,4 +153,51 @@ opt-level = 2
 
 # The metrics score every stacking test against its ground truth (SSIM over every frame of a stack).
 [profile.dev.package.florastack-metrics]
+opt-level = 2
+
+# Image files and content hashes: decoding and encoding TIFF, PNG and JPEG (inflate and deflate, their checksums, the
+# color conversions) and SHA-256 over every frame and cache file. Unoptimized, they took two thirds of the engine's
+# time on synthetic stacks: one stack of `cargo xtask quality --gate`, 13 runs on one thread, took 49 s with them and
+# 16 s without. Results don't change.
+[profile.dev.package.florastack-codecs]
+opt-level = 2
+[profile.dev.package.lightcraft-tiff]
+opt-level = 2
+[profile.dev.package.lightcraft-codecs]
+opt-level = 2
+[profile.dev.package.lightcraft-color]
+opt-level = 2
+[profile.dev.package.moxcms]
+opt-level = 2
+[profile.dev.package.pxfm]
+opt-level = 2
+[profile.dev.package.miniz_oxide]
+opt-level = 2
+[profile.dev.package.zune-inflate]
+opt-level = 2
+[profile.dev.package.fdeflate]
+opt-level = 2
+[profile.dev.package.flate2]
+opt-level = 2
+[profile.dev.package.adler2]
+opt-level = 2
+[profile.dev.package.simd-adler32]
+opt-level = 2
+[profile.dev.package.crc32fast]
+opt-level = 2
+[profile.dev.package.weezl]
+opt-level = 2
+[profile.dev.package.png]
+opt-level = 2
+[profile.dev.package.tiff]
+opt-level = 2
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+[profile.dev.package.jpeg-decoder]
+opt-level = 2
+[profile.dev.package.jpeg-encoder]
+opt-level = 2
+[profile.dev.package.sha2]
+opt-level = 2
+[profile.dev.package.florastack-project]
 opt-level = 2

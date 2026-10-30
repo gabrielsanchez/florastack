@@ -215,7 +215,7 @@ fn throughput(value: &Value, mean_ns: f64) -> Value {
 }
 
 /// The revision benchmarked, and whether tracked files had uncommitted changes.
-fn git(root: &Path) -> Value {
+pub(crate) fn git(root: &Path) -> Value {
     let revision = command_line(root, "git", &["rev-parse", "HEAD"]);
     let dirty = command_line(root, "git", &["status", "--porcelain", "--untracked-files=no"]).map(|status| !status.is_empty());
     json!({ "revision": revision, "dirty": dirty })
@@ -291,7 +291,7 @@ fn metrics_table(records: &[Value]) -> String {
 }
 
 /// The trimmed standard output of a successful command, if it ran.
-fn command_line(root: &Path, program: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn command_line(root: &Path, program: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new(program).args(args).current_dir(root).output().ok()?;
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }

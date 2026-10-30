@@ -45,6 +45,7 @@ pub const STEPS: &[Step] = &[
     Step { name: "check-layers", args: &["xtask", "check-layers"], tool: None },
     Step { name: "fixtures", args: &["xtask", "corpus", "--fixtures"], tool: None },
     Step { name: TEST_STEP, args: &["test", "--workspace", "--locked"], tool: None },
+    Step { name: "quality", args: &["xtask", "quality", "--gate"], tool: None },
     Step { name: "deny", args: &["deny", "check"], tool: Some("cargo-deny") },
     Step { name: "audit", args: &["audit"], tool: Some("cargo-audit") },
 ];
@@ -374,7 +375,7 @@ mod tests {
         list.extend((0..7).map(|i| skip("gpu", "no Metal adapter", &format!("kernel_{i}"))));
         list.push(skip("gpu", "the adapter failed the self-test", "main"));
         let text = summary(&steps, &Skips { list, unreadable: 0 }, Duration::from_secs(125), "target/ci/skips.jsonl");
-        assert!(text.contains("CI summary: all 7 steps passed in 2m 05s"), "{text}");
+        assert!(text.contains(&format!("CI summary: all {} steps passed in 2m 05s", STEPS.len())), "{text}");
         assert!(text.contains("  ok       clippy          1.2 s  cargo clippy --workspace --all-targets --locked -- -D warnings\n"), "{text}");
         assert!(text.contains("Skipped tests: 9, which passed without running their checks (records in target/ci/skips.jsonl):"), "{text}");
         let gpu = text.find("  gpu (8): needs a GPU adapter that passes the self-test\n").expect("the gpu group");
