@@ -45,12 +45,43 @@ fn execute(cli: Cli) -> Result<(), Failure> {
     let mut client = Client::new(root, cli.json_progress);
     let result = match cli.command {
         Command::Stack(args) => stack(&mut client, &args),
+        Command::Batch(args) => queue(&mut client, "batch.run", &args.input, &args.out, &args.processing, json!({})),
+        Command::Watch(args) => {
+            let input = std::path::absolute(&args.folder)?;
+            let out = args.out.unwrap_or_else(|| {
+                let mut name = input.file_name().unwrap_or_default().to_os_string();
+                name.push("-stacked");
+                input.with_file_name(name)
+            });
+            queue(
+                &mut client,
+                "watch.run",
+                &input,
+                &out,
+                &args.processing,
+                json!({"idleSeconds": args.idle, "settleMs": args.settle_ms, "pollMs": args.poll_ms}),
+            )
+        }
         Command::Run(args) => run(&mut client, &args),
         Command::Project { command } => project(&mut client, command),
         Command::Commands => Ok(()),
     };
     client.reporter.clear_bar()?;
     result
+}
+
+fn queue(client: &mut Client, command: &str, input: &Path, output: &Path, options: &args::QueueOptions, mut params: Value) -> Result<(), Failure> {
+    params["input"] = json!(path_text(input)?);
+    params["output"] = json!(path_text(output)?);
+    params["preset"] = json!(path_text(&options.preset)?);
+    params["method"] = json!(options.method.name());
+    params["template"] = json!(options.template);
+    let result = client.run(command, params)?;
+    print_json(&result)?;
+    if result.get("failed").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+        return Err(Failure::new(1, "batch", "some stacks failed; see summary.csv for details"));
+    }
+    Ok(())
 }
 
 fn stack(client: &mut Client, args: &StackArgs) -> Result<(), Failure> {

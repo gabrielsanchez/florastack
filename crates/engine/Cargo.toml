@@ -27,6 +27,10 @@ schemars.workspace = true
 # The preview lane's thread pool (jobs::executor).
 rayon.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+notify.workspace = true
+tempfile.workspace = true
+
 [dev-dependencies]
 florastack-testkit.workspace = true
 # Synthetic stacks, written as frame files, for the commands' tests and the quality runner.

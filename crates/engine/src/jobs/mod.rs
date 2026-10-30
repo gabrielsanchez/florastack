@@ -109,12 +109,25 @@ pub struct JobInfo {
     /// Cancelling was asked for: the job stops at its next checkpoint.
     pub cancel_requested: bool,
     pub progress: Progress,
+    /// The latest running capture preview; replaced after each successful ingest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<LivePreview>,
     /// The command's result, once done.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     /// Why it failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorInfo>,
+}
+
+/// A capture preview clients can display while a watch job is running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LivePreview {
+    /// A lossless TIFF, available until the next preview or the job ends.
+    pub path: String,
+    /// The number of ingested frames.
+    pub frames: usize,
 }
 
 /// What a job's work returns: the change to make back on the engine's thread, and the command's result.
@@ -200,6 +213,7 @@ impl Phase {
 
 /// What workers tell the engine.
 pub(crate) enum Message {
+    Preview { job: JobId, preview: LivePreview },
     Progress { job: JobId, stage: usize, done: u64, total: u64, at: Duration },
     Finished { job: JobId, outcome: Result<Commit<Value>, CommandError> },
 }
@@ -223,6 +237,13 @@ pub struct JobContext {
 }
 
 impl JobContext {
+    /// Publishes a running capture preview through the ordinary job events.
+    pub fn preview(&self, path: String, frames: usize) {
+        let _ = self.tx.send(Message::Preview { job: self.id, preview: LivePreview { path, frames } });
+        if let Some(wake) = &self.waker {
+            wake();
+        }
+    }
     pub(crate) fn new(id: JobId, phase: Arc<Phase>, tx: Sender<Message>, waker: Option<Waker>, clock: Arc<dyn Clock>) -> JobContext {
         JobContext { id, phase, tx, waker, clock, stage: AtomicUsize::new(0), last_sent: AtomicU64::new(u64::MAX), last_done: AtomicU64::new(0) }
     }

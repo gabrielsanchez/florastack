@@ -224,6 +224,8 @@ fn every_help_page_has_examples_and_exit_codes() {
     for args in [
         vec![],
         vec!["stack"],
+        vec!["batch"],
+        vec!["watch"],
         vec!["run"],
         vec!["commands"],
         vec!["project"],
@@ -304,4 +306,126 @@ fn an_existing_output_is_preserved_and_empty_folders_fail() {
     std::fs::create_dir(dir.path().join("empty")).unwrap();
     cli(dir.path()).args(["stack", "empty", "--out", "empty.tif"]).assert().code(1);
     assert!(!dir.path().join("empty.tif").exists());
+}
+
+#[test]
+fn batch_processes_three_stacks_and_records_the_preset() {
+    let dir = TempDir::new().unwrap();
+    let source = frames(dir.path());
+    for name in ["bee", "flower", "wasp"] {
+        let folder = dir.path().join("stacks").join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        for frame in &source {
+            std::fs::copy(frame, folder.join(frame.file_name().unwrap())).unwrap();
+        }
+    }
+    std::fs::write(dir.path().join("preset.toml"), "[stack.depth_map]\nthreshold = 'percentile'\npercentile = 42\n").unwrap();
+    let output = cli(dir.path())
+        .args([
+            "batch",
+            "--in",
+            "stacks",
+            "--out",
+            "results",
+            "--preset",
+            "preset.toml",
+            "--method",
+            "depthmap",
+            "--template",
+            "{stack}-{method}-{first}-{last}-{date}.tif",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let result = json_output(&output);
+    assert_eq!(result["failed"], 0, "{result}");
+    assert_eq!(result["stacks"].as_array().unwrap().len(), 3);
+    assert_eq!(std::fs::read_to_string(result["summary"].as_str().unwrap()).unwrap().lines().count(), 4);
+    for entry in result["stacks"].as_array().unwrap() {
+        assert_eq!(entry["frames"], 4);
+        check_image(Path::new(entry["output"].as_str().unwrap()));
+        let info = cli(dir.path()).args(["run", entry["project"].as_str().unwrap(), "--cmd", "stack.get"]).assert().success().get_output().clone();
+        assert_eq!(json_output(&info)["result"]["settings"]["depth_map"]["percentile"], 42.0);
+    }
+    cli(dir.path()).args(["batch", "--in", "stacks", "--out", "results", "--preset", "preset.toml"]).assert().code(1);
+}
+
+#[test]
+fn watch_cli_accepts_slowly_written_frames_and_emits_live_previews() {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::Duration;
+    let dir = TempDir::new().unwrap();
+    let source = frames(dir.path());
+    let input = dir.path().join("capture");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(dir.path().join("preset.toml"), "[stack.average]\npower = 2\n").unwrap();
+    let child = std::process::Command::new(assert_cmd::cargo::cargo_bin!())
+        .current_dir(dir.path())
+        .args([
+            "watch",
+            "capture",
+            "--preset",
+            "preset.toml",
+            "--method",
+            "average",
+            "--idle",
+            "0.7",
+            "--settle-ms",
+            "60",
+            "--poll-ms",
+            "20",
+            "--json-progress",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let writer = std::thread::spawn(move || {
+        for (i, path) in source.iter().enumerate() {
+            let bytes = std::fs::read(path).unwrap();
+            let partial = input.join(format!("frame-{i}.part"));
+            let mut file = std::fs::File::create(&partial).unwrap();
+            for chunk in bytes.chunks(bytes.len().div_ceil(4)) {
+                file.write_all(chunk).unwrap();
+                file.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(35));
+            }
+            drop(file);
+            std::fs::rename(&partial, input.join(format!("frame-{i}.png"))).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result = json_output(&output);
+    assert_eq!(result["stacks"][0]["frames"], 4);
+    check_image(Path::new(result["stacks"][0]["output"].as_str().unwrap()));
+    assert!(dir.path().join("capture-stacked").join("summary.csv").is_file());
+    let previews: Vec<_> = lines(&output.stderr).into_iter().filter_map(|e| e["job"]["preview"]["frames"].as_u64()).collect();
+    assert!(previews.iter().any(|&n| n < 4) && previews.contains(&4), "{previews:?}");
+}
+
+#[test]
+fn batch_failures_have_csv_and_a_processing_exit_code() {
+    let dir = TempDir::new().unwrap();
+    frames(dir.path());
+    std::fs::create_dir(dir.path().join("empty")).unwrap();
+    std::fs::write(dir.path().join("preset.toml"), "").unwrap();
+    let output = cli(dir.path())
+        .args(["batch", "--in", ".", "--out", "../unused", "--preset", "preset.toml", "--template", "../escape.tif"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(!output.stdout.is_empty() || !output.stderr.is_empty());
+    let input = dir.path().join("queue");
+    std::fs::create_dir_all(input.join("empty")).unwrap();
+    let output =
+        cli(dir.path()).args(["batch", "--in", "queue", "--out", "results", "--preset", "preset.toml"]).assert().code(1).get_output().clone();
+    let result = json_output(&output);
+    assert_eq!(result["failed"], 1);
+    assert!(dir.path().join("results/summary.csv").is_file());
 }

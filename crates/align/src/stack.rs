@@ -262,6 +262,23 @@ impl StackAligner {
         &self.order
     }
 
+    /// Extends a completed prefix by one frame, preserving the neighbor chain and prepared reference.
+    /// Capture starts with `new(settings, 1, 0)` and `add`, then calls this for each arriving frame.
+    pub fn append(&mut self, frame: &Image<f32>, monitor: &dyn Monitor) -> Result<&FrameAlignment, AlignError> {
+        if self.added != self.results.len() {
+            return Err(AlignError::Incomplete { added: self.added, frames: self.results.len() });
+        }
+        self.order.push(self.results.len());
+        self.results.push(None);
+        self.focus.push(None);
+        self.add(frame, monitor)
+    }
+
+    /// Resolves focus and motion flags for the current prefix without discarding the capture's alignment state.
+    pub fn snapshot(&self) -> Result<StackAlignment, AlignError> {
+        Self::resolve(self.results.clone(), self.focus.clone(), self.geometry, self.master, self.added, &self.settings)
+    }
+
     /// Aligns the next frame ([`StackAligner::next_frame`]), which must have the master's size, and returns its
     /// alignment. Reports progress to `monitor` and stops with [`AlignError::Cancelled`] when it is cancelled.
     pub fn add(&mut self, frame: &Image<f32>, monitor: &dyn Monitor) -> Result<&FrameAlignment, AlignError> {
@@ -299,20 +316,30 @@ impl StackAligner {
     /// Every frame's alignment, once every frame has been added, with their sharp-content fractions, and the frames
     /// whose fraction is below [`AlignSettings::min_sharp_fraction`] flagged as out of focus.
     pub fn finish(self) -> Result<StackAlignment, AlignError> {
-        let frames = self.results.len();
-        let added = self.added;
-        let results: Option<Vec<FrameAlignment>> = self.results.into_iter().collect();
+        Self::resolve(self.results, self.focus, self.geometry, self.master, self.added, &self.settings)
+    }
+
+    fn resolve(
+        results: Vec<Option<FrameAlignment>>,
+        focus: Vec<Option<FocusMap>>,
+        geometry: Option<Geometry>,
+        master: usize,
+        added: usize,
+        settings: &AlignSettings,
+    ) -> Result<StackAlignment, AlignError> {
+        let frames = results.len();
+        let results: Option<Vec<FrameAlignment>> = results.into_iter().collect();
         let mut frames = results.ok_or(AlignError::Incomplete { added, frames })?;
-        let (width, height) = self.geometry.map_or((0, 0), |g| (g.width, g.height));
+        let (width, height) = geometry.map_or((0, 0), |g| (g.width, g.height));
         let transforms: Vec<Affine> = frames.iter().map(|f| f.transform).collect();
         let gains: Vec<f64> = frames.iter().map(|f| f.gain).collect();
         // A rejected frame's transform is only its reference's: its map can't be laid over the others.
-        let maps: Vec<Option<FocusMap>> = self.focus.into_iter().zip(&frames).map(|(map, f)| map.filter(|_| f.status != Status::Rejected)).collect();
-        let found = sharp_fractions(&maps, &transforms, &gains, self.master);
+        let maps: Vec<Option<FocusMap>> = focus.into_iter().zip(&frames).map(|(map, f)| map.filter(|_| f.status != Status::Rejected)).collect();
+        let found = sharp_fractions(&maps, &transforms, &gains, master);
         debug!(peaked = found.peaked, cells = found.cells, fractions = ?found.fractions, "focus");
         for (frame, fraction) in frames.iter_mut().zip(found.fractions) {
             frame.sharp_fraction = fraction;
-            if fraction.is_some_and(|f| f < self.settings.min_sharp_fraction) {
+            if fraction.is_some_and(|f| f < settings.min_sharp_fraction) {
                 frame.flags.push(Flag::OutOfFocus);
             }
         }
@@ -326,7 +353,7 @@ impl StackAligner {
             }
             frame.motion = Some(motion);
         }
-        Ok(StackAlignment { master: self.master, frames, width, height })
+        Ok(StackAlignment { master, frames, width, height })
     }
 
     /// Aligns frame `index`, which isn't the master, to the last frame accepted on its side of the master.

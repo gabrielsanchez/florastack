@@ -44,6 +44,12 @@ pub enum Command {
         "stack photos --slab 15:5 --align shift,scale --preset macro.toml --out result.tif"
     ]))]
     Stack(StackArgs),
+    /// Queue stack folders, or auto-split a folder of frames, with one saved project per stack.
+    #[command(after_help = examples(&["batch --in stacks --out results --preset macro.toml", "batch --in photos --out results --preset macro.toml --method depthmap"]))]
+    Batch(BatchArgs),
+    /// Capture arriving files, update a preview and finalize after a quiet period.
+    #[command(after_help = examples(&["watch capture --preset macro.toml", "watch capture --out results --preset macro.toml --idle 10"]))]
+    Watch(WatchArgs),
     /// Open a project and dispatch commands in order, waiting for each job.
     #[command(after_help = examples(&[
         "run Bee{project} --cmd align.run --params '{}' --cmd stack.pyramid --params '{}'",
@@ -59,6 +65,60 @@ pub enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct BatchArgs {
+    /// Folder of stack folders, or one flat folder to auto-split.
+    #[arg(long = "in", value_name = "FOLDER")]
+    pub input: PathBuf,
+    /// Destination for TIFFs, saved projects and summary.csv; existing entries are refused.
+    #[arg(long, value_name = "FOLDER")]
+    pub out: PathBuf,
+    #[command(flatten)]
+    pub processing: QueueOptions,
+}
+
+#[derive(Debug, Args)]
+pub struct WatchArgs {
+    /// Folder where the tethering application writes frames.
+    pub folder: PathBuf,
+    /// Destination (default: a sibling folder named <capture-folder>-stacked).
+    #[arg(long, value_name = "FOLDER")]
+    pub out: Option<PathBuf>,
+    /// Finalize after this many seconds without new or changed frames.
+    #[arg(long, alias = "timeout", default_value = "5")]
+    pub idle: f64,
+    /// Require unchanged file size and modification time for this many milliseconds before decoding.
+    #[arg(long, default_value = "1000")]
+    pub settle_ms: u64,
+    /// Maximum milliseconds between directory scans, in addition to filesystem events.
+    #[arg(long, default_value = "250")]
+    pub poll_ms: u64,
+    #[command(flatten)]
+    pub processing: QueueOptions,
+}
+
+#[derive(Debug, Args)]
+pub struct QueueOptions {
+    /// TOML preset, including depth-map contrast thresholds.
+    #[arg(long, value_name = "FILE")]
+    pub preset: PathBuf,
+    /// Stacking method (one output per stack).
+    #[arg(long, default_value = "pyramid", value_parser = parse_queue_method)]
+    pub method: Method,
+    /// TIFF filename: {stack}, {method}, {range}, {first}, {last}, {date} (UTC), {params}.
+    #[arg(long, default_value = "{stack}-{method}-{range}.tif")]
+    pub template: String,
+}
+
+fn parse_queue_method(value: &str) -> Result<Method, String> {
+    match value {
+        "pyramid" => Ok(Method::Pyramid),
+        "depthmap" => Ok(Method::Depthmap),
+        "average" => Ok(Method::Average),
+        _ => Err("expected pyramid, depthmap or average".into()),
+    }
 }
 
 #[derive(Debug, Args)]

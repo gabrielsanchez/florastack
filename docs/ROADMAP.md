@@ -110,7 +110,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] Undo and redo through inverse operations, one retouch stroke per step (`florastack_project::Edit`, whose `Project::apply` returns the inverse; one step per command, coalesced slider drags, dirty tracking against the saved state)
 - [x] Tests: every command has a schema and help text, dispatch from JSON, cancellation leaves the project consistent (plus every undoable command undone and redone exactly, hostile parameters and arbitrary JSON thrown at every command)
 - [x] Typed values for the enums' fields too: `WhiteBalance`, `ChromaticAberration` and `OutputFormat` refuse unknown keys inside their variants, which they ignored before
-- [ ] Continuous jobs that commit as they go, batch by batch, for the watch folder (4.2): a job commits once, when it ends
+- [x] Watch captures commit arrivals as they go in a private engine (4.2): each ingest extends the alignment chain, updates a preview and saves its own project through registry commands. The host job publishes the staged artifacts after the quiet period; cancellation before publication removes them without changing the host session. Job events carry the current preview path and frame count
 - [ ] Preview jobs' pixels to the UI (5.2): job results are JSON, which carries no images; `stack.preview` (3.1) writes its result as a lossless TIFF in `previews/` and returns the path, and every call leaves one there until the project is closed (about 10 MB for a 20 MP stack). Keep the latest preview in memory for the viewer to read instead
 - [ ] Per-command capabilities for the control channel and MCP (6.4): `CommandInfo::effects` says what each command may change, and untrusted clients need a gate
 - [ ] The browser build's executor, over a Web Worker pool, and a `project.close` that doesn't block (7.3): `Engine::wait` is native only, and closing waits for cancelled jobs to stop
@@ -247,7 +247,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Slab coverage is all or nothing (the stacker's alpha): a slab's edge in wide framing doesn't ramp as its frames' coverage does, so the final stack can show a slab's edge where the others don't cover
 - [ ] Splitting: a new framing of the same subject by 25% is reported as another scene, since alignment from a scale of 1 doesn't reach it (a 12% one is measured as a scale jump); a log-polar first guess would measure the scale. Retakes of the same subject and framing with no capture times aren't separated; the focus jumping back from the far end to the near end would tell them
 - [ ] Splitting decodes every RAW file in full (with the fast demosaic); its embedded preview would do for comparing neighbors
-- [ ] The CLI's `batch` and auto-split (4.1, 4.2) and the app's import (5.1) on `project.findStacks`; retouching from slabs (5.3)
+- [ ] The app's import (5.1) on `project.findStacks`; retouching from slabs (5.3). The CLI's batch and auto-split use it (4.2)
 
 ### 3.5 Quality report and regression gate
 
@@ -276,10 +276,11 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 4.2 Batch queue and watch folder
 
-- [ ] `batch`: queue many stacks, or auto-split one folder, with a preset, and write a summary CSV with warnings
-- [ ] `watch`: ingest frames as they are written, align incrementally, update a running preview and finalize after a quiet period
-- [ ] Output filename templates (stack name, method, frame range, date, parameters)
-- [ ] Tests: batch on three synthetic stacks; watch with frames written slowly
+- [x] `batch`: `batch.run` queues immediate stack folders, or auto-splits a flat folder with `project.findStacks`, applies a preset to each independent project, exports TIFFs and writes `summary.csv` (stack, frames, method, seconds, alignment and export warnings, project, output, error). Failed entries are recorded and later stacks continue; the CLI exits with code 1 when any fail. Projects and files are staged until publication, without replacing existing entries
+- [x] `watch`: `watch.run` uses native filesystem events (including Windows ReadDirectoryChangesW) plus directory polling, waits for stable size and modification time and a successful decode with unchanged metadata, and retries partial or locked files. A private registry command extends `StackAligner`'s neighbor chain without realigning old frames; snapshots resolve focus and motion flags for each preview. Job events expose the running preview; full alignment, output and project are finalized after the configurable quiet period. Unreadable files left then are warnings. Output stays outside input, so it cannot feed back into ingest
+- [x] Output filename templates: `{stack}`, `{method}`, `{range}`, `{first}`, `{last}`, `{date}` (UTC processing date) and `{params}` (effective method settings); rendered names are portable TIFF filenames with traversal, unknown tokens and collisions refused
+- [x] Tests: batch on three synthetic stacks, flat-folder auto-split, continued processing after failures, preset depth thresholds, reopening and realigning published projects, hostile parameters and templates, watch with slowly written incomplete files and preview synchronization, rename from temporary names, cancellation and prevention of output feedback. `cargo test -p florastack-engine -p florastack-cli` passes
+- [ ] Persist and resume an interrupted queue or capture, and keep a watch process armed for another capture after a quiet-period finalization; this version processes one capture and exits
 
 ### 4.3 GPU acceleration with a CPU oracle *(plan first)*
 
