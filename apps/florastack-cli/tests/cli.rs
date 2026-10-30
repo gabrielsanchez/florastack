@@ -1,0 +1,307 @@
+//! Exercise the real executable against a small synthetic focus sweep and saved projects.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use assert_cmd::Command;
+use florastack_engine::{DevelopSettings, Quality, ReadOptions, Registry, Value, branding, json};
+use tempfile::TempDir;
+
+fn cli(dir: &Path) -> Command {
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!());
+    command.current_dir(dir).args(["--temporary-projects"]).arg(dir.join("temporary projects"));
+    command
+}
+
+fn json_output(output: &Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn lines(bytes: &[u8]) -> Vec<Value> {
+    String::from_utf8_lossy(bytes).lines().map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{line}: {e}"))).collect()
+}
+
+fn png_file(path: &Path, width: u32, height: u32, channels: png::ColorType, pixels: &[u8]) {
+    let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), width, height);
+    encoder.set_color(channels);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    encoder.write_header().unwrap().write_image_data(pixels).unwrap();
+}
+
+/// Four depth bands with a common low-frequency texture, and fine detail that comes into focus one band at a time.
+fn frames(dir: &Path) -> Vec<PathBuf> {
+    let folder = dir.join("input photos");
+    std::fs::create_dir(&folder).unwrap();
+    (0..4)
+        .map(|focus| {
+            let mut pixels = Vec::new();
+            for y in 0..72_u32 {
+                for x in 0..96_u32 {
+                    let texture = (x * 7 + y * 13 + (x * y) % 29) % 60;
+                    let detail = if x / 24 == focus { (x + y) % 2 * 65 } else { 32 };
+                    let sample = u8::try_from(60 + texture + detail).unwrap();
+                    pixels.extend_from_slice(&[sample, sample.saturating_add(7), sample.saturating_sub(9)]);
+                }
+            }
+            let path = folder.join(format!("focus {focus}.png"));
+            png_file(&path, 96, 72, png::ColorType::Rgb, &pixels);
+            path
+        })
+        .collect()
+}
+
+fn check_image(path: &Path) {
+    let mut reader = florastack_engine::frames::FrameReader::new(DevelopSettings::default(), ReadOptions::default());
+    let frame = reader.read(&std::fs::read(path).unwrap(), Quality::Output).unwrap();
+    assert!(frame.image.width() >= 64 && frame.image.height() >= 48);
+    assert!(frame.image.as_raw().iter().all(|v| v.is_finite()));
+    assert!(frame.image.as_raw().iter().any(|&v| v > 0.1));
+}
+
+fn check_depth(path: &Path, float: bool) {
+    let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+    match decoder.read_image().unwrap() {
+        tiff::decoder::DecodingResult::F32(_) => assert!(float),
+        tiff::decoder::DecodingResult::U16(_) => assert!(!float),
+        _ => panic!("expected 16-bit or 32-bit float TIFF samples"),
+    }
+}
+
+fn stack_method(method: &str) {
+    let dir = TempDir::new().unwrap();
+    let files = frames(dir.path());
+    let mut command = cli(dir.path());
+    // Use explicit files for average, the engine's folder ingestion for the other methods.
+    command.arg("stack");
+    if method == "average" {
+        command.args(&files);
+    } else {
+        command.arg(files[0].parent().unwrap());
+    }
+    let output = command.args(["--method", method, "--out", "result.tif", "--json-progress"]).assert().success().get_output().clone();
+    let result = json_output(&output);
+    let outputs = result["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), if method == "both" { 2 } else { 1 });
+    for entry in outputs {
+        check_image(Path::new(entry["file"]["path"].as_str().unwrap()));
+        check_depth(Path::new(entry["file"]["path"].as_str().unwrap()), false);
+        assert!(entry["stack"]["frames"].as_array().unwrap().len() >= 2);
+    }
+    if method == "both" {
+        assert!(dir.path().join("result-pyramid.tif").is_file());
+        assert!(dir.path().join("result-depthmap.tif").is_file());
+        assert!(!dir.path().join("result.tif").exists());
+    }
+    let events = lines(&output.stderr);
+    for event in &events {
+        assert!(event["event"].is_string());
+    }
+    for command in ["project.addFrames", "align.run", "output.save"] {
+        let jobs: Vec<_> = events.iter().filter(|e| e["event"] == "job" && e["job"]["command"] == command).collect();
+        assert!(jobs.iter().any(|e| e["job"]["state"] == "running"));
+        assert!(jobs.iter().any(|e| e["job"]["state"] == "done"));
+        for event in jobs {
+            let fraction = event["job"]["progress"]["fraction"].as_f64().unwrap();
+            assert!((0.0..=1.0).contains(&fraction));
+        }
+    }
+    assert!(Path::new(result["project"].as_str().unwrap()).join("project.json").is_file());
+}
+
+#[test]
+fn pyramid() {
+    stack_method("pyramid");
+}
+#[test]
+fn depthmap() {
+    stack_method("depthmap");
+}
+#[test]
+fn average() {
+    stack_method("average");
+}
+#[test]
+fn both() {
+    stack_method("both");
+}
+
+#[test]
+fn slab_preset_and_explicit_options_reach_the_engine() {
+    let dir = TempDir::new().unwrap();
+    frames(dir.path());
+    std::fs::write(
+        dir.path().join("preset.toml"),
+        "[align]\nrotation = true\nframing = 'wide'\n[develop]\nwhite_balance = 'auto'\n[stack.average]\npower = 2.0\n",
+    )
+    .unwrap();
+    let mask = vec![255; 96 * 72];
+    png_file(&dir.path().join("dust.png"), 96, 72, png::ColorType::Grayscale, &mask);
+    let output = cli(dir.path())
+        .args([
+            "stack",
+            "input photos",
+            "--method",
+            "average",
+            "--out",
+            "slabs.tif",
+            "--slab",
+            "2:1",
+            "--preset",
+            "preset.toml",
+            "--align",
+            "shift,brightness",
+            "--crop",
+            "common",
+            "--raw-wb",
+            "asshot",
+            "--depth",
+            "32f",
+            "--dust-mask",
+            "dust.png",
+            "--json-progress",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let result = json_output(&output);
+    let stacked = &result["outputs"][0]["stack"];
+    assert_eq!(stacked["slabSize"], 2);
+    assert_eq!(stacked["overlap"], 1);
+    assert_eq!(stacked["framing"], "common");
+    assert!(stacked["slabs"].as_array().unwrap().len() > 1);
+    check_image(&dir.path().join("slabs.tif"));
+    check_depth(&dir.path().join("slabs.tif"), true);
+    let project = result["project"].as_str().unwrap();
+    let response = cli(dir.path())
+        .args(["run", project, "--cmd", "align.get", "--cmd", "develop.get", "--cmd", "stack.get", "--cmd", "defects.info"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let queries = lines(&response.stdout);
+    assert_eq!(queries[0]["result"]["settings"]["rotation"], false);
+    assert_eq!(queries[0]["result"]["settings"]["scale"], false);
+    assert_eq!(queries[0]["result"]["settings"]["brightness"], true);
+    assert_eq!(queries[1]["result"]["settings"]["white_balance"], "as-shot");
+    assert_eq!(queries[2]["result"]["settings"]["average"]["power"], 2.0);
+    assert!(queries[3]["result"]["summary"].is_object());
+}
+
+#[test]
+fn run_commands_are_ordered_and_changes_are_saved() {
+    let dir = TempDir::new().unwrap();
+    cli(dir.path()).args(["project", "new", "Bee"]).assert().success();
+    let project = format!("Bee{}", branding::PROJECT_EXTENSION);
+    let output = cli(dir.path())
+        .args(["run", &project, "--cmd", "project.rename", "--params", r#"{"name":"Flower"}"#, "--cmd", "project.info", "--params", "{}"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let results = lines(&output.stdout);
+    assert_eq!(results[0]["command"], "project.rename");
+    assert_eq!(results[1]["result"]["name"], "Flower");
+    let info = cli(dir.path()).args(["project", "info", &project]).assert().success().get_output().clone();
+    assert_eq!(json_output(&info)["name"], "Flower");
+    assert_eq!(json_output(&info)["readOnly"], true);
+}
+
+#[test]
+fn commands_include_every_schema_without_a_project() {
+    let dir = TempDir::new().unwrap();
+    let output = cli(dir.path()).arg("commands").assert().success().get_output().clone();
+    assert_eq!(json_output(&output), serde_json::to_value(Registry::standard().list()).unwrap());
+    assert_eq!(output.stderr, b"");
+    assert!(!dir.path().join("temporary projects").exists());
+}
+
+#[test]
+fn every_help_page_has_examples_and_exit_codes() {
+    let dir = TempDir::new().unwrap();
+    for args in [
+        vec![],
+        vec!["stack"],
+        vec!["run"],
+        vec!["commands"],
+        vec!["project"],
+        vec!["project", "new"],
+        vec!["project", "info"],
+        vec!["project", "clean-orphans"],
+    ] {
+        let output = cli(dir.path()).args(args).arg("--help").assert().success().get_output().clone();
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains("Examples:"), "{help}");
+        assert!(help.contains("Exit codes:"), "{help}");
+    }
+}
+
+#[test]
+fn file_only_invocation_handles_spaces_and_writes_beside_the_first_file() {
+    let dir = TempDir::new().unwrap();
+    let files = frames(dir.path());
+    // No CLI flags: this is exactly the argument shape Explorer supplies on Windows.
+    let output = Command::new(assert_cmd::cargo::cargo_bin!())
+        .current_dir(dir.path())
+        .env("TMPDIR", dir.path())
+        .env("TEMP", dir.path())
+        .env("TMP", dir.path())
+        .args(&files)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let result = json_output(&output);
+    assert!(Path::new(result["project"].as_str().unwrap()).join("project.json").is_file());
+    check_image(&files[0].with_file_name("focus 0-stacked.tif"));
+}
+
+#[test]
+fn clean_orphans_can_preview_without_touching_the_system_trash() {
+    let dir = TempDir::new().unwrap();
+    let created = cli(dir.path()).args(["project", "new"]).assert().success().get_output().clone();
+    let project = json_output(&created)["path"].as_str().unwrap().to_owned();
+    let preview = cli(dir.path()).args(["project", "clean-orphans", "--days", "0", "--dry-run"]).assert().success().get_output().clone();
+    assert!(json_output(&preview)["orphans"].as_array().unwrap().iter().any(|o| o["path"] == project));
+    assert!(Path::new(&project).exists());
+    let empty = cli(dir.path()).args(["project", "clean-orphans"]).assert().success().get_output().clone();
+    assert_eq!(json_output(&empty), json!({ "trashed": [], "failed": [] }));
+}
+
+#[test]
+fn invalid_inputs_and_parameters_have_documented_exit_codes() {
+    let dir = TempDir::new().unwrap();
+    for args in [
+        vec!["stack", "missing.png", "--out", "result.tif", "--slab", "2:2"],
+        vec!["stack", "missing.png", "--out", "result.tif", "--align", "shfit"],
+        vec!["stack", "missing.png", "--out", "result.tif", "--depth", "8"],
+    ] {
+        let output = cli(dir.path()).args(args).arg("--json-progress").assert().code(2).get_output().clone();
+        assert_eq!(lines(&output.stderr).last().unwrap()["event"], "error");
+    }
+    cli(dir.path()).args(["project", "new", "Bee"]).assert().success();
+    let project = format!("Bee{}", branding::PROJECT_EXTENSION);
+    for (command, params) in [("missing.command", "{}"), ("align.set", "{"), ("align.set", r#"{"max_shift":999}"#)] {
+        let output =
+            cli(dir.path()).args(["run", &project, "--cmd", command, "--params", params, "--json-progress"]).assert().code(2).get_output().clone();
+        assert_eq!(lines(&output.stderr).last().unwrap()["event"], "error");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
+    }
+    cli(dir.path()).args(["run", &project, "--cmd", "project.info", "--cmd", "align.get", "--params", "{}"]).assert().code(2);
+    cli(dir.path()).args(["stack", "missing.png", "--out", "result.tif"]).assert().code(1);
+    assert!(!dir.path().join("result.tif").exists());
+}
+
+#[test]
+fn an_existing_output_is_preserved_and_empty_folders_fail() {
+    let dir = TempDir::new().unwrap();
+    frames(dir.path());
+    std::fs::write(dir.path().join("result.tif"), b"existing output").unwrap();
+    cli(dir.path()).args(["stack", "input photos", "--out", "result.tif"]).assert().code(1);
+    assert_eq!(std::fs::read(dir.path().join("result.tif")).unwrap(), b"existing output");
+    std::fs::create_dir(dir.path().join("empty")).unwrap();
+    cli(dir.path()).args(["stack", "empty", "--out", "empty.tif"]).assert().code(1);
+    assert!(!dir.path().join("empty.tif").exists());
+}

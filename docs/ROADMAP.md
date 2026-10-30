@@ -266,12 +266,13 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 4.1 Command-line tool
 
-- [ ] florastack-cli on clap (derive), dispatching registry commands only
-- [ ] `stack` with method, output, slab, alignment, crop, preset, RAW white balance, output depth and dust-mask options
-- [ ] `run`, `commands` (with their JSON schemas) and `project new|info|clean-orphans`
-- [ ] `--help` with examples, documented exit codes, and progress on stderr: a bar on a TTY or `--json-progress`
-- [ ] Windows drag-and-drop: file arguments alone stack with default settings next to the first file
-- [ ] Tests: assert_cmd per method, `--json-progress` parses; a CLI quick start in the README
+- [x] florastack-cli on clap (derive), dispatching registry commands only
+- [x] `stack` with method, output, slab, alignment, crop, preset, RAW white balance, output depth and dust-mask options
+- [x] `run`, `commands` (with their JSON schemas) and `project new|info|clean-orphans`
+- [x] `--help` with examples, documented exit codes, and progress on stderr: a bar on a TTY or `--json-progress`
+- [x] Windows drag-and-drop: file arguments alone stack with default settings next to the first file
+- [x] Tests: assert_cmd per method, `--json-progress` parses; a CLI quick start in the README (`cargo test -p florastack-cli`: 12 integration tests, also checking slab/preset overrides, TIFF sample depths, saved command sequences, help, orphan previews and errors)
+- [ ] A disk budget for the CLI's temporary projects: successful stacks keep their project and cache for recovery until `project clean-orphans` moves them to the trash (30 days by default)
 
 ### 4.2 Batch queue and watch folder
 
