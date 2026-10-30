@@ -353,7 +353,7 @@ fn batch_processes_three_stacks_and_records_the_preset() {
 
 #[test]
 fn watch_cli_accepts_slowly_written_frames_and_emits_live_previews() {
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Write};
     use std::process::Stdio;
     use std::time::Duration;
     let dir = TempDir::new().unwrap();
@@ -361,7 +361,7 @@ fn watch_cli_accepts_slowly_written_frames_and_emits_live_previews() {
     let input = dir.path().join("capture");
     std::fs::create_dir(&input).unwrap();
     std::fs::write(dir.path().join("preset.toml"), "[stack.average]\npower = 2\n").unwrap();
-    let child = std::process::Command::new(assert_cmd::cargo::cargo_bin!())
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin!())
         .current_dir(dir.path())
         .args([
             "watch",
@@ -371,7 +371,7 @@ fn watch_cli_accepts_slowly_written_frames_and_emits_live_previews() {
             "--method",
             "average",
             "--idle",
-            "0.7",
+            "5",
             "--settle-ms",
             "60",
             "--poll-ms",
@@ -382,6 +382,25 @@ fn watch_cli_accepts_slowly_written_frames_and_emits_live_previews() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (preview_tx, preview_rx) = std::sync::mpsc::channel();
+    let progress = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut acknowledged = 0;
+        for line in BufReader::new(stderr).lines() {
+            let line = line.unwrap();
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.push(b'\n');
+            let event: Value = serde_json::from_str(&line).unwrap();
+            if let Some(frames) = event["job"]["preview"]["frames"].as_u64()
+                && frames > acknowledged
+            {
+                let _ = preview_tx.send(frames);
+                acknowledged = frames;
+            }
+        }
+        bytes
+    });
     let writer = std::thread::spawn(move || {
         for (i, path) in source.iter().enumerate() {
             let bytes = std::fs::read(path).unwrap();
@@ -394,18 +413,21 @@ fn watch_cli_accepts_slowly_written_frames_and_emits_live_previews() {
             }
             drop(file);
             std::fs::rename(&partial, input.join(format!("frame-{i}.png"))).unwrap();
-            std::thread::sleep(Duration::from_millis(200));
+            // Wait for each live preview: fixed delays race the idle timeout and can batch all arrivals on a busy runner.
+            let frames = preview_rx.recv_timeout(Duration::from_secs(15)).unwrap_or_else(|error| panic!("preview for frame {i}: {error}"));
+            assert_eq!(frames, i as u64 + 1);
         }
     });
-    let output = child.wait_with_output().unwrap();
-    writer.join().unwrap();
+    let mut output = child.wait_with_output().unwrap();
+    output.stderr = progress.join().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    writer.join().unwrap();
     let result = json_output(&output);
-    assert_eq!(result["stacks"][0]["frames"], 4);
+    assert_eq!(result["stacks"][0]["frames"], 4, "{result}");
     check_image(Path::new(result["stacks"][0]["output"].as_str().unwrap()));
     assert!(dir.path().join("capture-stacked").join("summary.csv").is_file());
     let previews: Vec<_> = lines(&output.stderr).into_iter().filter_map(|e| e["job"]["preview"]["frames"].as_u64()).collect();
-    assert!(previews.iter().any(|&n| n < 4) && previews.contains(&4), "{previews:?}");
+    assert!((1..=4).all(|n| previews.contains(&n)), "{previews:?}");
 }
 
 #[test]
