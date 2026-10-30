@@ -540,6 +540,54 @@ fn run(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError>
     Ok(job.stages(&stages).locks(locks()))
 }
 
+/// An additional command installed only in a watch job's private engine. Its registry owns the capture state,
+/// so independent captures never share a chain. Project changes still use the same alignment commit as `align.run`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn capture_spec() -> CommandSpec {
+    use std::sync::{Arc, Mutex};
+    type Capture = Option<(Vec<FrameId>, StackAligner)>;
+    let capture: Arc<Mutex<Capture>> = Arc::new(Mutex::new(None));
+    CommandSpec::job(
+        Meta::new("watch.align", "Align arriving frames", "Extends this capture's alignment with its newly ingested frames.").undoable(),
+        Lane::Heavy,
+        move |session, _: NoParams| {
+            let mut plan = Plan::new(session, "watch.align", 1)?;
+            let capture = capture.clone();
+            Ok(JobPlan::new(move |ctx| {
+                let mut guard = capture.lock().map_err(|_| plan.internal())?;
+                let mut state = guard.take();
+                if state.as_ref().is_some_and(|(ids, _)| !plan.ids.starts_with(ids)) {
+                    state = None;
+                }
+                let (mut ids, mut aligner) = match state {
+                    Some(state) => state,
+                    None => (Vec::new(), StackAligner::new(&plan.settings, 1, 0)?),
+                };
+                plan.load_mask()?;
+                aligner.set_defects(plan.mask.clone());
+                for i in ids.len()..plan.ids.len() {
+                    ctx.checkpoint()?;
+                    let image = plan.read(i)?;
+                    if ids.is_empty() {
+                        aligner.add(&image, ctx)?;
+                    } else {
+                        aligner.append(&image, ctx)?;
+                    }
+                    let frame = plan.frames.get(i).ok_or_else(|| plan.internal())?;
+                    let preview = write_frame_preview(&plan.cache, frame.id(), &image, plan.frame_key(i)?)?;
+                    plan.previews.push((frame.id(), preview));
+                    ids.push(frame.id());
+                }
+                let alignment = aligner.snapshot()?;
+                *guard = Some((ids.clone(), aligner));
+                plan.commit(ids, &alignment, false)
+            })
+            .stages(&[("Aligning arriving frames", 1.0)])
+            .locks(locks()))
+        },
+    )
+}
+
 fn sort_by_scale(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError> {
     let mut plan = Plan::new(session, "align.sortByScale", 2)?;
     let stages = stages(&plan, &[("Measuring scales", 0.5), ("Aligning frames", 0.5)]);

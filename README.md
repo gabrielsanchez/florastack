@@ -32,6 +32,8 @@ florastack-cli stack frame1.tif frame2.tif --method depthmap --out depthmap.tif 
 florastack-cli stack photos --method both --out result.tif --crop common
 florastack-cli stack photos --slab 15:5 --align shift,scale,rotation,brightness --preset macro.toml --raw-wb asshot --dust-mask dust.png --out result.tif
 florastack-cli stack photos --out result.tif --json-progress 2> progress.jsonl
+florastack-cli batch --in stacks --out results --preset macro.toml --method depthmap
+florastack-cli watch capture --out results --preset macro.toml --idle 5 --json-progress
 florastack-cli project new Bee --folder .
 florastack-cli project info Bee.florastack
 florastack-cli run Bee.florastack --cmd project.addFrames --params '{"paths":["photos"]}' --cmd align.run --params '{}' --cmd stack.pyramid --params '{}'
@@ -41,6 +43,18 @@ florastack-cli project clean-orphans --days 30
 ```
 
 Inputs are files in focus order, or folders whose image and camera RAW files are read directly, sorted by name. An unreadable or duplicate input stops `stack` with a diagnostic. `--method` accepts `pyramid` (default), `depthmap`, `average`, or `both`; `both` writes `result-pyramid.tif` and `result-depthmap.tif`. Exports are TIFF, with `--depth 16` (default) or `32f`, and existing files are refused. `--slab SIZE:OVERLAP` uses the chosen method for both the slabs and their final stack. A preset is applied first; explicit alignment, crop and RAW white-balance options override it. Omitted options keep the preset or engine defaults. `--crop` accepts `narrow`, `wide`, or `common`; the dust mask is a frame-sized image with black defects on white.
+
+`batch --in FOLDER --out FOLDER --preset FILE` queues the input's immediate subfolders as stacks. When the input contains images directly, it auto-splits them with `project.findStacks`; mixed layouts are refused. Each stack gets a named project and a 16-bit TIFF in the output folder. `summary.csv` records stack, frame count, method, processing seconds, alignment warnings (including movement and out-of-focus frames), project, output and any error. A failed stack is recorded and the queue continues; the CLI exits with code 1 when any entry fails. Batch and watch accept `--method pyramid`, `depthmap` or `average` (pyramid by default). Both require a preset; for example, unattended depth-map settings can be:
+
+```toml
+[stack.depth_map]
+threshold = "percentile"
+percentile = 40
+```
+
+`watch FOLDER --preset FILE` is the tethered capture path, including on Windows: native filesystem events wake the ingest loop, and directory polling catches missed events or network shares without notifications. It includes existing files and watches only the folder's immediate image and RAW files. A file must keep its size and modification time unchanged for `--settle-ms` (1000 by default), decode successfully, and remain unchanged during the read. Partial or locked files are retried; increase the settling interval if the tethering application pauses while writing valid intermediate images. Temporary filenames are ignored until renamed with an image extension. Files rewritten after ingestion stop capture with an error. Each ingest extends the alignment chain and updates a quarter-size preview; JSON job events include `job.preview.path` and `job.preview.frames`. Capture waits for its first frame, then finalizes once no new or changed frame arrives for `--idle` seconds (5 by default, and at least the settling interval). Unreadable files left at that point appear as warnings. Finalization runs full alignment and saves the project, TIFF, preview and CSV. Watch handles one capture and exits. The default output is a sibling folder named `<capture-folder>-stacked`; `--out` overrides it.
+
+Batch and watch expose `batch.run` and `watch.run` in the engine registry. Their output folder must be outside the input. Work is staged until publication so engine job cancellation leaves no published artifacts; existing files and `summary.csv` are refused. Use a fresh output folder for another run. `--template` changes the TIFF filename (default `{stack}-{method}-{range}.tif`): `{stack}` is the stack name, `{method}` the method, `{first}` and `{last}` the input file stems, `{range}` their joined stems, `{date}` the UTC processing date as `YYYY-MM-DD`, and `{params}` the effective method settings. Rendered names must be portable TIFF filenames of at most 240 bytes; paths and unknown tokens are errors.
 
 Results go to stdout as JSON. Progress goes to stderr as a bar on a terminal, stage messages when redirected, or engine events as JSON lines with `--json-progress`. Runtime warnings and errors also become JSON lines in that mode. `run` pairs the first `--cmd` with the first `--params`, and so on, waits for each job, prints one result per line, and saves changes after all commands succeed. Give one JSON object per command, or omit all `--params` to use `{}` for every command. It stops on the first error; earlier external file writes remain, and project changes since the last save are not saved. `commands` prints the complete registry, including help, examples, flags and parameter/result JSON schemas. Every subcommand has `--help` with examples. Examples above use shell quoting accepted by Bash and PowerShell; in `cmd.exe`, escape JSON quotes as required by that shell.
 

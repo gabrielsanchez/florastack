@@ -44,6 +44,14 @@ fn hostile_values_are_refused_with_what_is_wrong() {
     let long = "x".repeat(40 * 1024);
     let cases = [
         ("job.cancel", json!({ "job": -1 })),
+        ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "template": "../{stack}.tif" })),
+        ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "template": "{unknown}.tif" })),
+        ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "split": {"gap": -1} })),
+        ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "idleSeconds": -1 })),
+        ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "idleSeconds": 1e300 })),
+        ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "settleMs": 0 })),
+        ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "pollMs": 0 })),
+        ("watch.run", json!({ "input": "x\u{0}", "output": "y", "preset": "p" })),
         ("job.cancel", json!({ "job": 1.5 })),
         ("job.cancel", json!({ "job": 1e30 })),
         ("project.moveFrames", json!({ "frames": [frame], "to": -1 })),
@@ -175,7 +183,7 @@ fn deep_or_huge_json_is_refused() {
 
 /// Commands left out of the arbitrary-JSON test: they create, move or write files outside the test's folders when
 /// their parameters happen to be valid paths, such as `"."`.
-const WRITES_FILES: [&str; 5] = ["project.new", "project.trashOrphans", "preset.save", "output.save", "defects.export"];
+const WRITES_FILES: [&str; 7] = ["project.new", "project.trashOrphans", "preset.save", "output.save", "defects.export", "batch.run", "watch.run"];
 
 fn leaf() -> impl Strategy<Value = Value> {
     prop_oneof![

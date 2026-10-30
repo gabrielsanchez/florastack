@@ -29,6 +29,7 @@ struct Active {
     phase: Arc<Phase>,
     locks: Aspects,
     tracker: Tracker,
+    preview: Option<super::LivePreview>,
 }
 
 impl Active {
@@ -44,6 +45,7 @@ impl Active {
             },
             cancel_requested: self.phase.is_cancelled(),
             progress: self.tracker.progress(now),
+            preview: self.preview.clone(),
             result: None,
             error: None,
         }
@@ -120,7 +122,8 @@ impl Jobs {
         let id = JobId(self.next);
         self.next = self.next.saturating_add(1);
         let now = self.now();
-        let job = Active { id, spec, lane, state, phase: Arc::new(Phase::default()), locks: Aspects::NONE, tracker: Tracker::new(&[], now) };
+        let job =
+            Active { id, spec, lane, state, phase: Arc::new(Phase::default()), locks: Aspects::NONE, tracker: Tracker::new(&[], now), preview: None };
         self.changed.push(job.info(now));
         self.active.push(job);
         id
@@ -258,6 +261,13 @@ impl Jobs {
     pub(crate) fn handle(&mut self, message: Message) -> Option<Finished> {
         let now = self.now();
         match message {
+            Message::Preview { job, preview } => {
+                if let Some(a) = self.active.iter_mut().find(|a| a.id == job) {
+                    a.preview = Some(preview);
+                    self.changed.push(a.info(now));
+                }
+                None
+            }
             Message::Progress { job, stage, done, total, at } => {
                 if let Some(a) = self.active.iter_mut().find(|a| a.id == job) {
                     a.tracker.update(stage, done, total, at);

@@ -4,6 +4,7 @@ align.reset
 align.run
 align.set
 align.sortByScale
+batch.run
 defects.clear
 defects.detect
 defects.export
@@ -48,3 +49,4 @@ stack.pyramid
 stack.reset
 stack.set
 stack.slabbed
+watch.run

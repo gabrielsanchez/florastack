@@ -22,6 +22,8 @@
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
 //! - [`job`]: the jobs (`job.list`, `job.cancel`).
+//! - `batch` and `watch` (native): serial queues of independent projects (`batch.run`) and tethered capture with
+//!   incremental alignment and live previews (`watch.run`).
 //!
 //! The other stacking methods and retouching add their commands in their phases (`stack.*`, `retouch.*`).
 
@@ -30,6 +32,8 @@
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
 pub mod align;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod batch;
 pub mod defects;
 pub mod develop;
 pub mod edit;
@@ -42,6 +46,8 @@ pub mod project;
 pub mod slab;
 pub mod split;
 pub mod stack;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod watch;
 
 use std::path::{Path, PathBuf};
 
@@ -64,6 +70,11 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(output::specs());
     all.extend(edit::specs());
     all.extend(job::specs());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        all.extend(batch::specs());
+        all.extend(watch::specs());
+    }
     all
 }
 

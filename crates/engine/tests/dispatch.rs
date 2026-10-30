@@ -160,6 +160,22 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);
 
+    // Batch and watch also dispatch from JSON; each owns its project, independently of this session.
+    let preset = dir.path().join("batch.toml");
+    std::fs::write(&preset, "[stack.depth_map]\nthreshold = 'level'\nlevel = 0.001\n").unwrap();
+    for (command, folder, extra) in [("batch.run", "batch-out", ""), ("watch.run", "watch-out", ",\"idleSeconds\":0.1,\"settleMs\":50,\"pollMs\":10")]
+    {
+        let result = calls.run(
+            command,
+            &format!(
+                r#"{{"input":{},"output":{},"preset":{}{extra}}}"#,
+                quoted(&dir.path().join("synthetic")),
+                quoted(&dir.path().join(folder)),
+                quoted(&preset)
+            ),
+        );
+        assert_eq!(result["failed"], 0, "{result}");
+    }
     let all: BTreeSet<String> = Registry::standard().names().into_iter().map(str::to_owned).collect();
     let missed: Vec<&String> = all.difference(&calls.names).collect();
     assert!(missed.is_empty(), "commands this test never dispatched: {missed:?}");

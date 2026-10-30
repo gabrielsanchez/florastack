@@ -75,6 +75,8 @@ Commands live in `crates/engine/src/commands/<area>.rs`; `crates/engine/src/regi
 - **A job** plans on the engine's thread from a snapshot of what it reads, and locks those aspects of the project (`JobPlan::locks`); its work runs on a worker, calls `Monitor::step` after each unit (a frame, a tile) and stops with `Cancelled` there; it never touches the session, and returns a commit that the engine runs. Something irreversible outside the project, such as writing the user's file, comes after `JobContext::finalize`.
 - **Test it**: dispatch it from JSON in `crates/engine/tests/dispatch.rs` (a test fails when a registered command is never dispatched there), add an undoable one to the cases of `tests/undo.rs`, and its hostile parameters to `tests/hostile.rs`. `tests/registry.rs` checks every command's help, schemas and examples.
 
+Batch and watch processing live in `crates/engine/src/commands/batch.rs` and `watch.rs` (native targets): `batch.run` queues independent projects and exports a CSV summary; `watch.run` ingests settled files through filesystem events plus polling, extends a capture's alignment chain and publishes preview paths through job events. Both stage their artifacts until publication. The CLI only dispatches these commands.
+
 ## CPU oracle
 
 Every GPU kernel in `florastack-gpu` has a CPU reference implementation in `florastack-core` (conversions and the basic operations), `florastack-stack` or `florastack-align`, and a test that runs both on random and synthetic inputs and asserts that they agree within a documented tolerance. Floating-point results need not be bitwise equal: write the tolerance, and why it is enough, next to the assertion.

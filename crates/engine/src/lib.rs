@@ -32,7 +32,9 @@ pub mod session;
 pub use engine::{DispatchOptions, Dispatched, Engine, EngineConfig, MAX_PARAMS_BYTES};
 pub use error::{CommandError, ErrorInfo, Invalid};
 pub use events::{Event, ProjectEvent};
-pub use jobs::{Clock, Executor, InlineExecutor, JobContext, JobId, JobInfo, JobPlan, JobState, Lane, ManualClock, Progress, Waker, commit};
+pub use jobs::{
+    Clock, Executor, InlineExecutor, JobContext, JobId, JobInfo, JobPlan, JobState, Lane, LivePreview, ManualClock, Progress, Waker, commit,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use jobs::{SystemClock, ThreadExecutor};
 pub use registry::{CommandInfo, CommandSpec, Effects, Kind, Meta, NoParams, Params, Registry, RegistryBuilder, RegistryError, Requires};
