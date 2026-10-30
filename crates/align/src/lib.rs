@@ -65,6 +65,12 @@
 //!   in focus, a score, and [`Flag::Moved`].
 //! - **The filmstrip** ([`thumbnail`], [`aligned_thumbnail`], `filmstrip.rs`): small previews of each frame, as shot
 //!   and warped onto the output's canvas, for scrubbing through the stack.
+//!
+//! # Batches of several stacks
+//!
+//! [`link`] compares two neighboring frames of a batch (do they match, how alike are they once blurred, how far apart
+//! is their framing), and [`boundaries`] cuts a batch into its stacks where neighbors differ by more than focus does,
+//! or where the capture times leave a long gap ([`SplitSettings`], `split.rs`).
 
 mod brightness;
 mod coverage;
@@ -82,6 +88,7 @@ mod phase;
 mod prepare;
 mod settings;
 mod sort;
+mod split;
 mod stack;
 
 pub use coverage::{Coverage, Covered, DEFAULT_FEATHER, coverage_count, warp_to_canvas};
@@ -97,4 +104,5 @@ pub use order::{End, NARROW_MIN, ProcessingOrder, align_ordered, narrow_end, ord
 pub use prepare::MIN_SIDE;
 pub use settings::{AlignSettings, DEFAULT_MIN_MOTION, DEFAULT_MIN_SHARP_FRACTION, MAX_RESOLUTION, MIN_RESOLUTION, Term};
 pub use sort::{MIN_SPREAD, align_by_scale, measuring_settings, scale_order};
+pub use split::{Boundary, GAP_FACTOR, LINK_SIDE, Link, MIN_GAP, Neighbors, Reason, SplitSettings, boundaries, gap_threshold, link};
 pub use stack::{Flag, FrameAlignment, StackAligner, StackAlignment, Status, align_frames};

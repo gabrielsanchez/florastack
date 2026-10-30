@@ -5,6 +5,7 @@
 //!   `project.findOrphans`, `project.trashOrphans`);
 //! - [`frames`]: the frame list (`project.addFrames`, a job, `project.removeFrames`, `project.moveFrames`,
 //!   `project.setFramesEnabled`, `project.frames`);
+//! - [`split`]: finding the stacks in a batch of files holding several (`project.findStacks`, a job);
 //! - [`filmstrip`]: every frame's previews, as shot and aligned, with what moved in it (`filmstrip.list`), and making
 //!   the ones missing or out of date (`filmstrip.update`, a preview job);
 //! - [`develop`]: the RAW develop settings (`develop.get`, `develop.set`, `develop.reset`);
@@ -13,8 +14,10 @@
 //! - [`defects`]: the stack's defect mask, the dust and hot pixels that alignment inpaints (`defects.detect` and
 //!   `defects.import`, jobs, `defects.export`, a job, `defects.clear`, `defects.info`);
 //! - [`stack`]: the stacking settings (`stack.get`, `stack.set`, `stack.reset`), stacking the aligned frames by
-//!   weighted average into a new output (`stack.average`, a job) and its quarter-scale preview (`stack.preview`, a
-//!   preview job);
+//!   weighted average, the pyramid method and the depth-map method into new outputs (`stack.average`,
+//!   `stack.pyramid`, `stack.depthMap`, jobs) and a quarter-scale preview of any of them (`stack.preview`, a preview
+//!   job);
+//! - [`slab`]: stacking in overlapping slabs by one method, then the slabs by another (`stack.slabbed`, a job);
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
@@ -36,6 +39,8 @@ pub mod job;
 pub mod output;
 pub mod preset;
 pub mod project;
+pub mod slab;
+pub mod split;
 pub mod stack;
 
 use std::path::{Path, PathBuf};
@@ -48,11 +53,13 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     let mut all = Vec::new();
     all.extend(project::specs());
     all.extend(frames::specs());
+    all.extend(split::specs());
     all.extend(filmstrip::specs());
     all.extend(develop::specs());
     all.extend(align::specs());
     all.extend(defects::specs());
     all.extend(stack::specs());
+    all.extend(slab::specs());
     all.extend(preset::specs());
     all.extend(output::specs());
     all.extend(edit::specs());
@@ -124,6 +131,18 @@ pub(crate) fn absolute(path: &str) -> Result<PathBuf, CommandError> {
 /// A path as text, for results.
 pub(crate) fn display(path: &Path) -> String {
     path.display().to_string()
+}
+
+/// A monitor that passes cancellation on and keeps progress to itself: for work inside a unit of a job's stage, such
+/// as the end of a slab or the comparison of two frames, whose own progress would make the stage's jump.
+pub(crate) struct Quiet<'a>(pub(crate) &'a dyn florastack_core::Monitor);
+
+impl florastack_core::Monitor for Quiet<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+
+    fn progress(&self, _: u64, _: u64) {}
 }
 
 /// An error and its causes, in one line.

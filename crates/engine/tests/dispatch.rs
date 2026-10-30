@@ -101,6 +101,9 @@ fn every_command_dispatches_from_json() {
 
     // Alignment, on a stack of frames that can be aligned: six frames, each 2% larger than the one before.
     let stack = common::synthetic_frames(dir.path(), "synthetic", 160, 120, &common::breathing(6, 0.02, None, 2));
+    // One stack, found as one: no project needed.
+    let found = calls.run("project.findStacks", &format!(r#"{{ "paths": [{}] }}"#, quoted(&dir.path().join("synthetic"))));
+    assert_eq!((found["stacks"].as_array().unwrap().len(), found["stacks"][0]["files"].as_array().unwrap().len()), (1, 6), "{found}");
     calls.run("project.new", &format!(r#"{{ "name": "Aligned", "folder": {} }}"#, quoted(dir.path())));
     calls.run("project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, common::path_list(&stack)));
     assert_eq!(calls.run("align.get", "{}")["settings"]["framing"], "narrow");
@@ -145,6 +148,14 @@ fn every_command_dispatches_from_json() {
     let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
     assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth"]));
+    // In slabs: three slabs of three frames, sharing one, stacked by pyramid, then by weighted average; each slab is
+    // an output of its own, and the final output is made from them.
+    let slabbed = calls.run("stack.slabbed", r#"{ "slabSize": 3, "overlap": 1, "final": { "method": "average" } }"#);
+    assert_eq!((slabbed["slabs"].as_array().unwrap().len(), &slabbed["finalSettings"]["power"]), (3, &json!(3.0)), "{slabbed}");
+    let outputs = calls.run("output.list", "{}");
+    let last = outputs["outputs"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!((&last["method"], last["outputs"].as_array().unwrap().len()), (&json!("average"), 3), "{last}");
+    assert_eq!(outputs["outputs"][3]["method"], "pyramid");
     assert_eq!(calls.run("stack.reset", "{}")["settings"]["average"]["smoothing"], 8.0);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);
