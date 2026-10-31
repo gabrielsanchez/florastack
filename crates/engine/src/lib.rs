@@ -10,6 +10,8 @@
 //! - [`session`]: what commands see ([`Session`]): the open project, which changes only through
 //!   [`Session::apply`], as one undo step per command ([`history`]).
 //! - [`jobs`]: long commands as jobs on workers, in lanes, with progress, ETAs and cancellation at checkpoints.
+//! - [`view`]: frames, outputs and previews as a viewer shows them: read, oriented, in sRGB's primaries, as half
+//!   floats.
 //! - [`compute`]: which device stacks, the GPU (florastack-gpu) when one passes its self-test or the CPU, and the
 //!   preference that chooses (`compute.info`, `compute.set`).
 //! - [`frames`]: reading a stack's frames, each file sent to the crate that reads it (camera RAW and DNG files to
@@ -31,6 +33,7 @@ pub mod project;
 pub mod registry;
 pub mod schema;
 pub mod session;
+pub mod view;
 
 pub use compute::{Compute, ComputeInfo, Device};
 pub use engine::{DispatchOptions, Dispatched, Engine, EngineConfig, MAX_PARAMS_BYTES};

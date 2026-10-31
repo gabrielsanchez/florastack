@@ -78,6 +78,11 @@ fn every_command_dispatches_from_json() {
     assert!(info["reason"].as_str().unwrap().contains("`cpu`"), "{info}");
     let set = calls.run("compute.set", r#"{ "budgetMb": 512 }"#);
     assert_eq!((&set["preference"], &set["budgetMb"]), (&json!("cpu"), &json!(512)), "{set}");
+    assert_eq!(calls.run("project.checkFrames", "{}")["frames"], json!([]), "every frame's file is the one added");
+    assert!(calls.run("cache.removeAbandoned", "{}")["removed"].is_array());
+    // Saved in another folder, a named project is copied there and stays open in the copy.
+    let saved = calls.run("project.saveAs", &format!(r#"{{ "folder": {} }}"#, quoted(&dir.path().join("saved"))));
+    assert_eq!(saved["moved"], false, "{saved}");
     calls.run("project.save", "{}");
     calls.run("project.close", "{}");
 

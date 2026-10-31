@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use florastack_project::{Aspects, CacheDir, Edit, Project, ProjectFolder, Trash};
+use florastack_project::{Aspects, CacheDir, Edit, MoveFailed, Project, ProjectFolder, Trash};
 
 use crate::Dispatched;
 use crate::compute::Compute;
@@ -320,6 +320,47 @@ impl Session {
         self.history_changed = true;
         self.events.push(Event::Project { state: ProjectEvent::Saved, path: path.display().to_string() });
         Ok(path)
+    }
+
+    /// Moves (`moving`) or copies the open project's folder to `target`, saved first, and keeps the project open
+    /// there with its undo history (Save As): a move for a temporary project, which leaves the temporary-projects
+    /// folder, a copy otherwise, which leaves the original as it was. Refused while a job is running, since jobs write
+    /// into the folder. Returns the folder it is open in now and whether it moved.
+    pub(crate) fn relocate(&mut self, target: &Path, moving: bool) -> Result<(PathBuf, bool), CommandError> {
+        if self.jobs.has_running() {
+            return Err(self.unavailable("a job is using the project: wait for it to end, or cancel it with `job.cancel`"));
+        }
+        self.save()?;
+        let Some(open) = self.open.take() else { return Err(self.no_project()) };
+        let Open { folder, project, history } = open;
+        let (folder, moved) = if moving {
+            match folder.move_to(target).map_err(|f| *f) {
+                Ok((folder, _, moved)) => (folder, moved),
+                Err(MoveFailed { folder: Some(folder), error: e }) => {
+                    self.open = Some(Open { folder, project, history });
+                    return Err(e.into());
+                }
+                Err(MoveFailed { folder: None, error: e }) => {
+                    // The folder couldn't be opened again where it was: the project is closed.
+                    self.events.push(Event::Project { state: ProjectEvent::Closed, path: target.display().to_string() });
+                    self.changed(Aspects::ALL);
+                    return Err(e.into());
+                }
+            }
+        } else {
+            match folder.copy_to(target) {
+                Ok((copy, _)) => (copy, false),
+                Err(e) => {
+                    self.open = Some(Open { folder, project, history });
+                    return Err(e.into());
+                }
+            }
+        };
+        let path = folder.path().to_path_buf();
+        self.open = Some(Open { folder, project, history });
+        self.events.push(Event::Project { state: ProjectEvent::Moved, path: path.display().to_string() });
+        self.changed(Aspects::ALL);
+        Ok((path, moved))
     }
 
     fn check_requires(&self, spec: &CommandSpec) -> Result<(), CommandError> {

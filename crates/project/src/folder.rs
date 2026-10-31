@@ -79,6 +79,14 @@ pub enum FrameState {
 /// A `.part` file older than this is left over from a crash, not being written.
 const STALE_PART: Duration = Duration::from_hours(1);
 
+/// Why [`ProjectFolder::move_to`] failed, with the original folder: open again where it was, unless that failed too
+/// (then the project is closed).
+#[derive(Debug)]
+pub struct MoveFailed {
+    pub folder: Option<ProjectFolder>,
+    pub error: ProjectError,
+}
+
 /// A project folder, open for editing (holding its lock) or read-only.
 #[derive(Debug)]
 pub struct ProjectFolder {
@@ -208,6 +216,59 @@ impl ProjectFolder {
         self.migrated_from = None;
         *project = saved;
         Ok(())
+    }
+
+    /// Copies the project folder to `target`, a folder that mustn't exist yet, and opens the copy for editing: every
+    /// file but the lock, so the copy is the project as last saved, with its cache and previews. The original is left
+    /// as it is. A copy that fails part way is removed (it is this function's own), and the original stays open.
+    pub fn copy_to(&self, target: &Path) -> Result<(ProjectFolder, Project), ProjectError> {
+        if target.exists() {
+            return Err(ProjectError::Exists { path: target.to_path_buf() });
+        }
+        if let Err(e) = copy_tree(self.cache.path(), target, true) {
+            if let Err(cleanup) = std::fs::remove_dir_all(target) {
+                tracing::warn!("cannot remove the unfinished copy {}: {cleanup}", target.display());
+            }
+            return Err(e);
+        }
+        ProjectFolder::open(target)
+    }
+
+    /// Moves the project folder to `target`, a folder that mustn't exist yet, and opens it there: the lock is let go
+    /// and the folder renamed. Where renaming fails (`target` on another drive), the original is opened again and
+    /// copied instead ([`ProjectFolder::copy_to`]), and stays where it was. Returns the folder opened at `target` and
+    /// whether it was moved rather than copied; on failure, the error and the original ([`MoveFailed`]).
+    pub fn move_to(self, target: &Path) -> Result<(ProjectFolder, Project, bool), Box<MoveFailed>> {
+        let failed = |folder, error| Box::new(MoveFailed { folder, error });
+        if target.exists() {
+            return Err(failed(Some(self), ProjectError::Exists { path: target.to_path_buf() }));
+        }
+        let source = self.cache.path().to_path_buf();
+        drop(self);
+        let reopen = |e: ProjectError| failed(ProjectFolder::open(&source).ok().map(|(f, _)| f), e);
+        match std::fs::rename(&source, target) {
+            Ok(()) => match ProjectFolder::open(target) {
+                Ok((folder, project)) => Ok((folder, project, true)),
+                // The folder is at `target` now: put it back so that the project opens where it was.
+                Err(e) => {
+                    if let Err(back) = std::fs::rename(target, &source) {
+                        tracing::warn!("cannot move {} back to {}: {back}", target.display(), source.display());
+                    }
+                    Err(reopen(e))
+                }
+            },
+            Err(rename) => {
+                tracing::debug!("cannot rename {} to {} ({rename}): copying it", source.display(), target.display());
+                let original = match ProjectFolder::open(&source) {
+                    Ok((folder, _)) => folder,
+                    Err(e) => return Err(failed(None, e)),
+                };
+                match original.copy_to(target) {
+                    Ok((folder, project)) => Ok((folder, project, false)),
+                    Err(e) => Err(failed(Some(original), e)),
+                }
+            }
+        }
     }
 
     /// The project folder.
@@ -369,9 +430,67 @@ fn schema_error(file: &Path, e: SchemaError) -> ProjectError {
     }
 }
 
+/// Copies the folder `from` to the new folder `to`, its files and folders and nothing else (symbolic links and other
+/// special files are left out); at the top, `top`, without the lock file.
+fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), ProjectError> {
+    std::fs::create_dir(to).map_err(|source| ProjectError::Write { path: to.to_path_buf(), source })?;
+    let entries = std::fs::read_dir(from).map_err(|source| ProjectError::Read { path: from.to_path_buf(), source })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| ProjectError::Read { path: from.to_path_buf(), source })?;
+        let (path, name) = (entry.path(), entry.file_name());
+        if top && name == LOCK_FILE {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|source| ProjectError::Read { path: path.clone(), source })?;
+        let dest = to.join(&name);
+        if kind.is_dir() {
+            copy_tree(&path, &dest, false)?;
+        } else if kind.is_file() {
+            std::fs::copy(&path, &dest).map_err(|source| ProjectError::Write { path: dest, source })?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh folder in the system's temporary directory, removed by the caller.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("florastack-folder-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn projects_copy_and_move_with_their_files_but_not_their_lock() {
+        let dir = scratch("relocate");
+        let (mut folder, mut project) = ProjectFolder::create(&dir, "Bee").unwrap();
+        let cached = folder.store(Area::Cache, "output-1", "tiff", b"pixels", None).unwrap();
+        folder.save(&mut project).unwrap();
+        // A copy has the project and its cache, and its own lock; the original is still open and locked.
+        let copy_path = dir.join("copy").join("Bee.florastack");
+        std::fs::create_dir_all(copy_path.parent().unwrap()).unwrap();
+        let (copy, copied) = folder.copy_to(&copy_path).unwrap();
+        assert_eq!(copied.name(), Some("Bee"));
+        assert_eq!(copy.read(&cached).unwrap(), b"pixels");
+        assert!(copy.is_locked() && folder.is_locked());
+        assert!(matches!(folder.copy_to(&copy_path), Err(ProjectError::Exists { .. })), "never over another folder");
+        drop(copy);
+        // A move leaves nothing behind; the moved project is locked again.
+        let moved_path = dir.join("Moved.florastack");
+        let original = folder.path().to_path_buf();
+        let (moved, _, renamed) = folder.move_to(&moved_path).unwrap();
+        assert!(renamed && moved.is_locked() && !original.exists());
+        assert_eq!(moved.read(&cached).unwrap(), b"pixels");
+        match moved.move_to(&copy_path).map_err(|f| *f) {
+            Err(MoveFailed { folder: Some(back), error: ProjectError::Exists { .. } }) => assert_eq!(back.path(), moved_path.as_path()),
+            other => panic!("a move onto a folder that exists is refused and keeps the project open: {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn folder_names_are_safe_everywhere() {

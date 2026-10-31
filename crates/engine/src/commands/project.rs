@@ -1,8 +1,9 @@
-//! Projects: creating, opening, saving and closing them, their name, and the cleanup of old temporary projects.
+//! Projects: creating, opening, saving (in place and in another folder) and closing them, their name, checking their
+//! frames' files, and the cleanup of old temporary projects.
 
 use std::path::Path;
 
-use florastack_project::{Edit, Orphan, Orphans, ProjectFolder, Timestamp};
+use florastack_project::{Edit, FrameState, Orphan, Orphans, ProjectFolder, Timestamp, folder_name};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +67,24 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                 .undoable()
                 .examples(&[r#"{ "name": "Bee head, 2026" }"#]),
             rename,
+        ),
+        CommandSpec::instant(
+            Meta::new("project.saveAs", "Save project as", "Saves the open project in another folder, where it stays open.")
+                .help(
+                    "The project goes to `<folder>/<name>.florastack`, named after the project: name a temporary project                      first with `project.rename`. It is saved first. A temporary project is moved out of the                      temporary-projects folder (copied instead where moving isn't possible, as to another drive); a named                      one is copied, and the original stays as it was saved. The undo history stays. Refused while a job                      is running, onto a folder that exists, and for a project whose frames are stored relative to its                      folder when the new folder is elsewhere.",
+                )
+                .requires(Requires::WritableProject)
+                .effects(Effects::Files)
+                .examples(&[r#"{ "folder": "C:/Users/me/Pictures/Stacks" }"#]),
+            save_as,
+        ),
+        CommandSpec::query(
+            Meta::new("project.checkFrames", "Check frames", "Lists the frames whose files are missing or changed since they were added.")
+                .help(
+                    "Each frame's file is compared with what was added, by its size and modification time, and by its                      contents when the time changed. A missing frame can still be stacked from the cache where it was                      aligned; a changed one must be added and aligned again. The desktop app asks this when a project                      opens.",
+                )
+                .requires(Requires::Project),
+            check_frames,
         ),
         CommandSpec::query(
             Meta::new("project.findOrphans", "Find old temporary projects", "Lists the temporary projects old enough to be moved to the trash.")
@@ -321,6 +340,101 @@ fn rename(session: &mut Session, p: RenameParams) -> Result<Renamed, CommandErro
         session.apply(Edit::SetName(Some(p.name.clone())))?;
     }
     Ok(Renamed { name: p.name })
+}
+
+/// Saves the project in another folder.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SaveAsParams {
+    /// The folder to save the project in, made if needed: the project goes to `<folder>/<name>.florastack`.
+    folder: String,
+}
+
+impl Params for SaveAsParams {
+    fn check(&self) -> Result<(), Invalid> {
+        check_path("folder", &self.folder)
+    }
+}
+
+/// Where the project is now.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct SavedAs {
+    /// The project folder it is open in.
+    path: String,
+    /// Whether it was moved (a temporary project) rather than copied.
+    moved: bool,
+}
+
+/// `path` with its symbolic links and `..` resolved where it exists, as it is otherwise.
+fn resolved(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn save_as(session: &mut Session, p: SaveAsParams) -> Result<SavedAs, CommandError> {
+    let project = session.project()?;
+    let Some(name) = project.name() else {
+        return Err(session.unavailable("the project has no name: name it first with `project.rename`"));
+    };
+    let parent = absolute(&p.folder)?;
+    let target = parent.join(folder_name(name));
+    let current = session.folder()?.path().to_path_buf();
+    if resolved(&target) == resolved(&current) {
+        let path = session.save()?;
+        return Ok(SavedAs { path: display(&path), moved: false });
+    }
+    if target.exists() {
+        return Err(florastack_project::ProjectError::Exists { path: target }.into());
+    }
+    let same_parent = current.parent().is_some_and(|c| resolved(c) == resolved(&parent));
+    if !same_parent && project.frames.iter().any(|f| Path::new(&f.path).is_relative()) {
+        return Err(session.unavailable(
+            "some frames are stored relative to the folder that holds the project, so they wouldn't be found from another folder: save it in the same folder, or add those frames again",
+        ));
+    }
+    std::fs::create_dir_all(&parent).map_err(|source| florastack_project::ProjectError::Write { path: parent.clone(), source })?;
+    let temporary = session.temporary_projects().is_some_and(|root| resolved(&current).starts_with(resolved(root)));
+    let (path, moved) = session.relocate(&target, temporary)?;
+    Ok(SavedAs { path: display(&path), moved })
+}
+
+/// A frame whose file isn't the one that was added.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FrameCheck {
+    frame: florastack_project::FrameId,
+    /// Its file, where the project looks for it.
+    path: String,
+    /// `missing`, `changed` or `unreadable`.
+    state: &'static str,
+    /// Why it couldn't be read, when it couldn't.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+/// The frames that need attention.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FramesChecked {
+    /// How many frames were checked.
+    checked: usize,
+    /// The ones missing, changed or unreadable; empty when every file is the one added.
+    frames: Vec<FrameCheck>,
+}
+
+fn check_frames(session: &Session, _: NoParams) -> Result<FramesChecked, CommandError> {
+    let (project, folder) = (session.project()?, session.folder()?);
+    let mut frames = Vec::new();
+    for frame in &project.frames {
+        let (state, reason) = match folder.check_frame(frame) {
+            Ok(FrameState::Unchanged) => continue,
+            Ok(FrameState::Missing) => ("missing", None),
+            Ok(FrameState::Changed) => ("changed", None),
+            Err(e) => ("unreadable", Some(e.to_string())),
+        };
+        frames.push(FrameCheck { frame: frame.id(), path: display(&folder.frame_path(frame)), state, reason });
+    }
+    Ok(FramesChecked { checked: project.frames.len(), frames })
 }
 
 /// Lists the orphaned temporary projects.

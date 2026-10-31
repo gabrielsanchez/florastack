@@ -9,5 +9,36 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "florastack_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "florastack"
+path = "src/main.rs"
+
 [dependencies]
 florastack-engine.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+rfd.workspace = true
+fluent-bundle.workspace = true
+unic-langid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+half.workspace = true
+bytemuck.workspace = true
+# Waiting for the viewer's shaders to compile (an error scope), at startup.
+pollster.workspace = true
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+winit.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
+florastack-testkit.workspace = true
+# Frame files for the smoke test, as the CLI's tests write them.
+png.workspace = true

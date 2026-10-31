@@ -53,7 +53,7 @@ pub mod trash;
 pub use cache::{Area, CacheDir, CachePath, CacheRef, CacheWriter};
 pub use edit::{AlignedFrame, Aspects, Edit, EditError};
 pub use error::{CacheProblem, MigrationError, PresetError, Problem, ProjectError, SchemaError};
-pub use folder::{FrameState, ProjectFolder, folder_name};
+pub use folder::{FrameState, MoveFailed, ProjectFolder, folder_name};
 pub use hash::ContentHash;
 pub use model::{
     Alignment, AlignmentRun, Develop, Frame, FrameFile, FrameId, Input, LayerId, MapName, Maps, NewOutput, Output, OutputId, Project, RetouchLayer,
