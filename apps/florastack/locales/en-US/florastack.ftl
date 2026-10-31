@@ -106,36 +106,138 @@ flag-moved-help = Part of the subject moved against the neighboring frame.
 ## Stack tab
 
 stack-no-project = Open a project or add frames to start.
+step-frames = 1. Frames: { $count }
+step-align = 2. Align
+step-stack = 3. Stack
+stack-align = Align
+stack-preview = Preview
+stack-run = Stack frames
+stack-show-preview = Show the preview
+tip-preview = Stacks a quarter-size version in a few seconds, to see what the full stack will look like. Changing a setting does it on its own.
+tip-stack = Stacks the aligned frames at full size into a new output, in the background: you can keep changing settings and previewing meanwhile.
+align-none = Not aligned yet.
+align-summary = { $aligned } of { $count } frames aligned, { $flagged } flagged, { $rejected } rejected.
+align-changed = The alignment settings changed since the frames were aligned: align them again.
+align-missing = { $count ->
+    [one] One frame isn't aligned yet: align again.
+   *[other] { $count } frames aren't aligned yet: align again.
+}
+learn-more = Learn more
+
 stack-method = Method
 method-pyramid = Pyramid
 method-depth-map = Depth map
 method-average = Weighted average
-stack-settings = Settings
+method-both = Both (pyramid and depth map)
+tip-method-pyramid = Picks the sharpest detail scale by scale. The best all-rounder, and the best where near and far detail overlap, such as hair, bristles and antennae. Can raise contrast and noise a little.
+tip-method-depth-map = Takes each pixel from the frame where it is sharpest. Keeps colors and smooth backgrounds exactly as shot, and needs a contrast threshold. Best for subjects without overlapping detail; it can leave halos at edges.
+tip-method-average = Blends every frame, each weighted by its sharpness. Fast and smooth, but softer than the others. Use it for quick results or simple subjects.
+tip-method-both = Makes a pyramid and a depth-map output from the same frames, to compare them or to retouch one from the other.
+
 setting-radius = Radius
 setting-smoothing = Smoothing
-setting-power = Power
+tip-radius = How large an area, in pixels, sharpness is measured over. Raise it when noise is mistaken for detail; lower it to keep fine detail such as thin hairs.
+tip-smoothing = How gradually the result moves from one frame to the next, in pixels. Raise it to hide seams and halos; lower it when fine detail looks smeared.
+tip-radius-pyramid = The pyramid method has no radius or smoothing: it picks detail scale by scale. Its main setting, Grit, is under Advanced.
+
+align-terms = Alignment
+align-shift = Shift
+align-scale = Scale
+align-rotation = Rotation
+align-brightness = Brightness
+tip-align-shift = Corrects frames that moved sideways or up and down. Leave it on unless the camera was locked off and the subject can't move.
+tip-align-scale = Corrects the change of magnification as focus moves (focus breathing) or as a rail moves the camera. Leave it on for most stacks.
+tip-align-rotation = Corrects frames that turned slightly. Turn it off for stacks on a rail, which can't rotate, to make alignment faster and steadier.
+tip-align-brightness = Matches each frame's brightness to the master's, for flickering lights or exposure that drifted.
+
+setting-framing = Framing
+framing-narrow = Narrow
+framing-wide = Wide
+framing-common = Common
+tip-framing-narrow = Crops to the field of view of the stack's narrow end: every frame covers every pixel. The safe default.
+tip-framing-wide = Keeps the widest field of view: the edges come from fewer frames, and parts no frame covers are transparent.
+tip-framing-common = Crops to what every frame covers once aligned.
+
+advanced = Advanced
 setting-grit = Grit
+tip-grit = How much the finest detail favors the single sharpest frame over a blend. Raise it for crisper fine texture; lower it to reduce speckled noise.
 setting-range-limit = Range limit
+tip-range-limit = Keeps each pixel within the brightness the frames have there, which stops the halos and overshoot the pyramid method can make. Lower it only to let contrast rise.
+setting-levels = Levels
+tip-levels = How many detail scales the pyramid has (0 chooses from the image's size). Rarely needs changing.
 setting-tone = Tone
 tone-compress = Compress
 tone-clip = Clip
 tone-keep = Keep (unclipped)
+tip-tone = What happens to the few values the pyramid pushes beyond white or black: compressed back smoothly, clipped, or kept for editing later in a 32-bit file.
 setting-decisions = Decisions
 decisions-luminance = By luminance
 decisions-channels = By channel
-setting-threshold = Threshold
+tip-decisions = Whether the sharpest detail is picked once for all colors, or for each color channel on its own. By channel can help with color fringes, but may shift colors.
+setting-power = Power
+tip-power = How strongly the sharpest frame wins in the blend. Raise it for a crisper result, lower it for a smoother one.
+threshold-when-stacking = Its contrast threshold is set when you stack.
+
+align-heading = Alignment
+align-refine = Refine against the master
+tip-align-refine = Aligns each frame again directly against the master frame, so that small errors don't add up along a long stack. Helps shallow stacks of similar frames most.
+align-max-shift = Largest shift (%)
+align-max-scale = Largest scale change (%)
+align-max-rotation = Largest rotation (°)
+tip-align-limits = How far alignment may move, scale or turn a frame relative to the master. Raise a limit when frames are flagged for reaching it.
+align-min-score = Lowest match score
+tip-align-min-score = How well a frame must match its neighbor to count as aligned, from 0 to 1. Lower it for difficult, low-detail stacks.
+align-reject = Reject failed frames
+tip-align-reject = Leaves out the frames whose alignment failed or reached a limit. Off, they are only flagged.
+align-resolution = Alignment resolution
+tip-align-resolution = The size, in pixels, frames are reduced to for alignment. Alignment is already sub-pixel; higher values cost time for little gain.
+align-automatic-order = Start from the narrow end
+tip-align-automatic-order = Aligns from the end of the stack with the narrower field of view, so that every frame covers the output.
+align-reverse-order = Reverse the order
+tip-align-reverse-order = Processes the stack from its other end.
+align-min-sharp = Out-of-focus limit
+tip-align-min-sharp = Flags frames with less in-focus detail than this, such as the blurred ones at the start and end of a stack, so that you can leave them out.
+align-min-motion = Smallest movement flagged (px)
+tip-align-min-motion = Flags frames in which part of the subject moved at least this many pixels against the frame before.
+align-detect-defects = Detect dust and hot pixels
+tip-align-detect-defects = Finds the dust and hot pixels that stay at the same place in every frame, and paints them out before aligning.
+stack-reset = Reset stacking settings
+align-reset = Reset alignment settings
+
+threshold-title = Contrast threshold
+threshold-text = Areas in black are below the threshold: too smooth or blurred to tell which frame is sharpest, so their depth is filled from around them. Raise it until noise and smooth background turn black, while the subject's detail stays visible.
 threshold-auto = Automatic
-threshold-level = Level
 threshold-percentile = Percentile
-setting-level = Level
-setting-percentile = Percentile
-stack-reset = Reset to defaults
-stack-align = Align
-stack-preview = Preview
-stack-run = Stack frames
-stack-align-first = Align the frames to preview and stack them.
-stack-show-preview = Show the preview
+threshold-level = Level
+tip-threshold-mode = Automatic picks a threshold from the image; Percentile fills at least that share of the image; Level sets the contrast directly.
+tip-threshold = Drag to raise or lower the threshold; the picture follows.
+threshold-measuring = Measuring focus…
+threshold-below = { $share }% of the image is below the threshold.
+threshold-continue = Continue
+
 outputs-heading = Outputs
+output-compare = Compare
+tip-compare = Pick two outputs to compare them side by side or with a split line.
+compare-split = Split
+compare-side = Side by side
+compare-hint = Pick two outputs to compare them.
+made-auto = automatic threshold
+made-percentile = fills { $value }%
+made-level = threshold { $value }
+
+## Filmstrip
+
+film-play = Play
+film-stop = Stop
+film-as-shot = As shot
+film-aligned = Aligned
+tip-film = Drag up and down over the thumbnails to play the stack frame by frame, and spot what moved between frames. Escape returns to the viewer.
+tip-film-as-shot = Plays the frames as they were shot rather than aligned: alignment's own corrections then show as movement.
+film-caption = Frame { $index } of { $count }: { $name } ({ $how })
+quality-master = master
+quality-rejected = rejected
+quality-score = match { $score }
+quality-tip = Match score { $score } · shift { $x }, { $y } px · scale { $scale }% · rotation { $rotation }° · brightness ×{ $gain }
 
 ## Retouch tab
 

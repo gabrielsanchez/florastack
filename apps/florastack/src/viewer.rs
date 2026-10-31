@@ -19,6 +19,8 @@ use egui::{Pos2, Rect, Sense, Vec2};
 use egui_wgpu::wgpu;
 use florastack_engine::view::DisplayImage;
 
+use crate::prefs::Compare;
+
 const VIEWER_WGSL: &str = include_str!("viewer.wgsl");
 const LEVELS_WGSL: &str = include_str!("levels.wgsl");
 /// The side of the reduced copy shown without a GPU renderer.
@@ -42,7 +44,7 @@ fn zoomed_center(center: Vec2, anchor: Vec2, zoom: f32, next: f32) -> Vec2 {
     point - anchor / next
 }
 
-/// What is shown.
+/// An image shown.
 struct Shown {
     id: u64,
     image: Arc<DisplayImage>,
@@ -50,9 +52,21 @@ struct Shown {
     texture: Option<egui::TextureHandle>,
 }
 
+/// How far from the split line, in points, a drag moves the line rather than the image.
+const SPLIT_GRAB: f32 = 8.0;
+
 /// See the module documentation.
 pub struct Viewer {
     shown: Option<Shown>,
+    /// The second image when two are compared.
+    other: Option<Shown>,
+    /// How two images are compared, the split line's place (a share of the view's width) and whether it is being
+    /// dragged.
+    compare: Compare,
+    split: f32,
+    dragging_split: bool,
+    /// The two images' names, shown in the view's corners when comparing.
+    labels: [String; 2],
     next_id: u64,
     /// Device pixels per image pixel, now and where it is going.
     zoom: f32,
@@ -69,7 +83,21 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn new(gpu: Option<u32>) -> Viewer {
-        Viewer { shown: None, next_id: 0, zoom: 1.0, target: 1.0, center: Vec2::ZERO, anchor: Vec2::ZERO, fit: true, gpu }
+        Viewer {
+            shown: None,
+            other: None,
+            compare: Compare::Split,
+            split: 0.5,
+            dragging_split: false,
+            labels: [String::new(), String::new()],
+            next_id: 0,
+            zoom: 1.0,
+            target: 1.0,
+            center: Vec2::ZERO,
+            anchor: Vec2::ZERO,
+            fit: true,
+            gpu,
+        }
     }
 
     /// The longest side to load images at: the device's largest texture, or the fallback's size.
@@ -77,15 +105,52 @@ impl Viewer {
         self.gpu.map_or(FALLBACK_SIDE, |s| s as usize)
     }
 
+    fn shown(&mut self, image: Arc<DisplayImage>) -> Shown {
+        self.next_id += 1;
+        Shown { id: self.next_id, image, texture: None }
+    }
+
     /// Shows `image`, fitted.
     pub fn show(&mut self, image: Arc<DisplayImage>) {
-        self.next_id += 1;
-        self.shown = Some(Shown { id: self.next_id, image, texture: None });
+        self.shown = Some(self.shown(image));
+        self.other = None;
         self.fit = true;
+    }
+
+    /// Shows `image` in place of the one shown, keeping the view where it is when it has the same size (the next
+    /// preview of the same stack), fitted otherwise.
+    pub fn replace(&mut self, image: Arc<DisplayImage>) {
+        let same = self.shown.as_ref().is_some_and(|s| (s.image.width, s.image.height) == (image.width, image.height));
+        self.shown = Some(self.shown(image));
+        self.other = None;
+        self.fit |= !same;
+    }
+
+    /// Shows `first` and `second` compared, named `labels`; the view stays where it was when the first has the size of
+    /// the image shown before (the same stack's other output), and fits otherwise.
+    pub fn show_pair(&mut self, first: Arc<DisplayImage>, second: Arc<DisplayImage>, labels: [String; 2]) {
+        let same = self.shown.as_ref().is_some_and(|s| (s.image.width, s.image.height) == (first.width, first.height));
+        self.shown = Some(self.shown(first));
+        self.other = Some(self.shown(second));
+        self.labels = labels;
+        self.fit |= !same;
+    }
+
+    pub fn set_compare(&mut self, compare: Compare) {
+        if compare != self.compare {
+            self.compare = compare;
+            self.fit = true;
+        }
+    }
+
+    /// Whether two images are compared.
+    pub fn is_comparing(&self) -> bool {
+        self.other.is_some()
     }
 
     pub fn clear(&mut self) {
         self.shown = None;
+        self.other = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,21 +182,47 @@ impl Viewer {
     /// Draws the viewer in `ui`'s remaining space and handles its input.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
         let ppp = ui.ctx().pixels_per_point();
-        let view = rect.size() * ppp;
-        let Some(shown) = &self.shown else {
-            ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-            return;
+        let Some(size) = self.shown.as_ref().map(|s| Vec2::new(s.image.width as f32, s.image.height as f32)) else { return };
+        let side_by_side = self.other.is_some() && self.compare == Compare::SideBySide;
+        // Side by side, each image has half the view, with a gap between them.
+        let views: Vec<Rect> = if side_by_side {
+            let half = (rect.width() - 2.0) / 2.0;
+            vec![
+                Rect::from_min_size(rect.min, Vec2::new(half, rect.height())),
+                Rect::from_min_size(rect.min + Vec2::new(half + 2.0, 0.0), Vec2::new(half, rect.height())),
+            ]
+        } else {
+            vec![rect]
         };
-        let size = Vec2::new(shown.image.width as f32, shown.image.height as f32);
+        let view = views.first().map_or(rect, |v| *v);
         if self.fit {
-            let z = fit_zoom(view, size);
+            let z = fit_zoom(view.size() * ppp, size);
             (self.zoom, self.target, self.center, self.anchor) = (z, z, size / 2.0, Vec2::ZERO);
         }
-        // Panning by dragging; zooming by the wheel or a pinch, about the pointer.
+        let split_x = rect.left() + rect.width() * self.split;
+        let splitting = self.other.is_some() && self.compare == Compare::Split;
+        if response.drag_started() {
+            self.dragging_split = splitting && response.interact_pointer_pos().is_some_and(|p| (p.x - split_x).abs() <= SPLIT_GRAB);
+        }
+        if response.drag_stopped() {
+            self.dragging_split = false;
+        }
+        // Dragging moves the split line when it was grabbed, and pans otherwise; the wheel or a pinch zooms about the
+        // pointer.
         if response.dragged() {
-            self.fit = false;
-            self.center -= response.drag_delta() * ppp / self.zoom;
+            if self.dragging_split {
+                if let Some(p) = response.interact_pointer_pos() {
+                    self.split = ((p.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+                }
+            } else {
+                self.fit = false;
+                self.center -= response.drag_delta() * ppp / self.zoom;
+            }
+        }
+        if splitting && response.hover_pos().is_some_and(|p| (p.x - split_x).abs() <= SPLIT_GRAB) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
         if response.hovered() {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
@@ -139,12 +230,13 @@ impl Viewer {
             if (factor - 1.0).abs() > 1e-4 {
                 self.fit = false;
                 if let Some(pointer) = response.hover_pos() {
-                    self.anchor = (pointer - rect.center()) * ppp;
+                    let under = views.iter().find(|v| v.contains(pointer)).copied().unwrap_or(view);
+                    self.anchor = (pointer - under.center()) * ppp;
                 }
                 self.target = (self.target * factor).clamp(MIN_ZOOM, MAX_ZOOM);
             }
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !self.dragging_split {
             self.fit = true;
         }
         // The zoom eases toward its target, in proportion, about its anchor.
@@ -158,26 +250,59 @@ impl Viewer {
             self.center = zoomed_center(self.center, self.anchor, self.zoom, self.target);
             self.zoom = self.target;
         }
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        // What each image is drawn in, and clipped to: side by side, each its half; split, the first whole and the
+        // second right of the line.
+        let second_view = if side_by_side { views.get(1).copied().unwrap_or(rect) } else { rect };
+        let second_clip = if splitting { Rect::from_min_max(Pos2::new(split_x, rect.top()), rect.max) } else { second_view };
         let (zoom, center) = (self.zoom, self.center);
-        if self.gpu.is_some() {
-            let paint = Paint { id: shown.id, image: Arc::clone(&shown.image), rect, zoom, center };
-            ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, paint));
-            return;
-        }
-        // Without a GPU renderer: the reduced copy, through egui.
-        let image = Arc::clone(&shown.image);
         let ctx = ui.ctx().clone();
-        let Some(shown) = &mut self.shown else { return };
-        let texture = shown.texture.get_or_insert_with(|| {
-            let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.to_srgb8());
-            ctx.load_texture("viewer", pixels, egui::TextureOptions::LINEAR)
-        });
-        let half = size * zoom / ppp / 2.0;
-        let middle = rect.center() - (center - size / 2.0) * zoom / ppp;
-        let at = Rect::from_center_size(middle, half * 2.0);
-        ui.painter().with_clip_rect(rect).image(texture.id(), at, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), egui::Color32::WHITE);
+        let gpu = self.gpu.is_some();
+        for (slot, (shown, area, clip)) in
+            [(self.shown.as_mut(), view, view), (self.other.as_mut(), second_view, second_clip)].into_iter().enumerate()
+        {
+            let Some(shown) = shown else { continue };
+            draw(ui, &ctx, gpu, slot, shown, area, clip, zoom, center);
+        }
+        if self.other.is_some() {
+            let painter = ui.painter().with_clip_rect(rect);
+            let font = egui::FontId::proportional(13.0);
+            let (text, back) = (egui::Color32::WHITE, egui::Color32::from_black_alpha(150));
+            let label = |at: Pos2, align: egui::Align2, name: &str| {
+                let galley = painter.layout_no_wrap(name.to_owned(), font.clone(), text);
+                let r = align.anchor_size(at, galley.size()).expand(4.0);
+                painter.rect_filled(r, 3.0, back);
+                painter.galley(r.min + Vec2::splat(4.0), galley, text);
+            };
+            label(view.left_top() + Vec2::splat(8.0), egui::Align2::LEFT_TOP, &self.labels[0]);
+            label(second_view.right_top() + Vec2::new(-8.0, 8.0), egui::Align2::RIGHT_TOP, &self.labels[1]);
+            if splitting {
+                painter.vline(split_x, rect.y_range(), egui::Stroke::new(2.0, egui::Color32::WHITE));
+                painter.circle_filled(Pos2::new(split_x, rect.center().y), 6.0, egui::Color32::WHITE);
+            }
+        }
     }
+}
+
+/// Draws `shown` in `area` (whose center shows image point `center` at `zoom`), clipped to `clip`: on the GPU through
+/// uniform `slot`, or through egui with a reduced copy.
+#[allow(clippy::too_many_arguments)] // Where and how one image is drawn.
+fn draw(ui: &egui::Ui, ctx: &egui::Context, gpu: bool, slot: usize, shown: &mut Shown, area: Rect, clip: Rect, zoom: f32, center: Vec2) {
+    let painter = ui.painter().with_clip_rect(clip.intersect(ui.clip_rect()));
+    if gpu {
+        let paint = Paint { slot, id: shown.id, image: Arc::clone(&shown.image), rect: area, zoom, center };
+        painter.add(egui_wgpu::Callback::new_paint_callback(area, paint));
+        return;
+    }
+    let image = Arc::clone(&shown.image);
+    let texture = shown.texture.get_or_insert_with(|| {
+        let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.to_srgb8());
+        ctx.load_texture(format!("viewer {slot}"), pixels, egui::TextureOptions::LINEAR)
+    });
+    let ppp = ctx.pixels_per_point();
+    let size = Vec2::new(image.width as f32, image.height as f32);
+    let middle = area.center() - (center - size / 2.0) * zoom / ppp;
+    let at = Rect::from_center_size(middle, size * zoom / ppp);
+    painter.image(texture.id(), at, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), egui::Color32::WHITE);
 }
 
 /// The viewer's GPU resources, kept in egui-wgpu's callback resources. See the module documentation.
@@ -187,15 +312,26 @@ pub struct GpuViewer {
     trilinear: wgpu::Sampler,
     pixels: wgpu::Sampler,
     bilinear: wgpu::Sampler,
-    uniform: wgpu::Buffer,
     /// Whether the shader applies sRGB's curve (the surface doesn't).
     encode: bool,
-    /// The image uploaded, by its id, with its bind group.
-    uploaded: Option<(u64, wgpu::BindGroup)>,
+    /// The images uploaded, by their ids, the most recently used last.
+    textures: Vec<(u64, wgpu::TextureView)>,
+    /// One for each image drawn at once (two when comparing): its view's uniform, and its bind group with the image
+    /// bound now.
+    slots: Vec<Slot>,
+}
+
+/// An image drawn: its view's uniform, and the bind group of the uniform with the image it draws, by the image's id.
+struct Slot {
+    uniform: wgpu::Buffer,
+    bound: Option<(u64, wgpu::BindGroup)>,
 }
 
 /// The uniform's size: the 12 floats of `View` in viewer.wgsl.
 const UNIFORM_BYTES: u64 = 48;
+/// How many images can be drawn at once, and how many stay uploaded.
+const SLOTS: usize = 2;
+const KEPT_TEXTURES: usize = 4;
 
 impl GpuViewer {
     /// Makes the viewer's resources for `state`'s device and surface and keeps them in its renderer; returns the
@@ -257,14 +393,19 @@ impl GpuViewer {
             trilinear: sampler("viewer trilinear", wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Linear),
             pixels: sampler("viewer pixels", wgpu::FilterMode::Nearest, wgpu::MipmapFilterMode::Nearest),
             bilinear: sampler("viewer bilinear", wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Nearest),
-            uniform: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("viewer view"),
-                size: UNIFORM_BYTES,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
             encode: !target.is_srgb(),
-            uploaded: None,
+            textures: Vec::new(),
+            slots: (0..SLOTS)
+                .map(|_| Slot {
+                    uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("viewer view"),
+                        size: UNIFORM_BYTES,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }),
+                    bound: None,
+                })
+                .collect(),
         };
         if let Some(e) = pollster::block_on(scope.pop()) {
             tracing::warn!("the viewer's shaders don't compile on this GPU ({e}): images are drawn without them");
@@ -273,8 +414,38 @@ impl GpuViewer {
         Some(resources)
     }
 
-    /// Uploads `image` as a mipmapped texture, its levels made by `encoder`, and binds it.
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, id: u64, image: &DisplayImage) {
+    /// Binds image `id` to `slot`, uploading `image` first when it isn't uploaded yet; nothing for a slot out of range.
+    fn bind(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, slot: usize, id: u64, image: &DisplayImage) {
+        if self.slots.get(slot).is_none_or(|s| s.bound.as_ref().is_some_and(|(bound, _)| *bound == id)) {
+            return;
+        }
+        let view = match self.textures.iter().position(|(t, _)| *t == id) {
+            Some(i) => self.textures.remove(i).1,
+            None => self.upload(device, queue, encoder, image),
+        };
+        let Some(s) = self.slots.get(slot) else { return };
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("viewer image"),
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: s.uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.trilinear) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.pixels) },
+            ],
+        });
+        // The most recently used last; the oldest beyond those kept are let go (a bind group holds its own).
+        self.textures.push((id, view));
+        if self.textures.len() > KEPT_TEXTURES {
+            self.textures.remove(0);
+        }
+        if let Some(s) = self.slots.get_mut(slot) {
+            s.bound = Some((id, group));
+        }
+    }
+
+    /// Uploads `image` as a mipmapped texture, its levels made by `encoder`.
+    fn upload(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, image: &DisplayImage) -> wgpu::TextureView {
         let (w, h) = (u32::try_from(image.width).unwrap_or(1).max(1), u32::try_from(image.height).unwrap_or(1).max(1));
         let levels = 32 - w.max(h).leading_zeros();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -322,23 +493,13 @@ impl GpuViewer {
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
         }
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("viewer image"),
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.trilinear) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.pixels) },
-            ],
-        });
-        self.uploaded = Some((id, group));
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 }
 
-/// One frame's drawing of the viewer: the image, and where it lies in the view.
+/// One frame's drawing of an image of the viewer: which, through which slot, and where it lies in the view.
 struct Paint {
+    slot: usize,
     id: u64,
     image: Arc<DisplayImage>,
     /// The view, in points.
@@ -357,9 +518,8 @@ impl egui_wgpu::CallbackTrait for Paint {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(viewer) = resources.get_mut::<GpuViewer>() else { return Vec::new() };
-        if viewer.uploaded.as_ref().is_none_or(|(id, _)| *id != self.id) {
-            viewer.upload(device, queue, encoder, self.id, &self.image);
-        }
+        viewer.bind(device, queue, encoder, self.slot, self.id, &self.image);
+        let Some(slot) = viewer.slots.get(self.slot) else { return Vec::new() };
         // Clip space from image pixels: the view's center shows `center`, `zoom` device pixels to an image pixel.
         let ppp = screen.pixels_per_point;
         let (w, h) = (self.rect.width() * ppp, self.rect.height() * ppp);
@@ -370,13 +530,13 @@ impl egui_wgpu::CallbackTrait for Paint {
         let encode = if viewer.encode { 1.0 } else { 0.0 };
         let view: [f32; 12] =
             [sx, sy, ox, oy, self.image.width as f32, self.image.height as f32, origin.x, origin.y, (8.0 * ppp).round(), encode, nearest, 0.0];
-        queue.write_buffer(&viewer.uniform, 0, bytemuck::cast_slice(&view));
+        queue.write_buffer(&slot.uniform, 0, bytemuck::cast_slice(&view));
         Vec::new()
     }
 
     fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
         let Some(viewer) = resources.get::<GpuViewer>() else { return };
-        let Some((_, group)) = &viewer.uploaded else { return };
+        let Some((_, group)) = viewer.slots.get(self.slot).and_then(|s| s.bound.as_ref()) else { return };
         pass.set_pipeline(&viewer.pipeline);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..6, 0..1);
@@ -422,12 +582,18 @@ mod tests {
     /// Draws `image` into a `size` x `size` `Rgba8Unorm` target (the shader applies sRGB's curve) at `zoom`, centered
     /// on `center`, and reads the target back.
     fn draw(device: &wgpu::Device, queue: &wgpu::Queue, image: DisplayImage, size: u32, zoom: f32, center: Vec2) -> Vec<u8> {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(size as f32));
+        render(device, queue, &[(Paint { slot: 0, id: 1, image: Arc::new(image), rect, zoom, center }, None)], size)
+    }
+
+    /// Draws `paints` in order into a `size` x `size` `Rgba8Unorm` target, each in the viewport of its rect and clipped
+    /// to its scissor `[x, y, w, h]` when it has one, as egui-wgpu draws a frame's callbacks: every `prepare` first,
+    /// then every `paint`; and reads the target back.
+    fn render(device: &wgpu::Device, queue: &wgpu::Queue, paints: &[(Paint, Option<[u32; 4]>)], size: u32) -> Vec<u8> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut resources = egui_wgpu::CallbackResources::default();
         resources.insert(GpuViewer::new(device, format).expect("the viewer's shaders compile"));
-        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(size as f32));
-        let paint = Paint { id: 1, image: Arc::new(image), rect, zoom, center };
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
@@ -441,7 +607,9 @@ mod tests {
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
-        let _ = egui_wgpu::CallbackTrait::prepare(&paint, device, queue, &screen, &mut encoder, &mut resources);
+        for (paint, _) in paints {
+            let _ = egui_wgpu::CallbackTrait::prepare(paint, device, queue, &screen, &mut encoder, &mut resources);
+        }
         {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -458,8 +626,15 @@ mod tests {
                     multiview_mask: None,
                 })
                 .forget_lifetime();
-            let info = egui::PaintCallbackInfo { viewport: paint.rect, clip_rect: paint.rect, pixels_per_point: 1.0, screen_size_px: [size, size] };
-            egui_wgpu::CallbackTrait::paint(&paint, info, &mut pass, &resources);
+            for (paint, scissor) in paints {
+                let [x, y, w, h] = scissor.unwrap_or([0, 0, size, size]);
+                pass.set_scissor_rect(x, y, w, h);
+                let r = paint.rect;
+                pass.set_viewport(r.min.x, r.min.y, r.width(), r.height(), 0.0, 1.0);
+                let info =
+                    egui::PaintCallbackInfo { viewport: paint.rect, clip_rect: paint.rect, pixels_per_point: 1.0, screen_size_px: [size, size] };
+                egui_wgpu::CallbackTrait::paint(paint, info, &mut pass, &resources);
+            }
         }
         // Rows of 256 bytes, as copies want them, hold 64 pixels: the targets are at most that wide.
         assert!(size <= 64);
@@ -528,5 +703,39 @@ mod tests {
         for (i, pixel) in shown.as_chunks::<4>().0.iter().enumerate() {
             assert!(pixel[0].abs_diff(188) <= 3, "pixel {i}: {}", pixel[0]);
         }
+    }
+
+    /// A flat opaque image of `w` x `h` pixels at linear `v`.
+    fn flat(w: usize, h: usize, v: f32) -> Arc<DisplayImage> {
+        let rgba = (0..w * h).flat_map(|_| [half(v), half(v), half(v), half(1.0)]).collect();
+        Arc::new(DisplayImage { width: w, height: h, rgba, alpha: false })
+    }
+
+    #[test]
+    fn two_images_compared_each_keep_their_own_view() {
+        let Ok((device, queue)) = device() else {
+            let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
+            assert!(!required, "FLORASTACK_REQUIRE_GPU is set, but no GPU adapter is usable");
+            florastack_testkit::skip!(Gpu, "no GPU adapter is usable");
+            return;
+        };
+        // Split: gray on the whole view, then white right of the line through slot 1, at another zoom and center;
+        // both prepared before either is painted, as in a frame.
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
+        let first = Paint { slot: 0, id: 1, image: flat(4, 4, 0.214), rect, zoom: 16.0, center: Vec2::splat(2.0) };
+        let second = Paint { slot: 1, id: 2, image: flat(2, 2, 1.0), rect, zoom: 32.0, center: Vec2::splat(1.0) };
+        let shown = render(&device, &queue, &[(first, None), (second, Some([40, 0, 24, 64]))], 64);
+        let at = |x: usize, y: usize| shown[(y * 64 + x) * 4];
+        assert!(at(10, 32).abs_diff(128) <= 2 && at(38, 10).abs_diff(128) <= 2, "the first image, left of the line: {}", at(10, 32));
+        assert_eq!((at(41, 32), at(63, 63)), (255, 255), "the second image, right of it");
+        // Side by side: each image in its half of the target, with the same zoom.
+        let left = Rect::from_min_size(Pos2::ZERO, Vec2::new(32.0, 64.0));
+        let right = Rect::from_min_size(Pos2::new(32.0, 0.0), Vec2::new(32.0, 64.0));
+        let first = Paint { slot: 0, id: 3, image: flat(2, 4, 0.214), rect: left, zoom: 16.0, center: Vec2::new(1.0, 2.0) };
+        let second = Paint { slot: 1, id: 4, image: flat(2, 4, 1.0), rect: right, zoom: 16.0, center: Vec2::new(1.0, 2.0) };
+        let shown = render(&device, &queue, &[(first, None), (second, None)], 64);
+        let at = |x: usize, y: usize| shown[(y * 64 + x) * 4];
+        assert!(at(1, 32).abs_diff(128) <= 2 && at(30, 32).abs_diff(128) <= 2, "the first image fills the left half: {}", at(30, 32));
+        assert_eq!((at(33, 32), at(62, 32)), (255, 255), "the second fills the right half");
     }
 }

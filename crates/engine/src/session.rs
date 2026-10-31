@@ -51,6 +51,9 @@ pub struct Session {
     changed: Aspects,
     history_changed: bool,
     events: Vec<Event>,
+    /// The depth map's focus statistics that `stack.threshold` measured last, for the next threshold; dropped with the
+    /// project.
+    pub(crate) focus: Option<crate::commands::threshold::FocusMemo>,
 }
 
 /// Runs `f`, turning a panic into an error (AGENTS.md, Never crash: a last resort; the project only changes through
@@ -67,7 +70,17 @@ const STOP_POLL: Duration = Duration::from_millis(20);
 
 impl Session {
     pub(crate) fn new(host: Host, jobs: Jobs) -> Session {
-        Session { host, open: None, jobs, current: None, revision: 0, changed: Aspects::NONE, history_changed: false, events: Vec::new() }
+        Session {
+            host,
+            open: None,
+            jobs,
+            current: None,
+            revision: 0,
+            changed: Aspects::NONE,
+            history_changed: false,
+            events: Vec::new(),
+            focus: None,
+        }
     }
 
     fn command(&self) -> &'static str {
@@ -271,6 +284,7 @@ impl Session {
             )
         };
         let path = folder.path().display().to_string();
+        self.focus = None;
         self.open = Some(Open { folder, project, history: History::new() });
         self.events.push(Event::Project { state: ProjectEvent::Opened, path });
         self.changed(Aspects::ALL);
@@ -293,6 +307,7 @@ impl Session {
             self.pump(Some(STOP_POLL));
         }
         let Some(open) = self.open.take() else { return Ok(None) };
+        self.focus = None;
         let cleaned = if open.folder.is_read_only() {
             0
         } else {

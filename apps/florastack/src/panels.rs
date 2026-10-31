@@ -7,9 +7,9 @@ use egui::{Align, Layout, RichText, Sense};
 use florastack_engine::{Format, OutputSpec, Value, json};
 
 use crate::actions::Action;
-use crate::app::{Banner, Dialog, FloraStackApp, Selection};
+use crate::app::{Banner, Dialog, FILM_SIDE, FloraStackApp, Selection, THUMBNAIL_SIDE};
 use crate::i18n::{tr, tr_args};
-use crate::prefs::{Method, Tab};
+use crate::prefs::Tab;
 
 /// The height of a frame list row's thumbnail, in points.
 const ROW_THUMBNAIL: f32 = 40.0;
@@ -38,7 +38,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     egui::Panel::left("frames").resizable(true).default_size(260.0).size_range(180.0..=520.0).show(ui, |ui| frame_list(app, ui));
     egui::Panel::right("settings").resizable(true).default_size(300.0).size_range(220.0..=560.0).show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| match app.prefs.tab {
-            Tab::Stack => stack_tab(app, ui),
+            Tab::Stack => crate::stack_tab::show(app, ui),
             Tab::Retouch => {
                 ui.heading(tr("tab-retouch"));
                 ui.label(tr("retouch-later"));
@@ -49,7 +49,9 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     });
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         banners(app, ui);
-        if app.viewer.is_empty() {
+        if app.film.is_some() {
+            film_view(app, ui);
+        } else if app.viewer.is_empty() {
             empty_view(app, ui);
         } else {
             app.viewer.ui(ui);
@@ -204,7 +206,9 @@ fn status(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     });
 }
 
-/// The frame list: thumbnails, names, flags, the enabled checkboxes, and reordering by dragging.
+/// The frame list: thumbnails, names, each frame's alignment quality and flags, the enabled checkboxes, reordering by
+/// dragging a frame's name, and the filmstrip: dragging up and down over the thumbnails plays the stack frame by
+/// frame, Play plays it on its own.
 fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.heading(tr("frames-heading"));
@@ -218,38 +222,53 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         }
         return;
     }
+    ui.horizontal(|ui| {
+        let playing = app.film.as_ref().is_some_and(|f| f.playing);
+        let label = if playing { tr("film-stop") } else { tr("film-play") };
+        if ui.button(label).on_hover_text(tr("tip-film")).clicked() {
+            let at = app.film.as_ref().map_or(0, |f| f.index);
+            if playing { app.film_at(at, false) } else { app.film_at(at, true) }
+        }
+        ui.checkbox(&mut app.prefs.film_as_shot, tr("film-as-shot")).on_hover_text(tr("tip-film-as-shot"));
+    });
     let frames = app.shell.frames.clone();
+    let min_score = app.shell.align_settings["min_score"].as_f64().unwrap_or(0.0);
     let mut moved: Option<(u64, usize)> = None;
+    // Each row's span, top to bottom, for the scrubbing pointer; and whether a thumbnail is being dragged.
+    let mut spans = Vec::with_capacity(frames.len());
+    let mut scrubbing = false;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (i, frame) in frames.iter().enumerate() {
             let selected = app.selection == Selection::Frame(frame.id);
-            let drag = ui.dnd_drag_source(egui::Id::unique(("frame-row", frame.id)), i, |ui| {
-                ui.horizontal(|ui| {
-                    let mut enabled = frame.enabled;
-                    if ui.checkbox(&mut enabled, "").on_hover_text(tr("frames-enabled")).changed() {
-                        app.shell.run("project.setFramesEnabled", json!({ "frames": [frame.id], "enabled": enabled }));
+            let filmed = app.film.as_ref().is_some_and(|f| f.index == i);
+            let row = ui.horizontal(|ui| {
+                let mut enabled = frame.enabled;
+                if ui.checkbox(&mut enabled, "").on_hover_text(tr("frames-enabled")).changed() {
+                    app.shell.run("project.setFramesEnabled", json!({ "frames": [frame.id], "enabled": enabled }));
+                }
+                let size = egui::vec2(ROW_THUMBNAIL * 1.5, ROW_THUMBNAIL);
+                let texture = frame.preview.as_ref().and_then(|p| app.thumbnail(p, THUMBNAIL_SIDE));
+                let thumb = match texture {
+                    Some(texture) => {
+                        ui.add(egui::Image::new(&texture).fit_to_exact_size(size).maintain_aspect_ratio(true).sense(Sense::click_and_drag()))
                     }
-                    let size = egui::vec2(ROW_THUMBNAIL * 1.5, ROW_THUMBNAIL);
-                    match frame.preview.as_ref() {
-                        Some(preview) => {
-                            app.want_thumbnail(preview);
-                            match app.thumbnails.get(preview) {
-                                Some(texture) => {
-                                    ui.add(egui::Image::new(texture).fit_to_exact_size(size).maintain_aspect_ratio(true));
-                                }
-                                None => {
-                                    ui.allocate_exact_size(size, Sense::hover());
-                                }
-                            }
-                        }
-                        None => {
-                            ui.allocate_exact_size(size, Sense::hover());
-                        }
-                    }
+                    None => ui.allocate_exact_size(size, Sense::click_and_drag()).1,
+                };
+                if filmed {
+                    ui.painter().rect_stroke(thumb.rect, 2.0, ui.visuals().selection.stroke, egui::StrokeKind::Outside);
+                }
+                let thumb = thumb.on_hover_text(tr("tip-film"));
+                if thumb.is_pointer_button_down_on() || thumb.dragged() {
+                    scrubbing = true;
+                }
+                let info = ui.dnd_drag_source(egui::Id::unique(("frame-row", frame.id)), i, |ui| {
                     ui.vertical(|ui| {
                         let name = if frame.enabled { RichText::new(&frame.name) } else { RichText::new(&frame.name).weak().strikethrough() };
                         if ui.selectable_label(selected, name).on_hover_text(frame.file.display().to_string()).clicked() {
                             app.select(Selection::Frame(frame.id));
+                        }
+                        if let Some(alignment) = &frame.alignment {
+                            quality(ui, alignment, min_score);
                         }
                         if !frame.flags.is_empty() {
                             ui.horizontal_wrapped(|ui| {
@@ -261,8 +280,10 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                         }
                     });
                 });
+                info.response
             });
-            let row = drag.response;
+            spans.push(row.response.rect.y_range());
+            let row = row.inner;
             if let (Some(pointer), Some(_)) = (ui.input(|i| i.pointer.interact_pos()), row.dnd_hover_payload::<usize>()) {
                 let below = pointer.y > row.rect.center().y;
                 let y = if below { row.rect.bottom() } else { row.rect.top() };
@@ -278,9 +299,81 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             }
         }
     });
+    // Scrubbing: the frame under the pointer, as it moves over the rows.
+    if scrubbing && let Some(y) = ui.input(|i| i.pointer.interact_pos()).map(|p| p.y) {
+        let index = spans.iter().position(|s| s.contains(y)).unwrap_or(if spans.first().is_some_and(|s| y < s.min) {
+            0
+        } else {
+            spans.len().saturating_sub(1)
+        });
+        if app.film.as_ref().is_none_or(|f| f.index != index || f.playing) {
+            app.film_at(index, false);
+        }
+    }
     if let Some((id, to)) = moved {
         app.shell.run("project.moveFrames", json!({ "frames": [id], "to": to }));
     }
+}
+
+/// A frame's alignment quality, under its name: the master, rejected, or how well it matched its neighbor, with its
+/// terms in the tooltip.
+fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64) {
+    let score = alignment["score"].as_f64().unwrap_or(0.0);
+    let (text, warn) = match alignment["status"].as_str() {
+        Some("master") => (tr("quality-master"), false),
+        Some("rejected") => (tr("quality-rejected"), true),
+        _ => (tr_args("quality-score", &[("score", format!("{score:.2}").into())]), score < min_score),
+    };
+    let color = if warn { ui.visuals().warn_fg_color } else { ui.visuals().weak_text_color() };
+    let shift = &alignment["shift"];
+    let tip = tr_args(
+        "quality-tip",
+        &[
+            ("score", format!("{score:.3}").into()),
+            ("x", format!("{:.1}", shift[0].as_f64().unwrap_or(0.0)).into()),
+            ("y", format!("{:.1}", shift[1].as_f64().unwrap_or(0.0)).into()),
+            ("scale", format!("{:+.2}", (alignment["scale"].as_f64().unwrap_or(1.0) - 1.0) * 100.0).into()),
+            ("rotation", format!("{:+.2}", alignment["rotation"].as_f64().unwrap_or(0.0)).into()),
+            ("gain", format!("{:.3}", alignment["gain"].as_f64().unwrap_or(1.0)).into()),
+        ],
+    );
+    #[allow(clippy::cast_possible_truncation)] // A score from 0 to 1, drawn as a bar.
+    let bar = egui::ProgressBar::new(score.clamp(0.0, 1.0) as f32).desired_width(60.0).desired_height(4.0);
+    ui.horizontal(|ui| {
+        ui.colored_label(color, RichText::new(text).small());
+        ui.add(bar);
+    })
+    .response
+    .on_hover_text(tip);
+}
+
+/// The filmstrip, in place of the viewer: the frame playing, as shot or aligned, fitted, with its number.
+fn film_view(app: &mut FloraStackApp, ui: &mut egui::Ui) {
+    let Some(index) = app.film.as_ref().map(|f| f.index) else { return };
+    let rect = ui.available_rect_before_wrap();
+    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+    // Every frame's picture is asked for at once, so that playing doesn't wait for them.
+    for i in 0..app.shell.frames.len() {
+        if let Some(path) = app.film_frame(i) {
+            app.thumbnail(&path, FILM_SIDE);
+        }
+    }
+    let texture = app.film_frame(index).and_then(|path| app.thumbnail(&path, FILM_SIDE));
+    if let Some(texture) = texture {
+        let size = texture.size_vec2();
+        let scale = (rect.width() / size.x.max(1.0)).min(rect.height() / size.y.max(1.0));
+        let at = egui::Rect::from_center_size(rect.center(), size * scale);
+        ui.painter().image(texture.id(), at, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+    }
+    let name = app.shell.frames.get(index).map(|f| f.name.clone()).unwrap_or_default();
+    let how = if app.prefs.film_as_shot { tr("film-as-shot") } else { tr("film-aligned") };
+    let caption = tr_args(
+        "film-caption",
+        &[("index", (index + 1).into()), ("count", app.shell.frames.len().into()), ("name", name.into()), ("how", how.into())],
+    );
+    let text = RichText::new(caption).color(egui::Color32::WHITE).background_color(egui::Color32::from_black_alpha(150));
+    ui.put(egui::Rect::from_min_size(rect.left_top() + egui::vec2(8.0, 8.0), egui::vec2(rect.width() - 16.0, 20.0)), egui::Label::new(text));
+    ui.allocate_rect(rect, Sense::hover());
 }
 
 /// A flag's label and its explanation.
@@ -298,146 +391,13 @@ fn flag_text(flag: &str) -> (String, String) {
     (tr(label), tr(help))
 }
 
-/// The settings of the stacking methods, as `stack.get` gives them: read again when the project changed.
-fn stack_settings(app: &mut FloraStackApp) -> Value {
-    let revision = app.shell.revision;
-    if app.settings.as_ref().is_none_or(|(r, _)| *r != revision) {
-        let settings = app.shell.run("stack.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());
-        app.settings = Some((revision, settings));
-    }
-    app.settings.as_ref().map_or(Value::Null, |(_, s)| s.clone())
-}
-
-/// A slider for a numeric stacking setting, which `stack.set` changes (one undo step per drag) and a preview follows.
-fn slider(
-    app: &mut FloraStackApp,
-    ui: &mut egui::Ui,
-    settings: &Value,
-    (group, key): (&str, &str),
-    range: std::ops::RangeInclusive<f64>,
-    label: &str,
-) {
-    let mut value = settings[group][key].as_f64().unwrap_or(*range.start());
-    let response = ui.add(egui::Slider::new(&mut value, range).text(tr(label)));
-    if response.changed() {
-        app.shell.run_with("stack.set", json!({ group: { key: value } }), Some(format!("stack.set {group}.{key}")));
-        if let Some((_, s)) = &mut app.settings {
-            s[group][key] = json!(value);
-        }
-    }
-    if response.drag_stopped() || (response.changed() && !response.dragged()) {
-        app.preview_if_aligned();
-    }
-}
-
-/// A choice among a stacking setting's named values.
-fn choice(app: &mut FloraStackApp, ui: &mut egui::Ui, settings: &Value, (group, key): (&str, &str), options: &[(&str, &str)], label: &str) {
-    let current = settings[group][key].as_str().unwrap_or("").to_owned();
-    let shown = options.iter().find(|(v, _)| *v == current).map_or_else(|| current.clone(), |(_, l)| tr(l));
-    egui::ComboBox::from_label(tr(label)).selected_text(shown).show_ui(ui, |ui| {
-        for (value, option) in options {
-            if ui.selectable_label(current == *value, tr(option)).clicked() && current != *value {
-                app.shell.run("stack.set", json!({ group: { key: value } }));
-                app.preview_if_aligned();
-            }
-        }
-    });
-}
-
-fn stack_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
-    ui.heading(tr("tab-stack"));
-    if !app.has_project() {
-        ui.label(tr("stack-no-project"));
-        return;
-    }
-    ui.add_space(4.0);
-    ui.label(RichText::new(tr("stack-method")).strong());
-    for method in Method::ALL {
-        if ui.radio(app.prefs.method == method, tr(method.label_key())).clicked() && app.prefs.method != method {
-            app.set_method(method);
-            app.preview_if_aligned();
-        }
-    }
-    ui.add_space(8.0);
-    let settings = stack_settings(app);
-    if !settings.is_null() {
-        ui.label(RichText::new(tr("stack-settings")).strong());
-        match app.prefs.method {
-            Method::Average => {
-                slider(app, ui, &settings, ("average", "radius"), 0.0..=64.0, "setting-radius");
-                slider(app, ui, &settings, ("average", "smoothing"), 0.0..=64.0, "setting-smoothing");
-                slider(app, ui, &settings, ("average", "power"), 0.5..=4.0, "setting-power");
-            }
-            Method::Pyramid => {
-                slider(app, ui, &settings, ("pyramid", "grit"), 0.0..=1.0, "setting-grit");
-                slider(app, ui, &settings, ("pyramid", "range_limit"), 0.0..=1.0, "setting-range-limit");
-                let tones = [("compress", "tone-compress"), ("clip", "tone-clip"), ("keep", "tone-keep")];
-                choice(app, ui, &settings, ("pyramid", "tone"), &tones, "setting-tone");
-                let decisions = [("luminance", "decisions-luminance"), ("channels", "decisions-channels")];
-                choice(app, ui, &settings, ("pyramid", "decisions"), &decisions, "setting-decisions");
-            }
-            Method::DepthMap => {
-                slider(app, ui, &settings, ("depth_map", "radius"), 0.0..=64.0, "setting-radius");
-                slider(app, ui, &settings, ("depth_map", "smoothing"), 0.0..=256.0, "setting-smoothing");
-                let modes = [("auto", "threshold-auto"), ("level", "threshold-level"), ("percentile", "threshold-percentile")];
-                choice(app, ui, &settings, ("depth_map", "threshold"), &modes, "setting-threshold");
-                match settings["depth_map"]["threshold"].as_str() {
-                    Some("level") => slider(app, ui, &settings, ("depth_map", "level"), 0.0..=0.05, "setting-level"),
-                    Some("percentile") => slider(app, ui, &settings, ("depth_map", "percentile"), 0.0..=100.0, "setting-percentile"),
-                    _ => {}
-                }
-            }
-        }
-        if ui.small_button(tr("stack-reset")).clicked() {
-            app.shell.run("stack.reset", json!({}));
-        }
-    }
-    ui.add_space(8.0);
-    ui.separator();
-    let busy = app.shell.busy();
-    let ctx = ui.ctx().clone();
-    ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(!busy, egui::Button::new(tr("stack-align"))).clicked() {
-            app.perform(&ctx, Action::Align);
-        }
-        if ui.add_enabled(app.aligned(), egui::Button::new(tr("stack-preview"))).clicked() {
-            app.perform(&ctx, Action::Preview);
-        }
-        if ui.add_enabled(app.aligned() && !busy, egui::Button::new(tr("stack-run"))).clicked() {
-            app.perform(&ctx, Action::Stack);
-        }
-    });
-    if !app.aligned() {
-        ui.weak(tr("stack-align-first"));
-    }
-    if app.shell.preview.is_some() && ui.selectable_label(app.selection == Selection::Preview, tr("stack-show-preview")).clicked() {
-        app.select(Selection::Preview);
-    }
-    outputs(app, ui);
-}
-
-/// The outputs, to show one.
-fn outputs(app: &mut FloraStackApp, ui: &mut egui::Ui) {
-    if app.shell.outputs.is_empty() {
-        return;
-    }
-    ui.add_space(8.0);
-    ui.label(RichText::new(tr("outputs-heading")).strong());
-    for output in app.shell.outputs.clone() {
-        let selected = app.selection == Selection::Output(output.id);
-        if ui.selectable_label(selected, &output.name).on_hover_text(&output.method).clicked() {
-            app.select(Selection::Output(output.id));
-        }
-    }
-}
-
 fn export_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     ui.heading(tr("tab-export"));
     if app.shell.outputs.is_empty() {
         ui.label(tr("export-nothing"));
         return;
     }
-    outputs(app, ui);
+    crate::stack_tab::outputs(app, ui);
     ui.add_space(8.0);
     let (_, name, _) = EXPORT_FORMATS.iter().find(|(f, _, _)| *f == app.export_format).copied().unwrap_or(EXPORT_FORMATS[0]);
     egui::ComboBox::from_label(tr("export-format")).selected_text(name).show_ui(ui, |ui| {
@@ -461,20 +421,6 @@ fn export_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
 }
 
 impl FloraStackApp {
-    /// Whether the project's frames are aligned: what stacking and previews need.
-    pub fn aligned(&self) -> bool {
-        self.shell.engine().project().is_some_and(|p| p.alignment.is_some())
-    }
-
-    /// Asks for a preview of the current method, when the frames are aligned.
-    pub fn preview_if_aligned(&mut self) {
-        if self.aligned() {
-            let method = self.prefs.method.name();
-            self.shell.run("stack.preview", json!({ "method": method }));
-            self.follow_preview = true;
-        }
-    }
-
     /// Saves output `id` to a file the user picks, in the Export tab's format.
     pub fn export(&mut self, id: u64) {
         let Some((format, name, extension)) = EXPORT_FORMATS.iter().find(|(f, _, _)| *f == self.export_format).copied() else { return };

@@ -115,6 +115,19 @@ mod tests {
         keys
     }
 
+    /// The string literals that name a key by its prefix: the settings' labels and tooltips, which pass through helpers
+    /// on their way to `tr`.
+    fn prefixed(sources: &[String]) -> BTreeSet<String> {
+        const PREFIXES: [&str; 6] = ["tip-", "setting-", "align-", "framing-", "tone-", "decisions-"];
+        let key = |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        sources
+            .iter()
+            .flat_map(|text| text.split('"').skip(1).step_by(2))
+            .filter(|text| key(text) && PREFIXES.iter().any(|p| text.starts_with(p)))
+            .map(str::to_owned)
+            .collect()
+    }
+
     /// The message ids the English file defines.
     fn defined_keys() -> BTreeSet<String> {
         EN_US
@@ -137,6 +150,7 @@ mod tests {
         used.extend(crate::actions::Action::ALL.iter().map(|a| a.label_key().to_owned()));
         used.extend(crate::prefs::Tab::ALL.iter().map(|t| t.label_key().to_owned()));
         used.extend(crate::prefs::Method::ALL.iter().map(|m| m.label_key().to_owned()));
+        used.extend(prefixed(&sources));
         let missing: Vec<&String> = used.difference(&defined).collect();
         assert!(missing.is_empty(), "keys without a string in florastack.ftl: {missing:?}");
         // A key can also be named where it is chosen (a label's, a setting's) and passed to `tr` later.

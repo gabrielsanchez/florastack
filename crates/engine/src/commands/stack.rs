@@ -349,16 +349,16 @@ impl PyramidOverrides {
 
 /// The depth-map method's settings for one stack, on top of the project's: each one left out is the project's.
 #[derive(Debug, Default)]
-struct DepthOverrides {
-    radius: Option<f64>,
-    smoothing: Option<f64>,
-    threshold: Option<ThresholdMode>,
-    level: Option<f64>,
-    percentile: Option<f64>,
+pub(super) struct DepthOverrides {
+    pub(super) radius: Option<f64>,
+    pub(super) smoothing: Option<f64>,
+    pub(super) threshold: Option<ThresholdMode>,
+    pub(super) level: Option<f64>,
+    pub(super) percentile: Option<f64>,
 }
 
 impl DepthOverrides {
-    fn settings(&self, base: &DepthSettings) -> DepthSettings {
+    pub(super) fn settings(&self, base: &DepthSettings) -> DepthSettings {
         DepthSettings {
             radius: self.radius.unwrap_or(base.radius),
             smoothing: self.smoothing.unwrap_or(base.smoothing),
@@ -375,7 +375,7 @@ impl DepthOverrides {
             .find_map(|(name, given)| given.then_some(name))
     }
 
-    fn check(&self) -> Result<(), Invalid> {
+    pub(super) fn check(&self) -> Result<(), Invalid> {
         self.settings(&DepthSettings::default()).validate().map_err(|e| match e {
             StackError::Setting { name, .. } => Invalid::new(name, e.to_string()),
             other => Invalid::new("settings", other.to_string()),
@@ -1031,7 +1031,7 @@ impl FrameSource for OnCanvas<'_> {
 
 impl Loaded {
     /// The frame as florastack-stack's stackers read it.
-    fn source<R>(&self, f: impl FnOnce(&dyn FrameSource) -> R) -> R {
+    pub(super) fn source<R>(&self, f: impl FnOnce(&dyn FrameSource) -> R) -> R {
         match self {
             Loaded::Warp { image, transform, canvas, feather, gain } => {
                 f(&Gained { frame: Warped { frame: image, transform: *transform, canvas: *canvas, feather: *feather }, gain: *gain })
@@ -1097,7 +1097,7 @@ impl Feed for Warping<'_> {
 /// the first. While a frame is folded, the next one is read and decoded beside it (`rayon::join`), so that decoding
 /// overlaps stacking: two frames are in memory at most, the one folded and the next. With a single thread nothing
 /// would overlap, so each frame is read only once the one before is folded, and memory holds one frame.
-fn each<E>(
+pub(super) fn each<E>(
     feed: &mut dyn Feed,
     ctx: &dyn Monitor,
     units: &mut Units,

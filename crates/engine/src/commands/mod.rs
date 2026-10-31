@@ -17,6 +17,7 @@
 //!   weighted average, the pyramid method and the depth-map method into new outputs (`stack.average`,
 //!   `stack.pyramid`, `stack.depthMap`, jobs) and a quarter-scale preview of any of them (`stack.preview`, a preview
 //!   job);
+//! - [`threshold`]: the depth map's contrast threshold shown live before it is used (`stack.threshold`, a preview job);
 //! - [`slab`]: stacking in overlapping slabs by one method, then the slabs by another (`stack.slabbed`, a job);
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
@@ -50,6 +51,7 @@ pub mod project;
 pub mod slab;
 pub mod split;
 pub mod stack;
+pub mod threshold;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watch;
 
@@ -69,6 +71,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(align::specs());
     all.extend(defects::specs());
     all.extend(stack::specs());
+    all.extend(threshold::specs());
     all.extend(slab::specs());
     all.extend(preset::specs());
     all.extend(output::specs());

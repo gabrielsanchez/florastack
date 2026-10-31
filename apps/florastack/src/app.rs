@@ -60,7 +60,24 @@ pub enum Selection {
     Frame(u64),
     Output(u64),
     Preview,
+    /// The depth map's contrast threshold (`stack.threshold`'s picture), while its step is open.
+    Threshold,
+    /// Two outputs compared.
+    Compare(u64, u64),
 }
+
+/// The filmstrip playing: the frame shown, and when the next one is due while it plays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Film {
+    pub index: usize,
+    pub playing: bool,
+    next: Instant,
+}
+
+/// How fast the filmstrip plays.
+const FILM_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
+/// The longest side the filmstrip's frames are read at: the previews' own (at most 512 pixels).
+pub const FILM_SIDE: usize = 512;
 
 /// A dialog open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,13 +123,27 @@ pub struct FloraStackApp {
     pub palette: Palette,
     pub dialog: Option<Dialog>,
     pub banners: Vec<Banner>,
-    /// The thumbnails read, by file.
-    pub thumbnails: std::collections::HashMap<PathBuf, egui::TextureHandle>,
-    thumbnail_requests: std::collections::HashSet<PathBuf>,
+    /// The thumbnails read, by file and longest side: the frame list's, and the filmstrip's at [`FILM_SIDE`].
+    pub thumbnails: std::collections::HashMap<(PathBuf, usize), egui::TextureHandle>,
+    thumbnail_requests: std::collections::HashSet<(PathBuf, usize)>,
     view_loader: Loader,
+    /// The second image of a pair compared, and the first one while it waits for it.
+    pair_loader: Loader,
+    pair: [Option<Arc<florastack_engine::view::DisplayImage>>; 2],
     thumb_loader: Loader,
-    /// What the viewer loaded or is loading, and which selection it is for.
-    pub loading: Option<(PathBuf, Selection)>,
+    /// What the viewer is loading, which selection it is for, and whether the view stays where it is (an image
+    /// replacing one of its size, such as the next preview).
+    pub loading: Option<(PathBuf, Selection, bool)>,
+    /// The outputs picked for comparing, at most two.
+    pub compare: Vec<u64>,
+    /// The filmstrip, while it is shown instead of the viewer.
+    pub film: Option<Film>,
+    /// Whether the depth map's contrast-threshold step is open, before the stack.
+    pub threshold_step: bool,
+    /// The threshold picture shown last.
+    shown_threshold: Option<PathBuf>,
+    /// The method the previews show for "both": the one whose setting changed last.
+    pub preview_method: &'static str,
     autosave: Autosave,
     /// The project the frames were checked for.
     checked: Option<PathBuf>,
@@ -120,8 +151,6 @@ pub struct FloraStackApp {
     quitting: bool,
     /// The project path last seen, to notice openings.
     last_project: Option<PathBuf>,
-    /// The stacking settings (`stack.get`), with the shell's revision they were read at.
-    pub settings: Option<(u64, Value)>,
     /// The format the Export tab writes.
     pub export_format: Format,
     pub batch: BatchForm,
@@ -161,13 +190,19 @@ impl FloraStackApp {
             thumbnails: std::collections::HashMap::new(),
             thumbnail_requests: std::collections::HashSet::new(),
             view_loader: Loader::latest_only("viewer", ctx),
+            pair_loader: Loader::latest_only("compare", ctx),
+            pair: [None, None],
             thumb_loader: Loader::every("thumbnails", ctx),
             loading: None,
+            compare: Vec::new(),
+            film: None,
+            threshold_step: false,
+            shown_threshold: None,
+            preview_method: "pyramid",
             autosave: Autosave::new(Autosave::DEFAULT_INTERVAL),
             checked: None,
             quitting: false,
             last_project: None,
-            settings: None,
             export_format: Format::Tiff,
             batch: BatchForm::default(),
             follow_preview: false,
@@ -244,14 +279,8 @@ impl FloraStackApp {
             Action::Align => {
                 self.shell.run("align.run", json!({}));
             }
-            Action::Preview => {
-                let method = self.prefs.method.name();
-                self.shell.run("stack.preview", json!({ "method": method }));
-                self.follow_preview = true;
-            }
-            Action::Stack => {
-                self.shell.run(self.prefs.method.command(), json!({}));
-            }
+            Action::Preview => self.preview(),
+            Action::Stack => self.stack(),
             Action::CancelJobs => {
                 let running: Vec<u64> = self.shell.jobs.values().filter(|j| !j.state.is_finished()).map(|j| j.id.0).collect();
                 for job in running {
@@ -363,29 +392,117 @@ impl FloraStackApp {
 
     /// Selects what the viewer shows, and loads it.
     pub fn select(&mut self, selection: Selection) {
+        self.select_keeping(selection, false);
+    }
+
+    /// [`FloraStackApp::select`], keeping the view where it is when `keep` and the new image has the old one's size.
+    fn select_keeping(&mut self, selection: Selection, keep: bool) {
         if selection != Selection::Preview {
             self.follow_preview = false;
         }
+        self.film = None;
+        let output = |id: u64| self.shell.outputs.iter().find(|o| o.id == id).map(|o| o.image.clone());
         let path = match &selection {
             Selection::Frame(id) => self.shell.frames.iter().find(|f| f.id == *id).map(|f| f.file.clone()),
-            Selection::Output(id) => self.shell.outputs.iter().find(|o| o.id == *id).map(|o| o.image.clone()),
+            Selection::Output(id) | Selection::Compare(id, _) => output(*id),
             Selection::Preview => self.shell.preview.clone(),
+            Selection::Threshold => self.shell.threshold.as_ref().and_then(|t| t["path"].as_str()).map(PathBuf::from),
             Selection::Nothing => None,
         };
+        if let Selection::Compare(_, second) = selection {
+            self.pair = [None, None];
+            if let Some(path) = output(second) {
+                self.pair_loader.request(Request { path, max_side: Some(self.viewer.max_side()) });
+            }
+        }
         self.selection = selection.clone();
         if let Some(path) = path {
             self.view_loader.request(Request { path: path.clone(), max_side: Some(self.viewer.max_side()) });
-            self.loading = Some((path, selection));
-        } else {
+            self.loading = Some((path, selection, keep));
+        } else if selection != Selection::Threshold {
             self.viewer.clear();
             self.loading = None;
         }
     }
 
-    /// Selects the frame `step` places after (or before) the one selected.
+    /// Picks output `id` for comparing, or drops it when it was picked: two picked are compared, the older of two
+    /// making way for a third.
+    pub fn pick_compare(&mut self, id: u64) {
+        if let Some(i) = self.compare.iter().position(|&c| c == id) {
+            self.compare.remove(i);
+        } else {
+            self.compare.push(id);
+            if self.compare.len() > 2 {
+                self.compare.remove(0);
+            }
+        }
+        match self.compare[..] {
+            [a, b] => self.select(Selection::Compare(a, b)),
+            [a] if matches!(self.selection, Selection::Compare(..)) => self.select(Selection::Output(a)),
+            _ if matches!(self.selection, Selection::Compare(..)) => self.select(Selection::Nothing),
+            _ => {}
+        }
+    }
+
+    /// Asks for a quarter-scale preview of the method chosen.
+    pub fn preview(&mut self) {
+        let method = if self.prefs.method == crate::prefs::Method::Both { self.preview_method } else { self.prefs.method.name() };
+        self.shell.run("stack.preview", json!({ "method": method }));
+        self.follow_preview = true;
+    }
+
+    /// Stacks by the method chosen: a depth map asks for its contrast threshold first (the step stays open until
+    /// Continue, [`FloraStackApp::stack_now`]).
+    pub fn stack(&mut self) {
+        if self.prefs.method.uses_depth() && !self.threshold_step {
+            self.threshold_step = true;
+            self.shell.threshold = None;
+            self.shell.run("stack.threshold", json!({}));
+            self.select(Selection::Threshold);
+        } else {
+            self.stack_now();
+        }
+    }
+
+    /// Stacks by the method chosen, with the settings as they are, closing the threshold step.
+    pub fn stack_now(&mut self) {
+        self.close_threshold();
+        for command in self.prefs.method.commands() {
+            self.shell.run(command, json!({}));
+        }
+    }
+
+    /// Closes the threshold step, showing what was shown before it (the first frame).
+    pub fn close_threshold(&mut self) {
+        if self.threshold_step {
+            self.threshold_step = false;
+            if self.selection == Selection::Threshold {
+                self.select(Selection::Nothing);
+            }
+        }
+    }
+
+    /// Shows the filmstrip from frame `index`, playing or not.
+    pub fn film_at(&mut self, index: usize, playing: bool) {
+        let index = index.min(self.shell.frames.len().saturating_sub(1));
+        self.film = Some(Film { index, playing, next: Instant::now() + FILM_FRAME });
+    }
+
+    /// The filmstrip's frame `index`: its preview as shot or aligned, as the preferences say.
+    pub fn film_frame(&self, index: usize) -> Option<PathBuf> {
+        let frame = self.shell.frames.get(index)?;
+        if self.prefs.film_as_shot { frame.preview.clone() } else { frame.aligned_preview.clone().or_else(|| frame.preview.clone()) }
+    }
+
+    /// Selects the frame `step` places after (or before) the one selected, or the filmstrip's while it is shown.
     fn step_frame(&mut self, step: isize) {
         let frames = &self.shell.frames;
         if frames.is_empty() {
+            return;
+        }
+        if let Some(film) = &self.film {
+            let index = film.index.saturating_add_signed(step).min(frames.len() - 1);
+            self.film_at(index, false);
             return;
         }
         let at = match self.selection {
@@ -400,11 +517,16 @@ impl FloraStackApp {
         self.select(Selection::Frame(id));
     }
 
-    /// Wants a thumbnail of `path` read.
-    pub fn want_thumbnail(&mut self, path: &std::path::Path) {
-        if !self.thumbnails.contains_key(path) && self.thumbnail_requests.insert(path.to_path_buf()) {
-            self.thumb_loader.request(Request { path: path.to_path_buf(), max_side: Some(THUMBNAIL_SIDE) });
+    /// The thumbnail of `path` at `side` pixels at most, asking for it to be read when it isn't yet.
+    pub fn thumbnail(&mut self, path: &std::path::Path, side: usize) -> Option<egui::TextureHandle> {
+        let key = (path.to_path_buf(), side);
+        if let Some(texture) = self.thumbnails.get(&key) {
+            return Some(texture.clone());
         }
+        if self.thumbnail_requests.insert(key) {
+            self.thumb_loader.request(Request { path: path.to_path_buf(), max_side: Some(side) });
+        }
+        None
     }
 
     /// The engine's news, loaded images, autosave, and what follows a project's opening.
@@ -443,29 +565,67 @@ impl FloraStackApp {
         {
             self.select(Selection::Frame(first));
         }
-        for done in self.view_loader.done() {
-            if self.loading.as_ref().is_some_and(|(path, _)| *path == done.request.path) {
-                match done.image {
-                    Ok(image) => self.viewer.show(image),
-                    Err(e) => self.shell.notify(e, true),
-                }
-                self.loading = None;
-            }
-        }
-        for done in self.thumb_loader.done() {
-            if let Ok(image) = done.image {
-                let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.to_srgb8());
-                let texture = ctx.load_texture(done.request.path.display().to_string(), pixels, egui::TextureOptions::LINEAR);
-                self.thumbnails.insert(done.request.path.clone(), texture);
+        // Pictures that replace the one shown come first: a request for a picture that was replaced (and removed, as the
+        // threshold's are) is then no longer the one awaited.
+        // The threshold step's picture follows the slider.
+        let threshold = self.shell.threshold.as_ref().and_then(|t| t["path"].as_str()).map(PathBuf::from);
+        if threshold.is_some() && threshold != self.shown_threshold {
+            self.shown_threshold = threshold;
+            if self.threshold_step && self.selection == Selection::Threshold {
+                self.select_keeping(Selection::Threshold, true);
             }
         }
         // A preview that just came in replaces the one shown, or takes the viewer when one was asked for.
         if self.shell.preview.is_some() && self.shell.preview != self.shown_preview {
             self.shown_preview.clone_from(&self.shell.preview);
             if self.follow_preview || self.selection == Selection::Preview {
+                let keep = self.selection == Selection::Preview;
                 self.follow_preview = false;
-                self.select(Selection::Preview);
+                self.select_keeping(Selection::Preview, keep);
             }
+        }
+        for done in self.view_loader.done() {
+            let Some((path, selection, keep)) = self.loading.clone() else { continue };
+            if path != done.request.path {
+                continue;
+            }
+            self.loading = None;
+            match (done.image, selection) {
+                (Ok(image), Selection::Compare(..)) => self.pair[0] = Some(image),
+                (Ok(image), _) if keep => self.viewer.replace(image),
+                (Ok(image), _) => self.viewer.show(image),
+                (Err(e), _) => self.shell.notify(e, true),
+            }
+        }
+        for done in self.pair_loader.done() {
+            match done.image {
+                Ok(image) => self.pair[1] = Some(image),
+                Err(e) => self.shell.notify(e, true),
+            }
+        }
+        if let (Selection::Compare(a, b), [Some(_), Some(_)]) = (&self.selection, &self.pair) {
+            let name = |id: u64| self.shell.outputs.iter().find(|o| o.id == id).map(|o| o.name.clone()).unwrap_or_default();
+            let labels = [name(*a), name(*b)];
+            if let [Some(first), Some(second)] = std::mem::take(&mut self.pair) {
+                self.viewer.show_pair(first, second, labels);
+            }
+        }
+        for done in self.thumb_loader.done() {
+            if let Ok(image) = done.image {
+                let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.to_srgb8());
+                let texture = ctx.load_texture(done.request.path.display().to_string(), pixels, egui::TextureOptions::LINEAR);
+                self.thumbnails.insert((done.request.path.clone(), done.request.max_side.unwrap_or(0)), texture);
+            }
+        }
+        if let Some(film) = &mut self.film
+            && film.playing
+        {
+            let now = Instant::now();
+            if now >= film.next {
+                film.index = (film.index + 1) % self.shell.frames.len().max(1);
+                film.next = now + FILM_FRAME;
+            }
+            ctx.request_repaint_after(film.next.saturating_duration_since(now));
         }
         let writable = self.shell.engine().project().is_some();
         if writable && self.autosave.due(Instant::now(), self.shell.engine().is_dirty(), self.shell.busy()) {
@@ -510,6 +670,14 @@ impl FloraStackApp {
                     self.perform(ctx, action);
                 }
             }
+            // Escape leaves the filmstrip, then the threshold step.
+            if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                if self.film.is_some() {
+                    self.film = None;
+                } else {
+                    self.close_threshold();
+                }
+            }
         }
         let (dropped, pasted) = ctx.input(|i| {
             let dropped: Vec<PathBuf> = i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect();
@@ -545,6 +713,9 @@ impl FloraStackApp {
     /// Sets the stacking method, as the Stack tab picks it.
     pub fn set_method(&mut self, method: Method) {
         self.prefs.method = method;
+        if !method.uses_depth() {
+            self.close_threshold();
+        }
     }
 
     pub fn set_tab(&mut self, tab: Tab) {

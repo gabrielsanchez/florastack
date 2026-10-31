@@ -52,27 +52,35 @@ pub enum Method {
     #[default]
     Pyramid,
     DepthMap,
+    /// The pyramid and the depth map, two outputs.
+    Both,
 }
 
 impl Method {
-    pub const ALL: [Method; 3] = [Method::Pyramid, Method::DepthMap, Method::Average];
+    pub const ALL: [Method; 4] = [Method::Pyramid, Method::DepthMap, Method::Average, Method::Both];
 
-    /// The command that stacks by it.
-    pub fn command(self) -> &'static str {
+    /// The commands that stack by it, in order.
+    pub fn commands(self) -> &'static [&'static str] {
         match self {
-            Method::Average => "stack.average",
-            Method::Pyramid => "stack.pyramid",
-            Method::DepthMap => "stack.depthMap",
+            Method::Average => &["stack.average"],
+            Method::Pyramid => &["stack.pyramid"],
+            Method::DepthMap => &["stack.depthMap"],
+            Method::Both => &["stack.pyramid", "stack.depthMap"],
         }
     }
 
-    /// Its name, as `stack.preview` takes it.
+    /// Its name, as `stack.preview` and `batch.run` take it: the pyramid's for both, which batches don't offer.
     pub fn name(self) -> &'static str {
         match self {
             Method::Average => "average",
-            Method::Pyramid => "pyramid",
+            Method::Pyramid | Method::Both => "pyramid",
             Method::DepthMap => "depth-map",
         }
+    }
+
+    /// Whether it makes a depth map, which asks for its contrast threshold first.
+    pub fn uses_depth(self) -> bool {
+        matches!(self, Method::DepthMap | Method::Both)
     }
 
     pub fn label_key(self) -> &'static str {
@@ -80,8 +88,19 @@ impl Method {
             Method::Average => "method-average",
             Method::Pyramid => "method-pyramid",
             Method::DepthMap => "method-depth-map",
+            Method::Both => "method-both",
         }
     }
+}
+
+/// How two outputs are compared.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Compare {
+    /// One view, the first output left of a line the user drags and the second right of it.
+    #[default]
+    Split,
+    SideBySide,
 }
 
 /// The app's remembered settings. See the module documentation.
@@ -95,6 +114,9 @@ pub struct Prefs {
     pub last_folder: Option<PathBuf>,
     pub tab: Tab,
     pub method: Method,
+    /// Whether the filmstrip plays the frames as shot rather than aligned onto the output's canvas.
+    pub film_as_shot: bool,
+    pub compare: Compare,
 }
 
 impl Prefs {
