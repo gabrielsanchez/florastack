@@ -46,6 +46,8 @@ action-previous-frame = Previous frame
 action-remove-frame = Remove frame
 action-toggle-theme = Switch between dark and light
 action-shortcuts = Keyboard shortcuts
+action-brush-smaller = Smaller brush
+action-brush-larger = Larger brush
 
 ## Workflow tabs
 
@@ -241,7 +243,56 @@ quality-tip = Match score { $score } · shift { $x }, { $y } px · scale { $scal
 
 ## Retouch tab
 
-retouch-later = Retouching brushes arrive in a later version.
+retouch-nothing = Stack the frames first: retouching paints onto an output.
+retouch-output = Output
+retouch-pick-output = Pick an output
+retouch-opening = Opening the output for retouching…
+retouch-hint = Pick an output to retouch in the panel on the right.
+retouch-layers = Layers
+retouch-no-layers = No layers yet: the first stroke makes one.
+retouch-layer = { $name } ({ $strokes ->
+    [one] one stroke
+   *[other] { $strokes } strokes
+})
+tip-layer-visible = Show or hide this layer's strokes.
+tip-layer-active = Strokes go into this layer.
+retouch-add-layer = Add layer
+retouch-remove-layer = Remove layer
+retouch-source = Source
+retouch-source-frame = Frame: { $name }
+retouch-source-output = Output: { $name }
+retouch-source-none = No source yet: pick a frame or an output, or Ctrl+click the output.
+retouch-source-loading = Loading the source…
+retouch-frame = Frame
+retouch-other-output = Other output
+retouch-pick = Pick…
+retouch-follow = Follow the sharpest frame
+tip-follow = While the pointer rests on a point of the output, the source becomes the frame where that point is sharpest.
+retouch-jump-hint = Ctrl+click a point of the output to use the frame where it is sharpest.
+retouch-map = Map sharpest frames
+tip-map = Measures the frames' focus once, so that clicking a point can jump to the frame where it is sharpest.
+retouch-mapping = Mapping the sharpest frames…
+retouch-brush = Brush
+brush-details = Details
+brush-pixels = Pixels
+brush-darken = Darken
+brush-lighten = Lighten
+brush-eraser = Eraser
+tip-brush-details = Paints the source's detail, its brightness and color matched to the output so that strokes blend in, with a hard edge where there is fine detail. The brush for most retouching.
+tip-brush-pixels = Paints the source exactly as it is, with the hardness you set.
+tip-brush-darken = Paints the source only where it is darker than the result: dark bristles or hairs over a light background.
+tip-brush-lighten = Paints the source only where it is lighter than the result: light hairs over a dark background.
+tip-brush-eraser = Brings back the output as it was stacked.
+brush-size = Size
+tip-brush-size = The brush's diameter, in pixels of the output. [ and ] make it smaller and larger.
+brush-hardness = Hardness
+tip-brush-hardness = How much of the brush paints fully before its edge fades: low for a soft edge that blends, high for a crisp one.
+brush-opacity = Opacity
+tip-brush-opacity = How strongly a stroke paints.
+brush-pressure = Use pen pressure
+tip-brush-pressure = A pen's pressure makes the brush smaller, where the system reports it (Windows).
+retouch-boost = Brightness boost
+tip-boost = Shows both images brighter, to work in dark regions. It changes only what you see, not the output.
 
 ## Export tab
 

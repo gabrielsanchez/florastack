@@ -865,14 +865,42 @@ fn gain(g: f64) -> f32 {
 
 impl StackPlan {
     pub(super) fn new(session: &Session, command: &'static str, settings: Chosen, quality: Quality) -> Result<StackPlan, CommandError> {
+        let framing = align_settings(session.project()?)?.framing;
+        StackPlan::build(session, command, settings, quality, None, framing)
+    }
+
+    /// The plan for `frames` (an output's, enabled or not) on the canvas `framing` gives, rather than the enabled
+    /// frames and the framing the settings choose.
+    pub(crate) fn of_frames(
+        session: &Session,
+        command: &'static str,
+        settings: Chosen,
+        quality: Quality,
+        frames: &[FrameId],
+        framing: Framing,
+    ) -> Result<StackPlan, CommandError> {
+        StackPlan::build(session, command, settings, quality, Some(frames), framing)
+    }
+
+    fn build(
+        session: &Session,
+        command: &'static str,
+        settings: Chosen,
+        quality: Quality,
+        frames: Option<&[FrameId]>,
+        framing: Framing,
+    ) -> Result<StackPlan, CommandError> {
         let project = session.project()?;
         settings.validate()?;
         let Some(stored) = stored_alignment(project)? else {
             return Err(session.unavailable("the stack isn't aligned: align it first with `align.run`"));
         };
-        let framing = align_settings(project)?.framing;
         let canvas = stored.canvas(framing)?;
-        let reader = Plan::new(session, command, 1)?.with_quality(quality);
+        let reader = match frames {
+            Some(ids) => Plan::with_frames(session, command, ids)?,
+            None => Plan::new(session, command, 1)?,
+        }
+        .with_quality(quality);
         let enabled = reader.ids();
         let missing: Vec<String> = enabled.iter().filter(|id| !stored.frames.iter().any(|f| f.frame == **id)).map(ToString::to_string).collect();
         if !missing.is_empty() {

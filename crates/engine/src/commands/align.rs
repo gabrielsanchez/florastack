@@ -220,13 +220,25 @@ pub(crate) struct Plan {
 
 impl Plan {
     pub(crate) fn new(session: &Session, command: &'static str, minimum: usize) -> Result<Plan, CommandError> {
-        let (project, folder) = (session.project()?, session.folder()?);
+        let project = session.project()?;
         let frames: Vec<&Frame> = project.frames.iter().filter(|f| f.enabled).collect();
         if frames.len() < minimum {
             let reason =
                 if minimum > 1 { format!("it needs at least {minimum} enabled frames") } else { "the project has no enabled frames".to_owned() };
             return Err(session.unavailable(format!("{reason}: add frames with `project.addFrames`, or enable some with `project.setFramesEnabled`")));
         }
+        Plan::of_frames(session, command, &frames)
+    }
+
+    /// A plan that reads `ids`, enabled or not, in the project's order (what retouching paints from).
+    pub(crate) fn with_frames(session: &Session, command: &'static str, ids: &[FrameId]) -> Result<Plan, CommandError> {
+        let project = session.project()?;
+        let frames: Vec<&Frame> = project.frames.iter().filter(|f| ids.contains(&f.id())).collect();
+        Plan::of_frames(session, command, &frames)
+    }
+
+    fn of_frames(session: &Session, command: &'static str, frames: &[&Frame]) -> Result<Plan, CommandError> {
+        let (project, folder) = (session.project()?, session.folder()?);
         let settings = align_settings(project).map_err(|e| session.invalid("align", e.to_string()))?;
         let develop_settings = crate::project::develop_settings(project)?;
         let options = ReadOptions::default();

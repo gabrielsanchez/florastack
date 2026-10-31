@@ -30,7 +30,7 @@ const MIN_ZOOM: f32 = 1.0 / 64.0;
 const MAX_ZOOM: f32 = 64.0;
 
 /// The zoom that fits an image of `image` pixels into `view` device pixels.
-fn fit_zoom(view: Vec2, image: Vec2) -> f32 {
+pub(crate) fn fit_zoom(view: Vec2, image: Vec2) -> f32 {
     if image.x <= 0.0 || image.y <= 0.0 || view.x <= 0.0 || view.y <= 0.0 {
         return 1.0;
     }
@@ -39,17 +39,51 @@ fn fit_zoom(view: Vec2, image: Vec2) -> f32 {
 
 /// The image point at the view's center after zooming from `zoom` to `next` about a point `anchor` device pixels
 /// from the view's center, which stays where it is on screen.
-fn zoomed_center(center: Vec2, anchor: Vec2, zoom: f32, next: f32) -> Vec2 {
+pub(crate) fn zoomed_center(center: Vec2, anchor: Vec2, zoom: f32, next: f32) -> Vec2 {
     let point = center + anchor / zoom;
     point - anchor / next
 }
 
-/// An image shown.
-struct Shown {
+/// An image a view draws: its id, by which its texture on the GPU is kept, its pixels, the reduced 8-bit copy drawn
+/// without a GPU renderer, and the regions changed since it was last drawn, for the GPU's texture.
+pub(crate) struct Picture {
     id: u64,
     image: Arc<DisplayImage>,
-    /// The reduced 8-bit copy, without a GPU renderer.
     texture: Option<egui::TextureHandle>,
+    updates: Vec<([usize; 2], Arc<DisplayImage>)>,
+}
+
+/// The next picture's id: unique in the process, so that every view's textures on the GPU stay apart.
+static NEXT_PICTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+impl Picture {
+    pub(crate) fn new(image: Arc<DisplayImage>) -> Picture {
+        Picture { id: NEXT_PICTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), image, texture: None, updates: Vec::new() }
+    }
+
+    /// Its size, in its pixels.
+    pub(crate) fn size(&self) -> Vec2 {
+        Vec2::new(self.image.width as f32, self.image.height as f32)
+    }
+
+    /// Puts `region` at `at` (its top left corner, in the picture's pixels): into the pixels kept, the 8-bit copy and,
+    /// when it is next drawn, the GPU's texture.
+    pub(crate) fn update(&mut self, at: [usize; 2], region: Arc<DisplayImage>) {
+        let image = Arc::make_mut(&mut self.image);
+        let (w, h) = (image.width, image.height);
+        let width = region.width.min(w.saturating_sub(at[0]));
+        for j in 0..region.height.min(h.saturating_sub(at[1])) {
+            let (src, dst) = (j * region.width * 4, ((at[1] + j) * w + at[0]) * 4);
+            if let (Some(from), Some(to)) = (region.rgba.get(src..src + width * 4), image.rgba.get_mut(dst..dst + width * 4)) {
+                to.copy_from_slice(from);
+            }
+        }
+        if let Some(texture) = &mut self.texture {
+            let pixels = egui::ColorImage::from_rgba_unmultiplied([region.width, region.height], &region.to_srgb8());
+            texture.set_partial(at, pixels, egui::TextureOptions::LINEAR);
+        }
+        self.updates.push((at, region));
+    }
 }
 
 /// How far from the split line, in points, a drag moves the line rather than the image.
@@ -57,9 +91,9 @@ const SPLIT_GRAB: f32 = 8.0;
 
 /// See the module documentation.
 pub struct Viewer {
-    shown: Option<Shown>,
+    shown: Option<Picture>,
     /// The second image when two are compared.
-    other: Option<Shown>,
+    other: Option<Picture>,
     /// How two images are compared, the split line's place (a share of the view's width) and whether it is being
     /// dragged.
     compare: Compare,
@@ -67,7 +101,6 @@ pub struct Viewer {
     dragging_split: bool,
     /// The two images' names, shown in the view's corners when comparing.
     labels: [String; 2],
-    next_id: u64,
     /// Device pixels per image pixel, now and where it is going.
     zoom: f32,
     target: f32,
@@ -90,7 +123,6 @@ impl Viewer {
             split: 0.5,
             dragging_split: false,
             labels: [String::new(), String::new()],
-            next_id: 0,
             zoom: 1.0,
             target: 1.0,
             center: Vec2::ZERO,
@@ -100,19 +132,19 @@ impl Viewer {
         }
     }
 
+    /// Whether images are drawn on the GPU (the window's renderer is wgpu and the viewer's shaders compiled there).
+    pub fn gpu(&self) -> bool {
+        self.gpu.is_some()
+    }
+
     /// The longest side to load images at: the device's largest texture, or the fallback's size.
     pub fn max_side(&self) -> usize {
         self.gpu.map_or(FALLBACK_SIDE, |s| s as usize)
     }
 
-    fn shown(&mut self, image: Arc<DisplayImage>) -> Shown {
-        self.next_id += 1;
-        Shown { id: self.next_id, image, texture: None }
-    }
-
     /// Shows `image`, fitted.
     pub fn show(&mut self, image: Arc<DisplayImage>) {
-        self.shown = Some(self.shown(image));
+        self.shown = Some(Picture::new(image));
         self.other = None;
         self.fit = true;
     }
@@ -121,7 +153,7 @@ impl Viewer {
     /// preview of the same stack), fitted otherwise.
     pub fn replace(&mut self, image: Arc<DisplayImage>) {
         let same = self.shown.as_ref().is_some_and(|s| (s.image.width, s.image.height) == (image.width, image.height));
-        self.shown = Some(self.shown(image));
+        self.shown = Some(Picture::new(image));
         self.other = None;
         self.fit |= !same;
     }
@@ -130,8 +162,8 @@ impl Viewer {
     /// the image shown before (the same stack's other output), and fits otherwise.
     pub fn show_pair(&mut self, first: Arc<DisplayImage>, second: Arc<DisplayImage>, labels: [String; 2]) {
         let same = self.shown.as_ref().is_some_and(|s| (s.image.width, s.image.height) == (first.width, first.height));
-        self.shown = Some(self.shown(first));
-        self.other = Some(self.shown(second));
+        self.shown = Some(Picture::new(first));
+        self.other = Some(Picture::new(second));
         self.labels = labels;
         self.fit |= !same;
     }
@@ -261,7 +293,7 @@ impl Viewer {
             [(self.shown.as_mut(), view, view), (self.other.as_mut(), second_view, second_clip)].into_iter().enumerate()
         {
             let Some(shown) = shown else { continue };
-            draw(ui, &ctx, gpu, slot, shown, area, clip, zoom, center);
+            draw(ui, &ctx, gpu, slot, shown, (area, clip), zoom, center, 1.0);
         }
         if self.other.is_some() {
             let painter = ui.painter().with_clip_rect(rect);
@@ -283,16 +315,28 @@ impl Viewer {
     }
 }
 
-/// Draws `shown` in `area` (whose center shows image point `center` at `zoom`), clipped to `clip`: on the GPU through
-/// uniform `slot`, or through egui with a reduced copy.
+/// Draws `shown` in `area` (whose center shows image point `center` at `zoom`), clipped to `clip`, brightened `boost`
+/// times: on the GPU through uniform `slot`, or through egui with a reduced copy, which isn't brightened.
 #[allow(clippy::too_many_arguments)] // Where and how one image is drawn.
-fn draw(ui: &egui::Ui, ctx: &egui::Context, gpu: bool, slot: usize, shown: &mut Shown, area: Rect, clip: Rect, zoom: f32, center: Vec2) {
+pub(crate) fn draw(
+    ui: &egui::Ui,
+    ctx: &egui::Context,
+    gpu: bool,
+    slot: usize,
+    shown: &mut Picture,
+    (area, clip): (Rect, Rect),
+    zoom: f32,
+    center: Vec2,
+    boost: f32,
+) {
     let painter = ui.painter().with_clip_rect(clip.intersect(ui.clip_rect()));
     if gpu {
-        let paint = Paint { slot, id: shown.id, image: Arc::clone(&shown.image), rect: area, zoom, center };
+        let updates = std::mem::take(&mut shown.updates);
+        let paint = Paint { slot, id: shown.id, image: Arc::clone(&shown.image), updates, rect: area, zoom, center, boost };
         painter.add(egui_wgpu::Callback::new_paint_callback(area, paint));
         return;
     }
+    shown.updates.clear();
     let image = Arc::clone(&shown.image);
     let texture = shown.texture.get_or_insert_with(|| {
         let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.to_srgb8());
@@ -315,7 +359,7 @@ pub struct GpuViewer {
     /// Whether the shader applies sRGB's curve (the surface doesn't).
     encode: bool,
     /// The images uploaded, by their ids, the most recently used last.
-    textures: Vec<(u64, wgpu::TextureView)>,
+    textures: Vec<(u64, wgpu::Texture, wgpu::TextureView)>,
     /// One for each image drawn at once (two when comparing): its view's uniform, and its bind group with the image
     /// bound now.
     slots: Vec<Slot>,
@@ -419,8 +463,11 @@ impl GpuViewer {
         if self.slots.get(slot).is_none_or(|s| s.bound.as_ref().is_some_and(|(bound, _)| *bound == id)) {
             return;
         }
-        let view = match self.textures.iter().position(|(t, _)| *t == id) {
-            Some(i) => self.textures.remove(i).1,
+        let (texture, view) = match self.textures.iter().position(|(t, _, _)| *t == id) {
+            Some(i) => {
+                let (_, texture, view) = self.textures.remove(i);
+                (texture, view)
+            }
             None => self.upload(device, queue, encoder, image),
         };
         let Some(s) = self.slots.get(slot) else { return };
@@ -435,7 +482,7 @@ impl GpuViewer {
             ],
         });
         // The most recently used last; the oldest beyond those kept are let go (a bind group holds its own).
-        self.textures.push((id, view));
+        self.textures.push((id, texture, view));
         if self.textures.len() > KEPT_TEXTURES {
             self.textures.remove(0);
         }
@@ -444,8 +491,49 @@ impl GpuViewer {
         }
     }
 
+    /// Writes `updates` (regions at their top left corners) into image `id`'s texture, if it is uploaded, and makes
+    /// its levels again.
+    fn update(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        id: u64,
+        updates: &[([usize; 2], Arc<DisplayImage>)],
+    ) {
+        let Some((_, texture, _)) = self.textures.iter().find(|(t, _, _)| *t == id) else { return };
+        let size = texture.size();
+        let mut written = false;
+        for (at, region) in updates {
+            let (Ok(x), Ok(y), Ok(w), Ok(h)) =
+                (u32::try_from(at[0]), u32::try_from(at[1]), u32::try_from(region.width), u32::try_from(region.height))
+            else {
+                continue;
+            };
+            if w == 0 || h == 0 || x + w > size.width || y + h > size.height {
+                continue;
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+                bytemuck::cast_slice(&region.rgba),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            written = true;
+        }
+        if written {
+            self.levels(device, encoder, texture);
+        }
+    }
+
     /// Uploads `image` as a mipmapped texture, its levels made by `encoder`.
-    fn upload(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, image: &DisplayImage) -> wgpu::TextureView {
+    fn upload(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        image: &DisplayImage,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let (w, h) = (u32::try_from(image.width).unwrap_or(1).max(1), u32::try_from(image.height).unwrap_or(1).max(1));
         let levels = 32 - w.max(h).leading_zeros();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -464,6 +552,14 @@ impl GpuViewer {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
+        self.levels(device, encoder, &texture);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Makes `texture`'s mip levels from its first, each level the 2 x 2 averages of the one above.
+    fn levels(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+        let levels = texture.mip_level_count();
         let level_view =
             |level| texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() });
         for level in 1..levels {
@@ -493,7 +589,6 @@ impl GpuViewer {
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
         }
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 }
 
@@ -502,6 +597,10 @@ struct Paint {
     slot: usize,
     id: u64,
     image: Arc<DisplayImage>,
+    /// Regions of the image changed since it was last drawn, at their top left corners.
+    updates: Vec<([usize; 2], Arc<DisplayImage>)>,
+    /// How many times brighter it is shown.
+    boost: f32,
     /// The view, in points.
     rect: Rect,
     zoom: f32,
@@ -518,6 +617,7 @@ impl egui_wgpu::CallbackTrait for Paint {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(viewer) = resources.get_mut::<GpuViewer>() else { return Vec::new() };
+        viewer.update(device, queue, encoder, self.id, &self.updates);
         viewer.bind(device, queue, encoder, self.slot, self.id, &self.image);
         let Some(slot) = viewer.slots.get(self.slot) else { return Vec::new() };
         // Clip space from image pixels: the view's center shows `center`, `zoom` device pixels to an image pixel.
@@ -529,7 +629,7 @@ impl egui_wgpu::CallbackTrait for Paint {
         let nearest = if self.zoom >= 1.0 { 1.0 } else { 0.0 };
         let encode = if viewer.encode { 1.0 } else { 0.0 };
         let view: [f32; 12] =
-            [sx, sy, ox, oy, self.image.width as f32, self.image.height as f32, origin.x, origin.y, (8.0 * ppp).round(), encode, nearest, 0.0];
+            [sx, sy, ox, oy, self.image.width as f32, self.image.height as f32, origin.x, origin.y, (8.0 * ppp).round(), encode, nearest, self.boost];
         queue.write_buffer(&slot.uniform, 0, bytemuck::cast_slice(&view));
         Vec::new()
     }
@@ -583,7 +683,7 @@ mod tests {
     /// on `center`, and reads the target back.
     fn draw(device: &wgpu::Device, queue: &wgpu::Queue, image: DisplayImage, size: u32, zoom: f32, center: Vec2) -> Vec<u8> {
         let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(size as f32));
-        render(device, queue, &[(Paint { slot: 0, id: 1, image: Arc::new(image), rect, zoom, center }, None)], size)
+        render(device, queue, &[(Paint { slot: 0, id: 1, image: Arc::new(image), updates: Vec::new(), boost: 1.0, rect, zoom, center }, None)], size)
     }
 
     /// Draws `paints` in order into a `size` x `size` `Rgba8Unorm` target, each in the viewport of its rect and clipped
@@ -712,6 +812,29 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_updated_in_part_and_brightened_shows_it() {
+        let Ok((device, queue)) = device() else {
+            let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
+            assert!(!required, "FLORASTACK_REQUIRE_GPU is set, but no GPU adapter is usable");
+            florastack_testkit::skip!(Gpu, "no GPU adapter is usable");
+            return;
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
+        let mut picture = Picture::new(flat(4, 4, 0.214));
+        picture.update([2, 0], flat(2, 4, 1.0));
+        assert_eq!(picture.image.rgba[(4 + 3) * 4], half(1.0), "the pixels kept are updated: row 1, column 3");
+        // The texture is uploaded from the updated pixels, then updated again in part: white on the right half.
+        let updates = std::mem::take(&mut picture.updates);
+        let paint =
+            Paint { slot: 0, id: picture.id, image: Arc::clone(&picture.image), updates, boost: 2.0, rect, zoom: 16.0, center: Vec2::splat(2.0) };
+        let shown = render(&device, &queue, &[(paint, None)], 64);
+        let at = |x: usize, y: usize| shown[(y * 64 + x) * 4];
+        assert_eq!(at(48, 32), 255);
+        // Linear 0.214, twice as bright, through sRGB's curve.
+        assert!(at(16, 32).abs_diff(175) <= 2, "{}", at(16, 32));
+    }
+
+    #[test]
     fn two_images_compared_each_keep_their_own_view() {
         let Ok((device, queue)) = device() else {
             let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
@@ -722,8 +845,8 @@ mod tests {
         // Split: gray on the whole view, then white right of the line through slot 1, at another zoom and center;
         // both prepared before either is painted, as in a frame.
         let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
-        let first = Paint { slot: 0, id: 1, image: flat(4, 4, 0.214), rect, zoom: 16.0, center: Vec2::splat(2.0) };
-        let second = Paint { slot: 1, id: 2, image: flat(2, 2, 1.0), rect, zoom: 32.0, center: Vec2::splat(1.0) };
+        let first = Paint { slot: 0, id: 1, image: flat(4, 4, 0.214), updates: Vec::new(), boost: 1.0, rect, zoom: 16.0, center: Vec2::splat(2.0) };
+        let second = Paint { slot: 1, id: 2, image: flat(2, 2, 1.0), updates: Vec::new(), boost: 1.0, rect, zoom: 32.0, center: Vec2::splat(1.0) };
         let shown = render(&device, &queue, &[(first, None), (second, Some([40, 0, 24, 64]))], 64);
         let at = |x: usize, y: usize| shown[(y * 64 + x) * 4];
         assert!(at(10, 32).abs_diff(128) <= 2 && at(38, 10).abs_diff(128) <= 2, "the first image, left of the line: {}", at(10, 32));
@@ -731,8 +854,10 @@ mod tests {
         // Side by side: each image in its half of the target, with the same zoom.
         let left = Rect::from_min_size(Pos2::ZERO, Vec2::new(32.0, 64.0));
         let right = Rect::from_min_size(Pos2::new(32.0, 0.0), Vec2::new(32.0, 64.0));
-        let first = Paint { slot: 0, id: 3, image: flat(2, 4, 0.214), rect: left, zoom: 16.0, center: Vec2::new(1.0, 2.0) };
-        let second = Paint { slot: 1, id: 4, image: flat(2, 4, 1.0), rect: right, zoom: 16.0, center: Vec2::new(1.0, 2.0) };
+        let first =
+            Paint { slot: 0, id: 3, image: flat(2, 4, 0.214), updates: Vec::new(), boost: 1.0, rect: left, zoom: 16.0, center: Vec2::new(1.0, 2.0) };
+        let second =
+            Paint { slot: 1, id: 4, image: flat(2, 4, 1.0), updates: Vec::new(), boost: 1.0, rect: right, zoom: 16.0, center: Vec2::new(1.0, 2.0) };
         let shown = render(&device, &queue, &[(first, None), (second, None)], 64);
         let at = |x: usize, y: usize| shown[(y * 64 + x) * 4];
         assert!(at(1, 32).abs_diff(128) <= 2 && at(30, 32).abs_diff(128) <= 2, "the first image fills the left half: {}", at(30, 32));

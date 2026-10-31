@@ -14,6 +14,7 @@ pub mod loader;
 pub mod palette;
 pub mod panels;
 pub mod prefs;
+pub mod retouch_tab;
 pub mod shell;
 pub mod stack_tab;
 pub mod viewer;

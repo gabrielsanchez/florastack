@@ -16,6 +16,7 @@ struct Case {
     params: String,
 }
 
+#[allow(clippy::too_many_lines)] // One case per undoable command.
 fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
     let [a, b, c] = [fixture.frames[0].get(), fixture.frames[1].get(), fixture.frames[2].get()];
     let (output, layer) = (fixture.output.get(), fixture.layer.get());
@@ -107,6 +108,16 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
         },
         Case { name: "output.rename", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Renamed" }}"#) },
         Case { name: "output.remove", setup: none(), params: format!(r#"{{ "output": {output} }}"#) },
+        Case {
+            name: "retouch.stroke",
+            setup: vec![("retouch.open", format!(r#"{{ "output": {output} }}"#))],
+            params: format!(
+                r#"{{ "layer": {layer}, "stroke": {{ "brush": "eraser", "size": 4, "hardness": 0.5, "opacity": 1, "samples": [[3, 3, 1], [8, 5, 0.5]] }} }}"#
+            ),
+        },
+        Case { name: "retouch.addLayer", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Antennae" }}"#) },
+        Case { name: "retouch.removeLayer", setup: none(), params: format!(r#"{{ "output": {output}, "layer": {layer} }}"#) },
+        Case { name: "retouch.setLayerVisible", setup: none(), params: format!(r#"{{ "output": {output}, "layer": {layer}, "visible": false }}"#) },
         Case {
             name: "test.stroke",
             setup: none(),

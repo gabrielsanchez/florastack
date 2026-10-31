@@ -72,6 +72,8 @@ pub struct Shell {
     pub stack_settings: Value,
     pub align_settings: Value,
     pub alignment: Value,
+    /// What changed in the retouch session since the Retouch tab last drew it.
+    pub retouch: Option<florastack_engine::retouch::RetouchChanges>,
     /// Projects opened or saved elsewhere since last asked, for the recent projects.
     pub opened: Vec<PathBuf>,
     /// The engine's compute device (`compute.info`), once asked.
@@ -102,6 +104,7 @@ impl Shell {
             made: None,
             stacks_found: None,
             threshold: None,
+            retouch: None,
             stack_settings: Value::Null,
             align_settings: Value::Null,
             alignment: Value::Null,
@@ -128,6 +131,19 @@ impl Shell {
         self.notify(e.info().message, true);
     }
 
+    /// Folds what changed in the retouch session into [`Shell::retouch`].
+    fn take_retouch(&mut self) {
+        if let Some(new) = self.engine.take_retouch_changes() {
+            let old = self.retouch.take().unwrap_or_default();
+            self.retouch = Some(florastack_engine::retouch::RetouchChanges {
+                region: florastack_engine::retouch::union(old.region, new.region),
+                source: old.source || new.source,
+                opened: old.opened || new.opened,
+                closed: (old.closed && !new.opened) || new.closed,
+            });
+        }
+    }
+
     /// Dispatches `name` with `params`: an instant command's or a query's result, or `None` for a job (which the top
     /// bar then follows) or a failure (which is shown).
     pub fn run(&mut self, name: &str, params: Value) -> Option<Value> {
@@ -136,7 +152,9 @@ impl Shell {
 
     /// [`Shell::run`] with calls of the same `coalesce` key, one after another, as one undo step (a slider's drag).
     pub fn run_with(&mut self, name: &str, params: Value, coalesce: Option<String>) -> Option<Value> {
-        match self.engine.dispatch_with(name, params, DispatchOptions { coalesce }) {
+        let done = self.engine.dispatch_with(name, params, DispatchOptions { coalesce });
+        self.take_retouch();
+        match done {
             Ok(Dispatched::Done(value)) => Some(value),
             Ok(Dispatched::Started(job)) => {
                 if let Some(info) = self.engine.job(job) {
@@ -173,6 +191,7 @@ impl Shell {
     /// changed. Returns whether anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.engine.poll() > 0;
+        self.take_retouch();
         while let Ok(event) = self.events.try_recv() {
             changed = true;
             match event {

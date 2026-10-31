@@ -109,6 +109,24 @@ pub enum Edit {
         output: OutputId,
         layer: LayerId,
     },
+    /// Shows or hides a retouch layer.
+    SetLayerVisible {
+        output: OutputId,
+        layer: LayerId,
+        visible: bool,
+    },
+    /// Sets one of an output's maps (`Some`), such as its retouched result cached, or removes it (`None`).
+    SetOutputMap {
+        output: OutputId,
+        name: MapName,
+        map: Option<CacheRef>,
+    },
+    /// Sets a frame's image developed and warped onto an output's canvas, as retouching reads it (`Some`), or removes
+    /// it (`None`).
+    SetAlignedImage {
+        frame: FrameId,
+        aligned: Option<CacheRef>,
+    },
     /// Several edits, made in order as one.
     Batch(Vec<Edit>),
 }
@@ -270,13 +288,18 @@ impl Edit {
             Edit::SetDevelop(_) => Aspects::DEVELOP,
             // The stack's maps (the defect mask) are what alignment reads its frames with.
             Edit::SetAlignment { .. } | Edit::SetProjectMap { .. } => Aspects::ALIGN,
-            Edit::SetPreviews { .. } => Aspects::PREVIEWS,
+            // A frame's warped image is cached, as its previews are.
+            Edit::SetPreviews { .. } | Edit::SetAlignedImage { .. } => Aspects::PREVIEWS,
             // An output's layers go with it.
             Edit::AddOutput(_) | Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
-            Edit::RenameOutput { .. } => Aspects::OUTPUTS,
-            Edit::AddLayer { .. } | Edit::InsertLayer { .. } | Edit::RemoveLayer { .. } | Edit::PushStroke { .. } | Edit::PopStroke { .. } => {
-                Aspects::RETOUCH
-            }
+            // An output's maps (its retouched result cached) are part of it.
+            Edit::RenameOutput { .. } | Edit::SetOutputMap { .. } => Aspects::OUTPUTS,
+            Edit::AddLayer { .. }
+            | Edit::InsertLayer { .. }
+            | Edit::RemoveLayer { .. }
+            | Edit::PushStroke { .. }
+            | Edit::PopStroke { .. }
+            | Edit::SetLayerVisible { .. } => Aspects::RETOUCH,
             Edit::Batch(edits) => edits.iter().fold(Aspects::NONE, |a, e| a.union(e.aspects())),
         }
     }
@@ -291,9 +314,12 @@ impl Edit {
             }
             (Edit::SetPreferences { group: a, .. }, Edit::SetPreferences { group: b, .. }) => a == b,
             (Edit::SetFrameEnabled { frame: a, .. }, Edit::SetFrameEnabled { frame: b, .. })
-            | (Edit::SetPreviews { frame: a, .. }, Edit::SetPreviews { frame: b, .. }) => a == b,
+            | (Edit::SetPreviews { frame: a, .. }, Edit::SetPreviews { frame: b, .. })
+            | (Edit::SetAlignedImage { frame: a, .. }, Edit::SetAlignedImage { frame: b, .. }) => a == b,
             (Edit::RenameOutput { output: a, .. }, Edit::RenameOutput { output: b, .. }) => a == b,
             (Edit::SetProjectMap { name: a, .. }, Edit::SetProjectMap { name: b, .. }) => a == b,
+            (Edit::SetLayerVisible { output: a, layer: l, .. }, Edit::SetLayerVisible { output: b, layer: m, .. }) => a == b && l == m,
+            (Edit::SetOutputMap { output: a, name: n, .. }, Edit::SetOutputMap { output: b, name: m, .. }) => a == b && n == m,
             _ => false,
         }
     }
@@ -380,6 +406,22 @@ impl Project {
             Edit::PopStroke { output, layer } => {
                 let stroke = self.layer_mut(output, layer)?.strokes.pop().ok_or(EditError::NoStroke { output, layer })?;
                 Ok(Edit::PushStroke { output, layer, stroke })
+            }
+            Edit::SetLayerVisible { output, layer, visible } => {
+                let l = self.layer_mut(output, layer)?;
+                Ok(Edit::SetLayerVisible { output, layer, visible: std::mem::replace(&mut l.visible, visible) })
+            }
+            Edit::SetOutputMap { output, name, map } => {
+                let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
+                let old = match map {
+                    Some(map) => o.maps.insert(name.clone(), map),
+                    None => o.maps.remove(&name),
+                };
+                Ok(Edit::SetOutputMap { output, name, map: old })
+            }
+            Edit::SetAlignedImage { frame, aligned } => {
+                let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
+                Ok(Edit::SetAlignedImage { frame, aligned: std::mem::replace(&mut f.aligned, aligned) })
             }
         }
     }
@@ -575,6 +617,45 @@ mod tests {
                 assert_eq!(q, once, "redoing {edit:?} makes it again");
             }
         }
+    }
+
+    #[test]
+    fn retouch_and_cache_edits_are_undone_by_their_inverses() {
+        let mut p = Project::new(Some("Bee")).unwrap();
+        let a = p.add_frame(file(1), None);
+        let output = p.add_output(NewOutput {
+            name: "Pyramid".into(),
+            method: "pyramid".into(),
+            parameters: serde_json::json!({}),
+            inputs: vec![crate::model::Input::Frame(a)],
+            image: cache_ref(1),
+            preview: None,
+            maps: crate::model::Maps::new(),
+        });
+        let layer = p.add_layer(output, "Layer 1").unwrap();
+        let before = p.clone();
+        let retouched = MapName::new("retouched").unwrap();
+        for edit in [
+            Edit::SetLayerVisible { output, layer, visible: false },
+            Edit::SetOutputMap { output, name: retouched.clone(), map: Some(cache_ref(2)) },
+            Edit::SetAlignedImage { frame: a, aligned: Some(cache_ref(3)) },
+            Edit::PushStroke { output, layer, stroke: serde_json::json!({ "brush": "eraser" }) },
+        ] {
+            let mut q = before.clone();
+            let inverse = q.apply(edit.clone()).unwrap();
+            assert_ne!(q, before, "{edit:?} changed nothing");
+            q.apply(inverse).unwrap();
+            assert_eq!(q, before, "the inverse of {edit:?} undoes it");
+        }
+        let mut q = before.clone();
+        q.apply(Edit::SetOutputMap { output, name: retouched.clone(), map: Some(cache_ref(2)) }).unwrap();
+        assert!(q.cache_refs().contains(&&cache_ref(2)), "a cached map is kept by cleanup");
+        let missing = OutputId(99);
+        assert!(matches!(q.apply(Edit::SetOutputMap { output: missing, name: retouched, map: None }), Err(EditError::NoOutput(_))));
+        assert!(matches!(q.apply(Edit::SetAlignedImage { frame: FrameId(99), aligned: None }), Err(EditError::NoFrame(_))));
+        assert!(matches!(q.apply(Edit::SetLayerVisible { output, layer: LayerId(99), visible: true }), Err(EditError::NoLayer { .. })));
+        assert_eq!(Edit::SetLayerVisible { output, layer, visible: true }.aspects(), Aspects::RETOUCH);
+        assert!(Edit::SetAlignedImage { frame: a, aligned: None }.overwrites(&Edit::SetAlignedImage { frame: a, aligned: Some(cache_ref(3)) }));
     }
 
     #[test]

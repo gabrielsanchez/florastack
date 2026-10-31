@@ -118,7 +118,7 @@ mod tests {
     /// The string literals that name a key by its prefix: the settings' labels and tooltips, which pass through helpers
     /// on their way to `tr`.
     fn prefixed(sources: &[String]) -> BTreeSet<String> {
-        const PREFIXES: [&str; 6] = ["tip-", "setting-", "align-", "framing-", "tone-", "decisions-"];
+        const PREFIXES: [&str; 7] = ["tip-", "setting-", "align-", "framing-", "tone-", "decisions-", "brush-"];
         let key = |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         sources
             .iter()

@@ -76,6 +76,9 @@ pub enum CommandError {
     /// be spilled to disk.
     #[error(transparent)]
     Stack(Box<StackError>),
+    /// A stroke that can't be painted: a malformed record, or images that don't fit.
+    #[error(transparent)]
+    Retouch(Box<florastack_retouch::RetouchError>),
     #[error("cannot start a worker for `{command}`")]
     Spawn {
         command: String,
@@ -102,7 +105,14 @@ macro_rules! boxed_from {
     };
 }
 
-boxed_from!(Project(ProjectError), Data(ProjectDataError), Frame(FrameError), Codec(CodecError), Raw(RawError));
+boxed_from!(
+    Project(ProjectError),
+    Data(ProjectDataError),
+    Frame(FrameError),
+    Codec(CodecError),
+    Raw(RawError),
+    Retouch(florastack_retouch::RetouchError)
+);
 
 impl From<AlignError> for CommandError {
     fn from(e: AlignError) -> CommandError {
@@ -124,7 +134,7 @@ impl From<StackError> for CommandError {
 
 impl CommandError {
     /// A stable, machine-readable name for the kind of error: `unknownCommand`, `params`, `unavailable`, `conflict`,
-    /// `notFound`, `cancelled`, `project`, `frame`, `codec`, `raw`, `align`, `stack`, `internal`.
+    /// `notFound`, `cancelled`, `project`, `frame`, `codec`, `raw`, `align`, `stack`, `retouch`, `internal`.
     pub fn code(&self) -> &'static str {
         match self {
             CommandError::UnknownCommand { .. } => "unknownCommand",
@@ -157,6 +167,7 @@ impl CommandError {
             CommandError::Raw(_) => "raw",
             CommandError::Align(_) => "align",
             CommandError::Stack(_) => "stack",
+            CommandError::Retouch(_) => "retouch",
             CommandError::Spawn { .. } | CommandError::Internal { .. } => "internal",
         }
     }
