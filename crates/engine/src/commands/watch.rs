@@ -186,11 +186,12 @@ impl Capture {
     }
 }
 
-fn run(_: &Session, p: WatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
+fn run(session: &Session, p: WatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
+    let compute = session.compute();
     Ok(JobPlan::new(move |ctx| {
         let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
         let input = super::absolute(&p.input)?;
-        let mut engine = workspace.engine(true)?;
+        let mut engine = workspace.engine(true, compute)?;
         let name = format!("{}-capture", batch::safe(input.file_name().and_then(|s| s.to_str()).unwrap_or("stack")));
         batch::new_project(&mut engine, ctx, &workspace, &name, &p.preset)?;
         let settings = crate::project::develop_settings(engine.project().ok_or_else(|| unavailable("watch.run", "capture project is missing"))?)?;

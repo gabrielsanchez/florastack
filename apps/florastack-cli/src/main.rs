@@ -42,7 +42,7 @@ fn execute(cli: Cli) -> Result<(), Failure> {
     }
     let root = std::path::absolute(cli.temporary_projects.unwrap_or_else(|| std::env::temp_dir().join(branding::APP_ID).join("projects")))?;
     path_text(&root)?;
-    let mut client = Client::new(root, cli.json_progress);
+    let mut client = Client::new(root, cli.json_progress, cli.device.device());
     let result = match cli.command {
         Command::Stack(args) => stack(&mut client, &args),
         Command::Batch(args) => queue(&mut client, "batch.run", &args.input, &args.out, &args.processing, json!({})),

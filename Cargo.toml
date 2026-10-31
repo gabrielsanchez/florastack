@@ -64,6 +64,16 @@ criterion ={ version = "0.7", default-features = false, features = ["cargo_bench
 # compare the peak heap of two runs (florastack-stack's tests/memory.rs) without unsafe code of FloraStack's own, as
 # LightCraft's heap tests do. Pure Rust, MIT OR Apache-2.0.
 dhat = "0.3"
+# GPU compute (florastack-gpu): wgpu runs WGSL compute shaders on Metal, Vulkan, DX12 and, in a browser, WebGPU. Pure
+# Rust (MIT OR Apache-2.0); it loads the system's graphics drivers at run time and compiles no C. Without the default
+# `gles` backend (OpenGL ES and WebGL2, whose compute support FloraStack doesn't need) and `static-dxc`, which links a
+# prebuilt shader compiler: DX12 compiles shaders with the system's own compiler.
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl", "webgpu"] }
+# Waiting on wgpu's futures (adapter and device requests) on native targets, where they complete without an event
+# loop. Pure Rust, no dependencies, MIT OR Apache-2.0.
+pollster = "1.0.1"
+# Viewing image samples as the bytes GPU buffers hold, without copies or unsafe code of FloraStack's own.
+bytemuck = "1.25.2"
 # Peak heap in the quality runner only (dev-dependency of florastack-engine, for examples/quality): a global allocator
 # that counts the bytes in use and their peak with two atomics, which the runner resets before each command; dhat's
 # lock and backtrace on every allocation would slow the commands it times. Pure Rust, no dependencies, MIT.
@@ -155,6 +165,10 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.florastack-stack]
+opt-level = 2
+
+# The GPU stackers' host side: blocks of frames copied for upload, tiles read back and stitched.
+[profile.dev.package.florastack-gpu]
 opt-level = 2
 
 # The metrics score every stacking test against its ground truth (SSIM over every frame of a stack).

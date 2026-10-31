@@ -1,6 +1,6 @@
 # FloraStack
 
-FloraStack is a free, open-source focus-stacking application written in pure Rust. It aligns a series of photos focused at different distances and merges the sharp parts of each into one image with more depth of field than any single exposure allows, for macro, microscopy, product and landscape photography. All the work happens in an engine of library crates, and the egui desktop app and the command-line tool are thin layers over it. FloraStack is in early development: its engine and CLI align and stack frames (by weighted average, pyramid or depth map, with quarter-scale previews, and in slabs for very deep stacks) and the engine finds the stacks in a folder that holds several. The desktop app is still a stub.
+FloraStack is a free, open-source focus-stacking application written in pure Rust. It aligns a series of photos focused at different distances and merges the sharp parts of each into one image with more depth of field than any single exposure allows, for macro, microscopy, product and landscape photography. All the work happens in an engine of library crates, and the egui desktop app and the command-line tool are thin layers over it. FloraStack is in early development: its engine and CLI align and stack frames (by weighted average, pyramid or depth map, with quarter-scale previews, and in slabs for very deep stacks), on the GPU when one passes a self-test, and the engine finds the stacks in a folder that holds several. The desktop app is still a stub.
 
 ## Building
 
@@ -16,11 +16,17 @@ cargo fmt --all --check                                 # check formatting
 cargo xtask check-layers                                # check which crate may depend on which
 cargo xtask ci                                          # everything CI runs, with a summary of skipped tests
 cargo xtask corpus                                      # download the sample stacks and test fixtures pinned in corpus/manifest.toml
-cargo xtask bench                                       # criterion benchmarks, summarized in target/bench-summary.json
+cargo xtask bench                                       # criterion benchmarks and the CPU-against-GPU run, summarized in target/bench-summary.json
 cargo xtask quality                                     # every method on every stack: a report with crops in target/quality/, and the regression gate
 ```
 
 `cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures` before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks. `cargo xtask quality` stacks the synthetic stacks and every corpus stack by every method, scores and times each output, and fails when one is worse than `quality/baseline.json` beyond its tolerance; `cargo xtask ci` runs its gate on the synthetic stacks, as CI does.
+
+## GPU
+
+Stacking runs on the GPU through [wgpu](https://wgpu.rs) (Vulkan, Metal or DX12; WebGPU in a browser later) when a hardware adapter passes a self-test, and on the CPU otherwise; the log says which and why, and `compute.info` reports it. Nothing needs installing beyond the graphics driver. `--device cpu` (CLI) or `compute.set` with `{"device": "cpu"}` forces the CPU; `gpu` also takes software adapters such as Mesa's lavapipe and Windows' WARP, which compute correctly but more slowly than the CPU. The GPU's results agree with the CPU's within the tolerances that `crates/gpu/tests/` documents, and a GPU that fails part way through a stack makes it start again on the CPU.
+
+The GPU tests compare every kernel and every method with its CPU reference. Without an adapter they are listed as skipped in `cargo xtask ci`'s summary; to run them on a machine without a GPU, install a software adapter (on Debian or Ubuntu, `sudo apt-get install mesa-vulkan-drivers`; Windows has WARP) and select it, for example with `WGPU_ADAPTER_NAME=llvmpipe` or `WGPU_ADAPTER_NAME="Microsoft Basic Render Driver"`. `FLORASTACK_REQUIRE_GPU=1` makes a missing adapter fail them instead, as CI does on Linux and Windows. `cargo bench -p florastack-gpu --bench compositors` times the three methods on 100 frames of 24 MP on both devices (a few minutes on the CPU; `--quick` takes 8 frames).
 
 ## CLI quick start
 
@@ -58,7 +64,7 @@ Batch and watch expose `batch.run` and `watch.run` in the engine registry. Their
 
 Results go to stdout as JSON. Progress goes to stderr as a bar on a terminal, stage messages when redirected, or engine events as JSON lines with `--json-progress`. Runtime warnings and errors also become JSON lines in that mode. `run` pairs the first `--cmd` with the first `--params`, and so on, waits for each job, prints one result per line, and saves changes after all commands succeed. Give one JSON object per command, or omit all `--params` to use `{}` for every command. It stops on the first error; earlier external file writes remain, and project changes since the last save are not saved. `commands` prints the complete registry, including help, examples, flags and parameter/result JSON schemas. Every subcommand has `--help` with examples. Examples above use shell quoting accepted by Bash and PowerShell; in `cmd.exe`, escape JSON quotes as required by that shell.
 
-Running the binary with file arguments alone, including dragging photos onto its executable in Windows Explorer, stacks them with default settings into `<first-file-stem>-stacked.tif` beside the first file. `stack` saves an unnamed project with its alignment and outputs in the system temporary folder under the app ID's `projects/` directory and includes its path in the JSON result. `--temporary-projects FOLDER` changes that root for any subcommand. `project clean-orphans` moves closed, unnamed projects unused for 30 days to the system trash; `--dry-run` lists candidates, and `--days` changes the age. Named projects are excluded.
+Running the binary with file arguments alone, including dragging photos onto its executable in Windows Explorer, stacks them with default settings into `<first-file-stem>-stacked.tif` beside the first file. `stack` saves an unnamed project with its alignment and outputs in the system temporary folder under the app ID's `projects/` directory and includes its path in the JSON result. `--temporary-projects FOLDER` changes that root for any subcommand, and `--device auto|cpu|gpu` which device stacks (see [GPU](#gpu)). `project clean-orphans` moves closed, unnamed projects unused for 30 days to the system trash; `--dry-run` lists candidates, and `--days` changes the age. Named projects are excluded.
 
 | Exit code | Meaning |
 |---|---|

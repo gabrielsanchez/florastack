@@ -14,6 +14,7 @@ use std::time::Duration;
 use florastack_project::{Project, Trash};
 use serde_json::Value;
 
+use crate::compute::Compute;
 use crate::error::{CommandError, Invalid};
 use crate::events::Event;
 use crate::jobs::{Clock, Executor, JobId, JobInfo, JobState, Jobs, Waker};
@@ -37,11 +38,14 @@ pub struct EngineConfig {
     pub max_heavy_jobs: usize,
     /// How many preview jobs run at once, alongside the heavy ones.
     pub max_preview_jobs: usize,
+    /// Which device stacks, and the GPU's memory budget (`compute.set` changes it; [`crate::compute`]).
+    pub compute: Compute,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for EngineConfig {
-    /// No temporary-projects folder, the system trash, threads for jobs, the system clock.
+    /// No temporary-projects folder, the system trash, threads for jobs, the system clock, the GPU when one passes
+    /// the self-test.
     fn default() -> EngineConfig {
         EngineConfig {
             temporary_projects: None,
@@ -51,6 +55,7 @@ impl Default for EngineConfig {
             waker: None,
             max_heavy_jobs: 1,
             max_preview_jobs: 2,
+            compute: Compute::default(),
         }
     }
 }
@@ -97,7 +102,7 @@ impl Engine {
     /// An engine with the commands of `registry` (the standard ones and a test's, say).
     pub fn with_registry(config: EngineConfig, registry: Arc<Registry>) -> Engine {
         let jobs = Jobs::new(config.executor, config.clock, config.waker, config.max_heavy_jobs, config.max_preview_jobs);
-        let host = Host { temporary_projects: config.temporary_projects, trash: config.trash };
+        let host = Host { temporary_projects: config.temporary_projects, trash: config.trash, compute: config.compute };
         Engine { registry, session: Session::new(host, jobs), subscribers: Vec::new() }
     }
 

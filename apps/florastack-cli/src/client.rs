@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::time::Duration;
 
-use florastack_engine::{CommandError, Dispatched, Engine, EngineConfig, ErrorInfo, Event, JobState, Value, json};
+use florastack_engine::{CommandError, Compute, Device, Dispatched, Engine, EngineConfig, ErrorInfo, Event, JobState, Value, json};
 use serde::Serialize;
 
 pub struct Failure {
@@ -73,13 +73,14 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(temporary_projects: std::path::PathBuf, json_progress: bool) -> Self {
+    pub fn new(temporary_projects: std::path::PathBuf, json_progress: bool, device: Device) -> Self {
         let (tx, wake) = sync_channel(1);
         let config = EngineConfig {
             temporary_projects: Some(temporary_projects),
             waker: Some(Arc::new(move || {
                 let _ = tx.try_send(());
             })),
+            compute: Compute { device, ..Compute::default() },
             ..EngineConfig::default()
         };
         let mut engine = Engine::new(config);

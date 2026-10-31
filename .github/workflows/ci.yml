@@ -34,7 +34,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The GPU agreement tests (crates/gpu/tests, crates/engine/tests/compute.rs) run on a software adapter where
+        # the runner has one and must run there (`require_gpu`): Mesa's lavapipe (Vulkan) on Linux, installed below,
+        # and WARP (DX12), which Windows has. macOS runs them on Metal if the runner exposes an adapter, and records
+        # them as skipped otherwise.
+        include:
+          - os: ubuntu-latest
+            require_gpu: "1"
+          - os: macos-latest
+            require_gpu: ""
+          - os: windows-latest
+            require_gpu: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,6 +57,11 @@ jobs:
 
       # Caches the cargo registry and the compiled dependencies, keyed by OS, rustc version and Cargo.lock.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Mesa's lavapipe, a software Vulkan driver, and the Vulkan loader: the GPU tests' adapter on Linux.
+      - name: Install a software Vulkan adapter
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends mesa-vulkan-drivers libvulkan1
 
       - name: Format
         run: cargo fmt --all --check
@@ -75,7 +90,10 @@ jobs:
       - name: Fetch test fixtures
         run: cargo xtask corpus --fixtures
 
+      # FLORASTACK_REQUIRE_GPU turns a missing adapter into a failure of the GPU tests instead of a skip.
       - name: Test
+        env:
+          FLORASTACK_REQUIRE_GPU: ${{ matrix.require_gpu }}
         run: cargo test --workspace --locked
 
       # Every stacking method and slab combination on the synthetic stacks, scored against their ground truth and

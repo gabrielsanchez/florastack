@@ -38,18 +38,21 @@ use std::ops::Range;
 
 use florastack_align::{AlignError, Canvas, DEFAULT_FEATHER, Framing, Status, thumbnail, warp_to_canvas};
 use florastack_core::{Affine, AnyImage, Image, Monitor, Rect};
+use florastack_gpu::ops::WarpGeometry;
+use florastack_gpu::{Frame as GpuFrame, Gpu, GpuError, GpuStacked, GpuStacker, GpuTiling, Method as GpuMethod};
 use florastack_project::{Area, CacheDir, CacheRef, Edit, FrameId, Group, Input, Maps, NewOutput, OutputId, Preferences, Table};
 use florastack_raw::Quality;
 use florastack_stack::{
-    AVERAGE, AverageSettings, DEPTH_MAP, Decisions, DepthMap, DepthSettings, FrameProgress, FrameSource, Gained, MAX_RADIUS, Method, PREVIEW_FACTOR,
-    PYRAMID, Patch, PyramidSettings, StackError, StackSettings, StackShape, Stacked, Stacker, ThresholdMode, Tiling, Tone, compress_range,
-    out_of_range,
+    AVERAGE, AverageSettings, DEPTH_MAP, Decisions, DepthMap, DepthSettings, FocusStats, FrameProgress, FrameSource, Gained, MAX_RADIUS, Method,
+    PREVIEW_FACTOR, PYRAMID, Patch, PyramidSettings, StackError, StackSettings, StackShape, Stacked, Stacker, ThresholdMode, Tiling, Tone,
+    compress_range, out_of_range,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::align::Plan;
 use super::check_name;
+use crate::compute::{Backend, Compute};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::project::{
@@ -850,6 +853,8 @@ pub(super) struct StackPlan {
     size: (usize, usize),
     pub(super) settings: Chosen,
     pub(super) cache: CacheDir,
+    /// Which device stacks, resolved on the worker when the stack starts (`crate::compute`).
+    pub(super) compute: Compute,
 }
 
 /// The gain as the frames' samples take it.
@@ -903,6 +908,7 @@ impl StackPlan {
             size: (stored.report.width, stored.report.height),
             settings,
             cache: session.cache_dir()?,
+            compute: session.compute(),
         })
     }
 
@@ -930,14 +936,9 @@ impl StackPlan {
         Ok(image)
     }
 
-    /// Reads the `k`-th frame to stack, at full size or, `reduced`, at a quarter of it, and hands it to `f` with its
-    /// gain, warped onto the canvas as `f` reads it; then drops it.
-    pub(super) fn with_frame(
-        &mut self,
-        k: usize,
-        reduced: bool,
-        f: &mut dyn FnMut(&dyn FrameSource) -> Result<(), CommandError>,
-    ) -> Result<(), CommandError> {
+    /// Reads the `k`-th frame to stack, at full size or, `reduced`, at a quarter of it, with what puts it on the
+    /// canvas: its alignment, gain and coverage's feather.
+    pub(super) fn load(&mut self, k: usize, reduced: bool) -> Result<Loaded, CommandError> {
         let image = self.read(k)?;
         let Some(frame) = self.frames.get(k) else { return Err(self.internal()) };
         if reduced {
@@ -945,10 +946,9 @@ impl StackPlan {
             let small = thumbnail(&image, w.max(h).div_ceil(PREVIEW_FACTOR))?;
             drop(image);
             let (canvas, transform, feather) = reduced_geometry(&self.canvas, &frame.transform, (w, h), (small.width(), small.height()));
-            f(&Gained { frame: Warped { frame: &small, transform, canvas, feather }, gain: frame.gain })
+            Ok(Loaded::Warp { image: small, transform, canvas, feather, gain: frame.gain })
         } else {
-            let warped = Warped { frame: &image, transform: frame.transform, canvas: self.canvas, feather: DEFAULT_FEATHER };
-            f(&Gained { frame: warped, gain: frame.gain })
+            Ok(Loaded::Warp { image, transform: frame.transform, canvas: self.canvas, feather: DEFAULT_FEATHER, gain: frame.gain })
         }
     }
 
@@ -960,8 +960,9 @@ impl StackPlan {
         self.reader.load_mask()?;
         let n = self.frames.len();
         let mut units = Units::new(n);
+        let compute = self.compute;
         let mut feed = Warping { plan: self, range: 0..n, reduced };
-        stack_feed(&mut feed, &settings, &Tiling::default(), ctx, ctx, &mut units, |stage, units| {
+        stack_feed(&mut feed, &settings, &Tiling::default(), &compute, ctx, ctx, &mut units, |stage, units| {
             ctx.stage(stage);
             *units = Units::new(n);
         })
@@ -984,12 +985,94 @@ impl Units {
     }
 }
 
+/// A frame read for stacking, before it is put on the canvas: what a [`Feed`] loads, on another thread while the
+/// frame before it is stacked.
+pub(super) enum Loaded {
+    /// A decoded frame, warped onto the canvas as it is stacked: by florastack-align's `warp_to_canvas` a rectangle
+    /// at a time on the CPU ([`Warped`]), by florastack-gpu's warp kernel a tile at a time on the GPU.
+    Warp { image: Image<f32>, transform: Affine, canvas: Canvas, feather: f64, gain: f32 },
+    /// A frame already on the canvas (a slab's output), with its coverage where it has one.
+    Canvas { image: Image<f32>, coverage: Option<Image<f32>> },
+}
+
+/// A frame on the canvas with its coverage, read from borrowed planes (florastack-stack's `CoveredFrame` owns them).
+struct OnCanvas<'a> {
+    image: &'a Image<f32>,
+    coverage: &'a Image<f32>,
+}
+
+impl FrameSource for OnCanvas<'_> {
+    fn width(&self) -> usize {
+        self.image.width()
+    }
+
+    fn height(&self) -> usize {
+        self.image.height()
+    }
+
+    fn channels(&self) -> usize {
+        self.image.channels()
+    }
+
+    fn read(&self, rect: Rect) -> Result<Patch, StackError> {
+        if rect.is_empty() || !rect.fits_in(self.image.width(), self.image.height()) {
+            return Err(StackError::Region {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                frame_width: self.image.width(),
+                frame_height: self.image.height(),
+            });
+        }
+        Ok(Patch { image: self.image.crop(rect)?, coverage: Some(self.coverage.crop(rect)?) })
+    }
+}
+
+impl Loaded {
+    /// The frame as florastack-stack's stackers read it.
+    fn source<R>(&self, f: impl FnOnce(&dyn FrameSource) -> R) -> R {
+        match self {
+            Loaded::Warp { image, transform, canvas, feather, gain } => {
+                f(&Gained { frame: Warped { frame: image, transform: *transform, canvas: *canvas, feather: *feather }, gain: *gain })
+            }
+            Loaded::Canvas { image, coverage: Some(coverage) } => f(&OnCanvas { image, coverage }),
+            Loaded::Canvas { image, coverage: None } => f(image),
+        }
+    }
+
+    /// The frame as florastack-gpu's stackers read it.
+    fn gpu(&self) -> GpuFrame<'_> {
+        match self {
+            Loaded::Warp { image, transform, canvas, feather, gain } => GpuFrame::Warp {
+                image,
+                geometry: WarpGeometry {
+                    to_frame: canvas.to_frame(transform),
+                    frame_width: image.width(),
+                    frame_height: image.height(),
+                    feather: *feather,
+                    gain: *gain,
+                },
+            },
+            Loaded::Canvas { image, coverage } => GpuFrame::Canvas { image, coverage: coverage.as_ref() },
+        }
+    }
+
+    /// The canvas's width and height, and the frame's channels.
+    fn shape(&self) -> (usize, usize, usize) {
+        match self {
+            Loaded::Warp { image, canvas, .. } => (canvas.width, canvas.height, image.channels()),
+            Loaded::Canvas { image, .. } => (image.width(), image.height(), image.channels()),
+        }
+    }
+}
+
 /// Frames to stack, read one at a time.
-pub(super) trait Feed {
+pub(super) trait Feed: Send {
     fn len(&self) -> usize;
 
-    /// Reads frame `i` and hands it to `f`; then drops it.
-    fn with(&mut self, i: usize, f: &mut dyn FnMut(&dyn FrameSource) -> Result<(), CommandError>) -> Result<(), CommandError>;
+    /// Reads frame `i`.
+    fn load(&mut self, i: usize) -> Result<Loaded, CommandError>;
 }
 
 /// The frames of a plan in `range` of its frames to stack, warped onto the canvas, at full size or, `reduced`, at a
@@ -1005,23 +1088,42 @@ impl Feed for Warping<'_> {
         self.range.len()
     }
 
-    fn with(&mut self, i: usize, f: &mut dyn FnMut(&dyn FrameSource) -> Result<(), CommandError>) -> Result<(), CommandError> {
-        self.plan.with_frame(self.range.start + i, self.reduced, f)
+    fn load(&mut self, i: usize) -> Result<Loaded, CommandError> {
+        self.plan.load(self.range.start + i, self.reduced)
     }
 }
 
 /// Reads every frame of `feed`, in order, and hands it to `fold` with its progress, one of `units`, and whether it is
-/// the first.
-fn each(
+/// the first. While a frame is folded, the next one is read and decoded beside it (`rayon::join`), so that decoding
+/// overlaps stacking: two frames are in memory at most, the one folded and the next. With a single thread nothing
+/// would overlap, so each frame is read only once the one before is folded, and memory holds one frame.
+fn each<E>(
     feed: &mut dyn Feed,
     ctx: &dyn Monitor,
     units: &mut Units,
-    mut fold: impl FnMut(&dyn FrameSource, &dyn Monitor, bool) -> Result<(), CommandError>,
-) -> Result<(), CommandError> {
-    for i in 0..feed.len() {
-        ctx.checkpoint()?;
+    mut fold: impl FnMut(&Loaded, &dyn Monitor, bool) -> Result<(), E> + Send,
+) -> Result<(), E>
+where
+    E: From<CommandError> + Send,
+{
+    let n = feed.len();
+    let overlap = rayon::current_num_threads() > 1;
+    let mut next: Option<Loaded> = None;
+    for i in 0..n {
+        ctx.checkpoint().map_err(CommandError::from)?;
+        let current = match next.take() {
+            Some(frame) => frame,
+            None => feed.load(i)?,
+        };
         let progress = FrameProgress { inner: ctx, frame: units.done, frames: units.total };
-        feed.with(i, &mut |source| fold(source, &progress, i == 0))?;
+        if overlap && i + 1 < n {
+            let (folded, loaded) = rayon::join(|| fold(&current, &progress, i == 0), || feed.load(i + 1));
+            folded?;
+            next = Some(loaded?);
+        } else {
+            fold(&current, &progress, i == 0)?;
+        }
+        drop(current);
         units.done += 1;
     }
     Ok(())
@@ -1029,8 +1131,49 @@ fn each(
 
 /// Stacks `feed` with `settings`, in one pass, or in two for the depth-map method: its focus, then the composite,
 /// with the depth map made between them. `stage(i, units)` comes before pass `i` and, with `i` the number of passes,
-/// before the end, whose progress goes to `finishing`. The stack and, for the depth-map method, its depth map.
+/// before the end, whose progress goes to `finishing`. On the GPU when `compute` resolves to one; when the GPU fails
+/// part way, the stack starts again on the CPU. The stack and, for the depth-map method, its depth map.
+#[allow(clippy::too_many_arguments)] // The stack's inputs and the three ways its progress is reported.
 pub(super) fn stack_feed(
+    feed: &mut dyn Feed,
+    settings: &Chosen,
+    tiling: &Tiling,
+    compute: &Compute,
+    ctx: &dyn Monitor,
+    finishing: &dyn Monitor,
+    units: &mut Units,
+    mut stage: impl FnMut(usize, &mut Units),
+) -> Result<(Stacked, Option<DepthMap>), CommandError> {
+    if let Backend::Gpu { gpu, tiling: gpu_tiling } = compute.backend() {
+        if let Some(reason) = cpu_only(settings) {
+            tracing::info!("stacking on the CPU: {reason}");
+        } else {
+            let gpu_tiling = GpuTiling { host_budget: tiling.budget, spill_dir: tiling.spill_dir.clone(), ..gpu_tiling };
+            let start = units.done;
+            match stack_gpu(feed, settings, &gpu, &gpu_tiling, ctx, finishing, units, &mut stage) {
+                Ok(done) => return Ok(done),
+                Err(Failed::Command(e)) => return Err(e),
+                Err(Failed::Gpu(e)) if e.is_cancelled() => return Err(CommandError::Cancelled),
+                Err(Failed::Gpu(e)) => {
+                    tracing::warn!("the GPU failed while stacking ({e}): stacking again on the CPU");
+                    units.done = start;
+                }
+            }
+        }
+    }
+    stack_cpu(feed, settings, tiling, ctx, finishing, units, stage)
+}
+
+/// Why `settings` stack on the CPU even with a GPU: the settings the GPU's kernels don't have.
+fn cpu_only(settings: &Chosen) -> Option<&'static str> {
+    match settings {
+        Chosen::Pyramid(s) if s.coarse_limit.is_some() => Some("the pyramid's coarse limit isn't done on the GPU"),
+        _ => None,
+    }
+}
+
+/// [`stack_feed`] on the CPU.
+fn stack_cpu(
     feed: &mut dyn Feed,
     settings: &Chosen,
     tiling: &Tiling,
@@ -1045,11 +1188,13 @@ pub(super) fn stack_feed(
         Chosen::Pyramid(s) => s.stacker(tiling)?,
         Chosen::DepthMap(depth) => {
             let mut estimator = depth.estimator(tiling)?;
-            each(feed, ctx, units, |source, progress, first| {
-                if first {
-                    estimator.begin(StackShape::of(source))?;
-                }
-                Ok(estimator.add_frame(source, progress)?)
+            each(feed, ctx, units, |loaded, progress, first| {
+                loaded.source(|source| {
+                    if first {
+                        estimator.begin(StackShape::of(source))?;
+                    }
+                    Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
+                })
             })?;
             let stats = estimator.finish(finishing)?;
             drop(estimator);
@@ -1058,24 +1203,126 @@ pub(super) fn stack_feed(
             drop(stats);
             stage(1, units);
             let mut compositor = map.compositor(tiling)?;
-            each(feed, ctx, units, |source, progress, first| {
-                if first {
-                    compositor.begin(StackShape::of(source))?;
-                }
-                Ok(compositor.add_frame(source, progress)?)
+            each(feed, ctx, units, |loaded, progress, first| {
+                loaded.source(|source| {
+                    if first {
+                        compositor.begin(StackShape::of(source))?;
+                    }
+                    Ok::<_, CommandError>(compositor.add_frame(source, progress)?)
+                })
             })?;
             stage(2, units);
             return Ok((compositor.finish(finishing)?, Some(map)));
         }
     };
-    each(feed, ctx, units, |source, progress, first| {
-        if first {
-            stacker.begin(StackShape::of(source))?;
-        }
-        Ok(stacker.add_frame(source, progress)?)
+    each(feed, ctx, units, |loaded, progress, first| {
+        loaded.source(|source| {
+            if first {
+                stacker.begin(StackShape::of(source))?;
+            }
+            Ok::<_, CommandError>(stacker.add_frame(source, progress)?)
+        })
     })?;
     stage(1, units);
     Ok((stacker.finish(finishing)?, None))
+}
+
+/// Why a stack on the GPU failed: the GPU (the stack starts again on the CPU), or anything else (it ends).
+enum Failed {
+    Gpu(GpuError),
+    Command(CommandError),
+}
+
+impl From<GpuError> for Failed {
+    fn from(e: GpuError) -> Failed {
+        Failed::Gpu(e)
+    }
+}
+
+impl From<CommandError> for Failed {
+    fn from(e: CommandError) -> Failed {
+        Failed::Command(e)
+    }
+}
+
+impl From<StackError> for Failed {
+    fn from(e: StackError) -> Failed {
+        Failed::Command(e.into())
+    }
+}
+
+/// florastack-stack's `Stacked` of a GPU stack.
+fn stacked(s: GpuStacked) -> Stacked {
+    Stacked { image: s.image, alpha: s.alpha, frames: s.frames, uncovered: s.uncovered }
+}
+
+/// The focus statistics of the GPU's pass 1, whose three channels are each pixel's depth, confidence and guide.
+fn focus_stats(s: GpuStacked, radius: f64) -> Result<FocusStats, StackError> {
+    let (w, h) = (s.image.width(), s.image.height());
+    let mut planes = [(); 3].map(|()| Vec::with_capacity(w * h));
+    for row in s.image.rows() {
+        for pixel in row.as_chunks::<3>().0 {
+            for (plane, &v) in planes.iter_mut().zip(pixel) {
+                plane.push(v);
+            }
+        }
+    }
+    let [depth, confidence, guide] = planes.map(|p| Image::from_vec(w, h, 1, florastack_core::ColorSpace::LINEAR, p));
+    Ok(FocusStats { frames: s.frames, depth: depth?, confidence: confidence?, guide: guide?, covered: s.alpha, uncovered: s.uncovered, radius })
+}
+
+/// Folds every frame of `feed` into `stacker`, which begins its stack on the first frame's canvas.
+fn gpu_pass(stacker: &mut GpuStacker, feed: &mut dyn Feed, ctx: &dyn Monitor, units: &mut Units) -> Result<(), Failed> {
+    each(feed, ctx, units, |loaded, progress, first| {
+        if first {
+            let (w, h, c) = loaded.shape();
+            stacker.begin(w, h, c)?;
+        }
+        Ok(stacker.add_frame(&loaded.gpu(), progress)?)
+    })
+}
+
+/// [`stack_feed`] on the GPU (florastack-gpu's stackers, with the depth map between the depth-map method's passes
+/// made on the CPU).
+#[allow(clippy::too_many_arguments)] // As stack_feed's.
+fn stack_gpu(
+    feed: &mut dyn Feed,
+    settings: &Chosen,
+    gpu: &Gpu,
+    tiling: &GpuTiling,
+    ctx: &dyn Monitor,
+    finishing: &dyn Monitor,
+    units: &mut Units,
+    stage: &mut impl FnMut(usize, &mut Units),
+) -> Result<(Stacked, Option<DepthMap>), Failed> {
+    stage(0, units);
+    let method = match settings {
+        Chosen::Average(s) => GpuMethod::Average { radius: s.radius, smoothing: s.smoothing, power: s.power },
+        Chosen::Pyramid(s) => {
+            #[allow(clippy::cast_possible_truncation)] // A grit from 0.25 to 1, a range limit from 0 to 1.
+            let (blend, range_limit) = ((s.grit > 0.0).then(|| (1.0 / s.grit) as f32), s.range_limit as f32);
+            GpuMethod::Pyramid { levels: s.levels, blend, channel_decisions: s.decisions == Decisions::Channels, range_limit }
+        }
+        Chosen::DepthMap(depth) => {
+            let mut estimator = GpuStacker::new(gpu, GpuMethod::Focus { radius: depth.radius }, tiling.clone())?;
+            gpu_pass(&mut estimator, feed, ctx, units)?;
+            let stats = focus_stats(estimator.finish(finishing)?, depth.radius)?;
+            drop(estimator);
+            ctx.checkpoint().map_err(CommandError::from)?;
+            let map = stats.resolve(depth.contrast_threshold(), depth.smoothing, None)?;
+            drop(stats);
+            stage(1, units);
+            let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&map.depth), frames: map.frames };
+            let mut compositor = GpuStacker::new(gpu, method, tiling.clone())?;
+            gpu_pass(&mut compositor, feed, ctx, units)?;
+            stage(2, units);
+            return Ok((stacked(compositor.finish(finishing)?), Some(map)));
+        }
+    };
+    let mut stacker = GpuStacker::new(gpu, method, tiling.clone())?;
+    gpu_pass(&mut stacker, feed, ctx, units)?;
+    stage(1, units);
+    Ok((stacked(stacker.finish(finishing)?), None))
 }
 
 /// `image` with `alpha`, if there is one: an extra channel for gray and color images, the alpha channel they have

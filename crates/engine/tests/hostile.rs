@@ -44,6 +44,11 @@ fn hostile_values_are_refused_with_what_is_wrong() {
     let long = "x".repeat(40 * 1024);
     let cases = [
         ("job.cancel", json!({ "job": -1 })),
+        ("compute.set", json!({ "device": "fastest" })),
+        ("compute.set", json!({ "device": 1 })),
+        ("compute.set", json!({ "budgetMb": 1 })),
+        ("compute.set", json!({ "budgetMb": -5 })),
+        ("compute.set", json!({ "budgetMb": 1e30 })),
         ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "template": "../{stack}.tif" })),
         ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "template": "{unknown}.tif" })),
         ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "split": {"gap": -1} })),

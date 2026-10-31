@@ -11,3 +11,33 @@ workspace = true
 
 [dependencies]
 florastack-core.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster.workspace = true
+
+[dev-dependencies]
+# The CPU references the agreement tests compare every kernel with (AGENTS.md, CPU oracle): the stacking methods and
+# the alignment warp. Dev-dependencies only; `cargo xtask check-layers` allows nothing more.
+florastack-stack.workspace = true
+florastack-align.workspace = true
+# Synthetic stacks for the stackers' agreement tests.
+florastack-core = { workspace = true, features = ["testutil"] }
+# `skip!`, which records an agreement test that found no GPU adapter.
+florastack-testkit.workspace = true
+# The benches: criterion's per-frame times, and the CPU-against-GPU run's frames (made in parallel) and its records
+# for `cargo xtask bench`.
+criterion.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "gpu"
+harness = false
+
+[[bench]]
+name = "compositors"
+harness = false

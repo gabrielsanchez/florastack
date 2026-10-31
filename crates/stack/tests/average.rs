@@ -320,6 +320,23 @@ fn frames_and_settings_that_dont_fit_are_errors() {
 }
 
 #[test]
+fn a_noiseless_flat_region_beside_sharp_detail_stays_covered() {
+    // A sharp checkerboard on the left, flat gray on the right without any noise: the weights span from about 1e18 to
+    // 1e-24 within a row. The smoothing's box passes once kept the sharp side's rounding in their running sums, which
+    // made the flat side's weights fall below 0 in every frame, so that its pixels came out black and uncovered.
+    let (w, h) = (400, 120);
+    let frame =
+        |level: f32| Image::from_fn(w, h, 3, ColorSpace::LINEAR, move |x, y, _| if x < 100 { ((x / 2 + y / 2) % 2) as f32 } else { level }).unwrap();
+    let frames = [frame(0.25), frame(0.75)];
+    let stacked = average(&AverageSettings::default(), &Tiling::default(), &frames);
+    assert_eq!((stacked.uncovered, stacked.alpha.is_some()), (0, false));
+    for x in 250..w {
+        let v = stacked.image.get(x, 60, 1).unwrap();
+        assert!((v - 0.5).abs() < 1e-4, "the flat region is the plain average of its frames at {x}: {v}");
+    }
+}
+
+#[test]
 fn hostile_samples_give_a_finite_stack() {
     // Regression: samples that aren't finite, or are huge, must neither poison the sums nor overflow them.
     let mut frames = vec![defocused(64, 48, 1, 3, false, 10).frames[0].clone(); 3];
