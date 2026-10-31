@@ -28,7 +28,7 @@ use crate::error::GpuError;
 use crate::shaders::Kernel;
 
 /// How long a wait for the GPU may take before it counts as a lost device: far beyond any one submission.
-const WAIT: Duration = Duration::from_secs(300);
+pub(crate) const WAIT: Duration = Duration::from_secs(300);
 
 /// Which adapters [`Gpu::new`] may take. See the module documentation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -284,6 +284,12 @@ impl Gpu {
         let message = errors.remove(0);
         errors.clear();
         Err(GpuError::Device { message })
+    }
+
+    /// Checks the device without waiting, running the callbacks of what it has finished.
+    pub(crate) fn poll(&self) -> Result<(), GpuError> {
+        self.inner.device.poll(wgpu::PollType::Poll).map_err(|e| GpuError::Lost { message: e.to_string() })?;
+        self.check()
     }
 
     /// Waits until the GPU has done everything submitted so far.

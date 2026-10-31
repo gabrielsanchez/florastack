@@ -223,3 +223,22 @@ fn laplacian_pyramids_and_their_collapse_agree_with_florastack_stack() {
         assert!(max_difference(&back, &image) <= 1e-5, "{w}x{h}: the collapse inverts the pyramid");
     }
 }
+
+#[test]
+fn readbacks_from_threads_sharing_the_device_all_arrive() {
+    // A poll fires the callbacks of every mapping it finds done, on its own thread: one thread's poll can take
+    // another's readback, whose own poll then returns before the callback has run (the race CI's lavapipe and Metal
+    // runners hit when the test threads shared the device). Every readback must arrive anyway.
+    let Some(gpu) = gpu() else { return };
+    std::thread::scope(|scope| {
+        for t in 0..8u64 {
+            scope.spawn(move || {
+                for i in 0..60usize {
+                    let image = random(37 + i % 5, 11, 3, 1000 * t + u64::try_from(i).unwrap(), 0.0, 1.0);
+                    let back = gpu.download(&gpu.upload(&image).unwrap()).unwrap();
+                    assert_eq!(max_difference(&back, &image), 0.0, "thread {t}, round trip {i}");
+                }
+            });
+        }
+    });
+}

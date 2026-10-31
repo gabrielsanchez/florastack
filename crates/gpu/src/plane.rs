@@ -124,13 +124,12 @@ impl Gpu {
         let mut encoder = self.device().create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(what) });
         encoder.copy_buffer_to_buffer(&plane.buffer, 0, &staging, 0, bytes);
         self.queue().submit([encoder.finish()]);
-        let mapped = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let done = std::sync::Arc::clone(&mapped);
+        let (sent, mapped) = std::sync::mpsc::channel();
         staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            *done.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result.is_ok());
+            let _ = sent.send(result.is_ok());
         });
         self.wait()?;
-        if *mapped.lock().unwrap_or_else(std::sync::PoisonError::into_inner) != Some(true) {
+        if !self.mapping(&mapped)? {
             return Err(GpuError::Readback { what });
         }
         let words = {
@@ -144,6 +143,31 @@ impl Gpu {
         };
         staging.unmap();
         Ok(words)
+    }
+
+    /// Whether a mapping succeeded, once its callback has run. A poll runs the callbacks of every mapping it finds
+    /// done, on the thread that polls: when threads share the device, another thread's poll can take this mapping's
+    /// callback and run it a moment after this thread's own wait has returned. So this waits for the callback itself,
+    /// polling again, as long as [`Gpu::wait`] would wait for the GPU.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mapping(&self, mapped: &std::sync::mpsc::Receiver<bool>) -> Result<bool, GpuError> {
+        use std::sync::mpsc::RecvTimeoutError;
+        let deadline = std::time::Instant::now() + crate::device::WAIT;
+        loop {
+            match mapped.recv_timeout(std::time::Duration::from_millis(1)) {
+                Ok(ok) => return Ok(ok),
+                // The callback was dropped without running: the mapping can't succeed.
+                Err(RecvTimeoutError::Disconnected) => return Ok(false),
+                Err(RecvTimeoutError::Timeout) if std::time::Instant::now() >= deadline => return Ok(false),
+                Err(RecvTimeoutError::Timeout) => self.poll()?,
+            }
+        }
+    }
+
+    /// In a browser nothing may block: the callback has run by now, or the readback fails (see `stack/mod.rs`).
+    #[cfg(target_arch = "wasm32")]
+    fn mapping(&self, mapped: &std::sync::mpsc::Receiver<bool>) -> Result<bool, GpuError> {
+        Ok(mapped.try_recv().unwrap_or(false))
     }
 
     /// `plane` read back as a linear `f32` image.
