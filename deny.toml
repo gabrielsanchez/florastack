@@ -17,6 +17,12 @@ ignore = [
     # 0.41: drop both entries when the pin moves past storytold/lightcraft#1464 (docs/lightcraft.md).
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 via lightcraft-meta, which never checks for duplicate attributes (with_checks(false)); fixed upstream in lightcraft#1464" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 via lightcraft-meta, which never uses NsReader; fixed upstream in lightcraft#1464" },
+    # zbus 5's companion crates, through AccessKit's Linux backend (accesskit_unix and atspi, under eframe's
+    # `accesskit` feature): "unmaintained" because zbus 6 merged them, not for a flaw, and no AccessKit release is on
+    # zbus 6 yet. Drop the three entries when eframe's AccessKit moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 via accesskit_unix: merged into zbus 6, no flaw; AccessKit isn't on zbus 6 yet" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 via accesskit_unix: merged into zbus 6, no flaw; AccessKit isn't on zbus 6 yet" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 via accesskit_unix: merged into zbus 6, no flaw; AccessKit isn't on zbus 6 yet" },
 ]
 
 [licenses]

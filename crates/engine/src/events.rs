@@ -39,4 +39,6 @@ pub enum ProjectEvent {
     Opened,
     Saved,
     Closed,
+    /// Saved, then moved or copied to another folder, where it is open now (`project.saveAs`).
+    Moved,
 }

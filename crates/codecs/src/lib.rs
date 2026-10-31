@@ -31,7 +31,7 @@ pub mod metadata;
 pub mod options;
 
 pub use codec::{Codecs, Decoded, Encoded, FileInfo, ImageDecoder, ImageEncoder, ProfileInfo, Stored};
-pub use color::{ColorEngine, ColorHint, CurveKind, LightCraftColor, NamedSpace, Primaries, Profile};
+pub use color::{ColorEngine, ColorHint, CurveKind, LightCraftColor, NamedSpace, Primaries, Profile, StandardCurve};
 pub use error::{BackendError, CodecError, MetadataKind, Warning};
 pub use format::{Format, sniff};
 pub use metadata::{ExifSummary, Metadata, OutputMetadata, PreparedMetadata, Timestamp, read_metadata};

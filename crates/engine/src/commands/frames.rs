@@ -274,6 +274,8 @@ struct FrameInfo {
     id: FrameId,
     /// The file, as stored: absolute, or relative to the folder that holds the project folder.
     path: String,
+    /// The file where the project looks for it: `path`, resolved.
+    file: String,
     /// Whether it goes into stacks.
     enabled: bool,
     /// The file's size when it was added, in bytes.
@@ -303,6 +305,7 @@ struct FrameList {
 }
 
 fn list(session: &Session, _: NoParams) -> Result<FrameList, CommandError> {
+    let folder = session.folder()?;
     let frames = session
         .project()?
         .frames
@@ -310,6 +313,7 @@ fn list(session: &Session, _: NoParams) -> Result<FrameList, CommandError> {
         .map(|f| FrameInfo {
             id: f.id(),
             path: f.path.clone(),
+            file: folder.frame_path(f).display().to_string(),
             enabled: f.enabled,
             size: f.size,
             hash: f.hash.to_string(),

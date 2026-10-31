@@ -74,6 +74,32 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "parki
 pollster = "1.0.1"
 # Viewing image samples as the bytes GPU buffers hold, without copies or unsafe code of FloraStack's own.
 bytemuck = "1.25.2"
+# IEEE half floats: the display images florastack-engine prepares for the desktop app's viewer (`view`), which it
+# uploads as `Rgba16Float` textures. Pure Rust, MIT OR Apache-2.0; wgpu's shader translator already uses it.
+half = { version = "2.7.1", default-features = false, features = ["std"] }
+# The desktop app (apps/florastack, the only crate allowed a UI toolkit): egui on eframe, drawn by egui-wgpu with the
+# workspace's wgpu (`wgpu_no_default_features`: egui-wgpu's defaults would add wgpu's OpenGL ES and WebGL backends),
+# AccessKit for screen readers, egui's bundled fonts (not the system's), and window and panel layout remembered
+# (`persistence`); X11 and Wayland, which winit loads at run time.
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "persistence", "wayland", "wgpu_no_default_features", "x11"] }
+egui = "0.37.0"
+egui-wgpu = { version = "0.37.0", default-features = false, features = ["macos-window-resize-jitter-fix"] }
+# Choosing X11 (XWayland) over Wayland, which has no file drag-and-drop in winit. The Wayland library is loaded at run
+# time (`wayland-dlopen`, so that building needs no system package), and a native Wayland window draws its own frame
+# and buttons where the compositor doesn't (GNOME's case), without the title, whose text would need ttf-parser, which
+# is unmaintained (`wayland-csd-adwaita-notitle`; pure Rust).
+winit = { version = "0.30.13", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle", "rwh_06"] }
+# Native file dialogs: Windows' and macOS's own, and on Linux the XDG desktop portal (not GTK, which is C).
+rfd = "0.17.2"
+# Fluent, the UI's strings (English first).
+fluent-bundle = "0.16.0"
+unic-langid = { version = "0.9.6", features = ["macros"] }
+# Where the desktop app's log goes: standard error, at the level `FLORASTACK_LOG` names (the libraries log through
+# `tracing`; the apps choose where it goes).
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }
+# Driving the app's UI in tests without a window or a GPU (dev-dependency): through AccessKit, as a screen reader
+# would.
+egui_kittest = { version = "0.37.0", default-features = false, features = ["eframe"] }
 # Peak heap in the quality runner only (dev-dependency of florastack-engine, for examples/quality): a global allocator
 # that counts the bytes in use and their peak with two atomics, which the runner resets before each command; dhat's
 # lock and backtrace on every allocation would slow the commands it times. Pure Rust, no dependencies, MIT.

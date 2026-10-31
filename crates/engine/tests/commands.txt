@@ -5,6 +5,7 @@ align.run
 align.set
 align.sortByScale
 batch.run
+cache.removeAbandoned
 compute.info
 compute.set
 defects.clear
@@ -30,6 +31,7 @@ preset.apply
 preset.read
 preset.save
 project.addFrames
+project.checkFrames
 project.close
 project.findOrphans
 project.findStacks
@@ -41,6 +43,7 @@ project.open
 project.removeFrames
 project.rename
 project.save
+project.saveAs
 project.setFramesEnabled
 project.trashOrphans
 stack.average

@@ -1,8 +1,8 @@
 //! FloraStack's commands, by area (the registry's module documentation says how commands are made and named):
 //!
 //! - [`project`]: creating, opening, saving and closing projects, their name, and the cleanup of old temporary
-//!   projects (`project.new`, `project.open`, `project.save`, `project.close`, `project.info`, `project.rename`,
-//!   `project.findOrphans`, `project.trashOrphans`);
+//!   projects (`project.new`, `project.open`, `project.save`, `project.saveAs`, `project.close`, `project.info`,
+//!   `project.rename`, `project.checkFrames`, `project.findOrphans`, `project.trashOrphans`);
 //! - [`frames`]: the frame list (`project.addFrames`, a job, `project.removeFrames`, `project.moveFrames`,
 //!   `project.setFramesEnabled`, `project.frames`);
 //! - [`split`]: finding the stacks in a batch of files holding several (`project.findStacks`, a job);
@@ -22,7 +22,8 @@
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
 //! - [`job`]: the jobs (`job.list`, `job.cancel`);
-//! - [`compute`]: which device stacks, the GPU or the CPU (`compute.info`, `compute.set`).
+//! - [`compute`]: which device stacks, the GPU or the CPU (`compute.info`, `compute.set`);
+//! - [`cache`]: the tile folders crashed runs leave behind (`cache.removeAbandoned`).
 //! - `batch` and `watch` (native): serial queues of independent projects (`batch.run`) and tethered capture with
 //!   incremental alignment and live previews (`watch.run`).
 //!
@@ -35,6 +36,7 @@
 pub mod align;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod batch;
+pub mod cache;
 pub mod compute;
 pub mod defects;
 pub mod develop;
@@ -73,6 +75,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(edit::specs());
     all.extend(job::specs());
     all.extend(compute::specs());
+    all.extend(cache::specs());
     #[cfg(not(target_arch = "wasm32"))]
     {
         all.extend(batch::specs());
