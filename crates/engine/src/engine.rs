@@ -199,6 +199,19 @@ impl Engine {
         self.session.project().ok()
     }
 
+    /// The output open for retouching, as an app draws it (`retouch.open`).
+    pub fn retouch(&self) -> Option<crate::retouch::RetouchView<'_>> {
+        self.session.retouch.as_ref().map(|session| crate::retouch::RetouchView { session })
+    }
+
+    /// What changed in the retouch session since the last call, for an app to draw again; `None` when nothing did.
+    pub fn take_retouch_changes(&mut self) -> Option<crate::retouch::RetouchChanges> {
+        let closed = std::mem::take(&mut self.session.retouch_closed);
+        let mut changes = self.session.retouch.as_mut().map(|s| std::mem::take(&mut s.changes)).unwrap_or_default();
+        changes.closed |= closed;
+        (changes != crate::retouch::RetouchChanges::default()).then_some(changes)
+    }
+
     /// The open project's folder.
     pub fn project_path(&self) -> Option<&Path> {
         self.session.folder().ok().map(florastack_project::ProjectFolder::path)

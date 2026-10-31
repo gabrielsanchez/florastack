@@ -39,17 +39,19 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     egui::Panel::right("settings").resizable(true).default_size(300.0).size_range(220.0..=560.0).show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| match app.prefs.tab {
             Tab::Stack => crate::stack_tab::show(app, ui),
-            Tab::Retouch => {
-                ui.heading(tr("tab-retouch"));
-                ui.label(tr("retouch-later"));
-            }
+            Tab::Retouch => crate::retouch_tab::panel(app, ui),
             Tab::Export => export_tab(app, ui),
             Tab::Batch => batch_tab(app, ui),
         });
     });
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         banners(app, ui);
-        if app.film.is_some() {
+        if app.prefs.tab == Tab::Retouch {
+            crate::retouch_tab::view(app, ui);
+            if app.shell.retouch.is_some() {
+                ui.ctx().request_repaint();
+            }
+        } else if app.film.is_some() {
             film_view(app, ui);
         } else if app.viewer.is_empty() {
             empty_view(app, ui);

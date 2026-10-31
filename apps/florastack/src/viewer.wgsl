@@ -19,7 +19,8 @@ struct View {
     encode: f32,
     // 1 to show each image pixel as a square (magnified), 0 to filter (minified).
     nearest: f32,
-    pad: f32,
+    // How many times brighter the image is shown: the retouching view's boost for dark regions, 1 otherwise.
+    boost: f32,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -59,7 +60,7 @@ fn fs_image(in: Varying) -> @location(0) vec4<f32> {
     let cell = floor((in.position.xy - view.origin) / view.checker);
     let light = (i32(cell.x) + i32(cell.y)) % 2 == 0;
     let back = select(vec3<f32>(0.03), vec3<f32>(0.1), light);
-    let rgb = mix(back, clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), clamp(c.a, 0.0, 1.0));
+    let rgb = mix(back, clamp(c.rgb * view.boost, vec3<f32>(0.0), vec3<f32>(1.0)), clamp(c.a, 0.0, 1.0));
     let shown = select(rgb, srgb(rgb), view.encode > 0.5);
     return vec4<f32>(shown, 1.0);
 }

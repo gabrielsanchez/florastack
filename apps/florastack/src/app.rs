@@ -144,6 +144,8 @@ pub struct FloraStackApp {
     shown_threshold: Option<PathBuf>,
     /// The method the previews show for "both": the one whose setting changed last.
     pub preview_method: &'static str,
+    /// The Retouch tab's brush, view and stroke being drawn.
+    pub retouch: crate::retouch_tab::RetouchUi,
     autosave: Autosave,
     /// The project the frames were checked for.
     checked: Option<PathBuf>,
@@ -199,6 +201,7 @@ impl FloraStackApp {
             threshold_step: false,
             shown_threshold: None,
             preview_method: "pyramid",
+            retouch: crate::retouch_tab::RetouchUi::default(),
             autosave: Autosave::new(Autosave::DEFAULT_INTERVAL),
             checked: None,
             quitting: false,
@@ -305,6 +308,8 @@ impl FloraStackApp {
                 apply_theme(ctx, self.prefs.theme);
             }
             Action::Shortcuts => self.dialog = Some(Dialog::Shortcuts),
+            Action::BrushSmaller => self.retouch.resize_brush(1.0 / 1.25),
+            Action::BrushLarger => self.retouch.resize_brush(1.25),
         }
     }
 
@@ -534,6 +539,7 @@ impl FloraStackApp {
         if self.shell.poll() {
             ctx.request_repaint();
         }
+        crate::retouch_tab::sync(self);
         for opened in std::mem::take(&mut self.shell.opened) {
             if self.temporary.as_ref().is_none_or(|t| !opened.starts_with(t)) {
                 self.prefs.remember(&opened);

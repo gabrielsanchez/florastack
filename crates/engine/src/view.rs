@@ -118,6 +118,44 @@ pub fn display(image: &Image<f32>, max_side: Option<usize>) -> Result<DisplayIma
     Ok(DisplayImage { width: w, height: h, rgba, alpha })
 }
 
+/// `rect` of `image` for display, reduced by `factor` (1 for full size): `rect` is widened to a multiple of `factor`
+/// on a grid from the image's corner, so that the regions of an image always line up with the image reduced whole,
+/// and each block of `factor` x `factor` pixels is averaged. Returns the display pixels and the rectangle they show,
+/// in reduced pixels. What the retouching view uploads as strokes change it.
+pub fn display_region(image: &Image<f32>, rect: florastack_core::Rect, factor: usize) -> Result<(DisplayImage, florastack_core::Rect), ViewError> {
+    let f = factor.max(1);
+    let (w, h) = (image.width(), image.height());
+    let (x0, y0) = (rect.x.min(w) / f, rect.y.min(h) / f);
+    let (x1, y1) = ((rect.x + rect.width).min(w).div_ceil(f), (rect.y + rect.height).min(h).div_ceil(f));
+    let (rw, rh) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+    let c = image.channels().max(1);
+    let mut data = vec![0.0f32; rw * rh * c];
+    for j in 0..rh {
+        for i in 0..rw {
+            let (bx0, by0) = ((x0 + i) * f, (y0 + j) * f);
+            let (bx1, by1) = ((bx0 + f).min(w), (by0 + f).min(h));
+            let mut sum = [0.0f64; 4];
+            for y in by0..by1 {
+                let Some(row) = image.row(y) else { continue };
+                for x in bx0..bx1 {
+                    for (k, s) in sum.iter_mut().enumerate().take(c) {
+                        *s += f64::from(row.get(x * c + k).copied().unwrap_or(0.0));
+                    }
+                }
+            }
+            #[allow(clippy::cast_precision_loss)] // A count of pixels.
+            let n = ((bx1 - bx0) * (by1 - by0)).max(1) as f64;
+            for (k, s) in sum.iter().enumerate().take(c) {
+                #[allow(clippy::cast_possible_truncation)] // An average of f32 samples.
+                let v = (s / n) as f32;
+                data[(j * rw + i) * c + k] = v;
+            }
+        }
+    }
+    let region = Image::from_vec(rw.max(1), rh.max(1), c, image.color_space().clone(), if rw * rh == 0 { vec![0.0; c] } else { data })?;
+    Ok((display(&region, None)?, florastack_core::Rect::new(x0, y0, rw, rh)))
+}
+
 /// Converts `image`'s color channels from its profile's primaries to sRGB's, in place; an image without a profile is
 /// sRGB already, and one whose profile can't be converted (a lookup-table profile) is shown as it is.
 fn to_srgb_primaries(image: &mut Image<f32>) {

@@ -54,6 +54,9 @@ pub struct Session {
     /// The depth map's focus statistics that `stack.threshold` measured last, for the next threshold; dropped with the
     /// project.
     pub(crate) focus: Option<crate::commands::threshold::FocusMemo>,
+    /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
+    pub(crate) retouch: Option<crate::retouch::RetouchSession>,
+    pub(crate) retouch_closed: bool,
 }
 
 /// Runs `f`, turning a panic into an error (AGENTS.md, Never crash: a last resort; the project only changes through
@@ -80,6 +83,8 @@ impl Session {
             history_changed: false,
             events: Vec::new(),
             focus: None,
+            retouch: None,
+            retouch_closed: false,
         }
     }
 
@@ -285,10 +290,22 @@ impl Session {
         };
         let path = folder.path().display().to_string();
         self.focus = None;
+        self.close_retouch();
         self.open = Some(Open { folder, project, history: History::new() });
         self.events.push(Event::Project { state: ProjectEvent::Opened, path });
         self.changed(Aspects::ALL);
         cleaned
+    }
+
+    /// Closes the retouch session, its result cached first when it can be.
+    fn close_retouch(&mut self) {
+        if self.retouch.is_some() {
+            if let Err(e) = self.flush_retouch() {
+                tracing::warn!("the retouched result isn't cached: {e}");
+            }
+            self.retouch = None;
+            self.retouch_closed = true;
+        }
     }
 
     /// Closes the open project: refused when it has unsaved changes, unless `discard`. Its jobs are cancelled first,
@@ -306,6 +323,7 @@ impl Session {
         while self.jobs.has_running() {
             self.pump(Some(STOP_POLL));
         }
+        self.close_retouch();
         let Some(open) = self.open.take() else { return Ok(None) };
         self.focus = None;
         let cleaned = if open.folder.is_read_only() {
@@ -328,6 +346,10 @@ impl Session {
 
     /// Saves the open project.
     pub(crate) fn save(&mut self) -> Result<PathBuf, CommandError> {
+        // The retouched result is cached first, so that the project saved refers to it.
+        if let Err(e) = self.flush_retouch() {
+            tracing::warn!("the retouched result isn't cached: {e}");
+        }
         let open = self.writable()?;
         open.folder.save(&mut open.project)?;
         open.history.mark_saved();
@@ -492,6 +514,9 @@ impl Session {
 
     /// The events since the last call: project, change and history events, then job events.
     pub(crate) fn take_events(&mut self) -> Vec<Event> {
+        if self.retouch.is_some() && self.changed.intersects(Aspects::RETOUCH.union(Aspects::OUTPUTS)) {
+            self.sync_retouch();
+        }
         let mut events = std::mem::take(&mut self.events);
         if !self.changed.is_empty() {
             events.push(Event::Changed { revision: self.revision, aspects: self.changed });

@@ -32,11 +32,14 @@ pub enum Action {
     RemoveFrame,
     ToggleTheme,
     Shortcuts,
+    /// The Retouch tab's brush, smaller and larger.
+    BrushSmaller,
+    BrushLarger,
 }
 
 impl Action {
     /// Every action, in the order Help > Shortcuts lists them.
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 27] = [
         Action::New,
         Action::Open,
         Action::AddFrames,
@@ -62,6 +65,8 @@ impl Action {
         Action::RemoveFrame,
         Action::ToggleTheme,
         Action::Shortcuts,
+        Action::BrushSmaller,
+        Action::BrushLarger,
     ];
 
     /// The Fluent key of the action's label.
@@ -92,6 +97,8 @@ impl Action {
             Action::RemoveFrame => "action-remove-frame",
             Action::ToggleTheme => "action-toggle-theme",
             Action::Shortcuts => "action-shortcuts",
+            Action::BrushSmaller => "action-brush-smaller",
+            Action::BrushLarger => "action-brush-larger",
         }
     }
 
@@ -130,6 +137,8 @@ impl Action {
             Action::RemoveFrame => (Modifiers::NONE, Key::Delete),
             Action::ToggleTheme => (cmd_shift, Key::T),
             Action::Shortcuts => (Modifiers::NONE, Key::F1),
+            Action::BrushSmaller => (Modifiers::NONE, Key::OpenBracket),
+            Action::BrushLarger => (Modifiers::NONE, Key::CloseBracket),
         };
         Some(KeyboardShortcut::new(modifiers, key))
     }

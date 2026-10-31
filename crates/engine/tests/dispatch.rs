@@ -166,6 +166,29 @@ fn every_command_dispatches_from_json() {
     let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
     assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth"]));
+    // Retouching: the depth map tells its sharpest frames; the pyramid maps them, takes a frame and the depth map as
+    // sources, and gets a stroke drawn live and committed; closing caches the result, which opening again reads.
+    let (target, other, frame) = (pyramid["output"].clone(), depth["output"].clone(), depth["frames"][0].clone());
+    let opened = calls.run("retouch.open", &format!(r#"{{ "output": {other} }}"#));
+    assert_eq!((&opened["rendered"], &opened["sharpest"]), (&json!("none"), &json!(true)), "{opened}");
+    assert!(calls.run("retouch.sharpest", r#"{ "x": 40, "y": 30 }"#)["frame"].is_u64());
+    assert_eq!(calls.run("retouch.open", &format!(r#"{{ "output": {target} }}"#))["sharpest"], false);
+    assert_eq!(calls.run("retouch.mapFocus", "{}")["frames"], 6);
+    assert!(calls.run("retouch.sharpest", r#"{ "x": 40, "y": 30 }"#)["frame"].is_u64());
+    assert_eq!(calls.run("retouch.setSource", &format!(r#"{{ "frame": {frame} }}"#))["loaded"], "decoded");
+    assert_eq!(calls.run("retouch.setSource", &format!(r#"{{ "output": {other} }}"#))["loaded"], "cache");
+    let stroke = format!(
+        r#"{{ "brush": "details", "source": {{ "output": {other} }}, "size": 12, "hardness": 0.5, "opacity": 1, "samples": [[20, 20, 1], [60, 40, 1]] }}"#
+    );
+    assert!(calls.run("retouch.paint", &format!(r#"{{ "begin": true, "stroke": {stroke} }}"#))["region"].is_array());
+    assert_eq!(calls.run("retouch.stroke", &format!(r#"{{ "stroke": {stroke} }}"#))["strokes"], 1);
+    assert_eq!(calls.run("retouch.cancelPaint", "{}")["cancelled"], false);
+    let layer = calls.run("retouch.addLayer", &format!(r#"{{ "output": {target}, "name": "Bristles" }}"#))["layer"].clone();
+    calls.run("retouch.setLayerVisible", &format!(r#"{{ "output": {target}, "layer": {layer}, "visible": false }}"#));
+    calls.run("retouch.removeLayer", &format!(r#"{{ "output": {target}, "layer": {layer} }}"#));
+    assert_eq!(calls.run("retouch.close", "{}")["closed"], true);
+    assert_eq!(calls.run("retouch.open", &format!(r#"{{ "output": {target} }}"#))["rendered"], "cached", "no recomputation");
+    calls.run("retouch.close", "{}");
     // In slabs: three slabs of three frames, sharing one, stacked by pyramid, then by weighted average; each slab is
     // an output of its own, and the final output is made from them.
     let slabbed = calls.run("stack.slabbed", r#"{ "slabSize": 3, "overlap": 1, "final": { "method": "average" } }"#);

@@ -17,6 +17,9 @@
 //!   weighted average, the pyramid method and the depth-map method into new outputs (`stack.average`,
 //!   `stack.pyramid`, `stack.depthMap`, jobs) and a quarter-scale preview of any of them (`stack.preview`, a preview
 //!   job);
+//! - [`retouch`]: retouching an output (`retouch.open` and `retouch.mapFocus`, jobs, `retouch.setSource`, a preview
+//!   job, `retouch.sharpest`, `retouch.paint`, `retouch.cancelPaint`, `retouch.stroke`, `retouch.close`, and the
+//!   output's layers, `retouch.addLayer`, `retouch.removeLayer`, `retouch.setLayerVisible`);
 //! - [`threshold`]: the depth map's contrast threshold shown live before it is used (`stack.threshold`, a preview job);
 //! - [`slab`]: stacking in overlapping slabs by one method, then the slabs by another (`stack.slabbed`, a job);
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
@@ -48,6 +51,7 @@ pub mod job;
 pub mod output;
 pub mod preset;
 pub mod project;
+pub mod retouch;
 pub mod slab;
 pub mod split;
 pub mod stack;
@@ -72,6 +76,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(defects::specs());
     all.extend(stack::specs());
     all.extend(threshold::specs());
+    all.extend(retouch::specs());
     all.extend(slab::specs());
     all.extend(preset::specs());
     all.extend(output::specs());

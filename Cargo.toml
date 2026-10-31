@@ -194,6 +194,10 @@ opt-level = 2
 [profile.dev.package.florastack-stack]
 opt-level = 2
 
+# Retouching's brushes: every pixel a stroke reaches, and replay over the regions an undo uncovers.
+[profile.dev.package.florastack-retouch]
+opt-level = 2
+
 # The GPU stackers' host side: blocks of frames copied for upload, tiles read back and stitched.
 [profile.dev.package.florastack-gpu]
 opt-level = 2

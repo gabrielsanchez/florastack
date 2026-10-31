@@ -31,6 +31,7 @@ pub mod history;
 pub mod jobs;
 pub mod project;
 pub mod registry;
+pub mod retouch;
 pub mod schema;
 pub mod session;
 pub mod view;
@@ -46,6 +47,8 @@ pub use jobs::{
 pub use jobs::{SystemClock, ThreadExecutor};
 pub use registry::{CommandInfo, CommandSpec, Effects, Kind, Meta, NoParams, Params, Registry, RegistryBuilder, RegistryError, Requires};
 pub use session::Session;
+// Retouching's records, which the retouch commands take.
+pub use florastack_retouch::{Brush, Source as RetouchSource, Stroke};
 
 /// JSON values, which commands take and return.
 pub use serde_json::{Value, json};

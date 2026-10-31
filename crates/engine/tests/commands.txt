@@ -46,6 +46,17 @@ project.save
 project.saveAs
 project.setFramesEnabled
 project.trashOrphans
+retouch.addLayer
+retouch.cancelPaint
+retouch.close
+retouch.mapFocus
+retouch.open
+retouch.paint
+retouch.removeLayer
+retouch.setLayerVisible
+retouch.setSource
+retouch.sharpest
+retouch.stroke
 stack.average
 stack.depthMap
 stack.get
