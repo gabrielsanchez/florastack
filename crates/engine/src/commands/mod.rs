@@ -45,6 +45,7 @@ pub mod compute;
 pub mod defects;
 pub mod develop;
 pub mod edit;
+pub mod export;
 pub mod filmstrip;
 pub mod frames;
 pub mod job;
@@ -77,6 +78,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(stack::specs());
     all.extend(threshold::specs());
     all.extend(retouch::specs());
+    all.extend(export::specs());
     all.extend(slab::specs());
     all.extend(preset::specs());
     all.extend(output::specs());

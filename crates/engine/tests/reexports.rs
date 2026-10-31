@@ -63,6 +63,7 @@ fn an_app_finds_what_it_needs_in_the_engine() {
         max_heavy_jobs: 1,
         max_preview_jobs: 1,
         compute: florastack_engine::Compute { device: florastack_engine::Device::Cpu, ..florastack_engine::Compute::default() },
+        tiling: florastack_engine::Tiling::default(),
     };
     let engine = Engine::with_registry(config, Registry::standard());
     assert!(engine.registry().get("project.new").is_some());

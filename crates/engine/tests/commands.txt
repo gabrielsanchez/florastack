@@ -5,9 +5,12 @@ align.run
 align.set
 align.sortByScale
 batch.run
+cache.info
 cache.removeAbandoned
+cache.setFolder
 compute.info
 compute.set
+compute.test
 defects.clear
 defects.detect
 defects.export
@@ -19,6 +22,11 @@ develop.set
 edit.history
 edit.redo
 edit.undo
+export.estimate
+export.get
+export.reset
+export.run
+export.set
 filmstrip.list
 filmstrip.update
 job.cancel
@@ -28,6 +36,7 @@ output.remove
 output.rename
 output.save
 preset.apply
+preset.list
 preset.read
 preset.save
 project.addFrames

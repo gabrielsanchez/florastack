@@ -4,13 +4,14 @@
 //! At startup it removes the tile folders crashed runs left (`cache.removeAbandoned`) and offers to move old
 //! temporary projects to the trash (`project.findOrphans`, `project.trashOrphans`). When a project opens it checks
 //! its frames' files (`project.checkFrames`). It saves on its own a while after the first unsaved change
-//! ([`crate::files::Autosave`]), and remembers the recent projects, the theme and the tab ([`crate::prefs`]).
+//! ([`crate::files::Autosave`]), and remembers the recent projects, the theme and the tab ([`crate::prefs`]), and the
+//! Preferences dialog's settings, which it hands to the engine again at startup ([`crate::preferences`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use florastack_engine::{Compute, EngineConfig, Format, Value, branding, json};
+use florastack_engine::{Compute, EngineConfig, Tiling, Value, branding, json};
 
 use crate::actions::Action;
 use crate::files::{Autosave, Dropped, paths_from_text};
@@ -34,10 +35,16 @@ pub struct Options {
 
 impl Options {
     /// The desktop app's defaults: temporary projects in the app's local data folder ([`local_data`]), the GPU when
-    /// it passes its self-test.
+    /// it passes its self-test, and the memory budget suggested for the memory installed (a quarter of it).
     pub fn standard(files: Vec<PathBuf>) -> Options {
         let data = local_data().unwrap_or_else(|| std::env::temp_dir().join(branding::APP_ID));
-        let engine = EngineConfig { temporary_projects: Some(data.join("projects")), compute: Compute::default(), ..EngineConfig::default() };
+        let budget = florastack_engine::compute::suggested_budget(florastack_engine::compute::installed_memory());
+        let engine = EngineConfig {
+            temporary_projects: Some(data.join("projects")),
+            compute: Compute::default(),
+            tiling: Tiling { budget, ..Tiling::default() },
+            ..EngineConfig::default()
+        };
         Options { engine, files }
     }
 }
@@ -96,6 +103,11 @@ pub enum Dialog {
     Stacks {
         stacks: Vec<Vec<PathBuf>>,
     },
+    /// Which of a preset's groups to apply.
+    ApplyPreset(crate::presets::Applying),
+    /// Which of the project's settings to save as a preset.
+    SavePreset(crate::presets::Saving),
+    Preferences(Box<crate::preferences::Form>),
 }
 
 /// What waits for unsaved changes to be dealt with.
@@ -146,15 +158,18 @@ pub struct FloraStackApp {
     pub preview_method: &'static str,
     /// The Retouch tab's brush, view and stroke being drawn.
     pub retouch: crate::retouch_tab::RetouchUi,
-    autosave: Autosave,
+    /// The Export tab's estimate and template being typed.
+    pub export: crate::export_tab::ExportUi,
+    /// The built-in presets (`preset.list`), once asked.
+    pub(crate) built_in: Option<Vec<Value>>,
+    /// When to save on its own; `None` when autosave is off.
+    autosave: Option<Autosave>,
     /// The project the frames were checked for.
     checked: Option<PathBuf>,
     /// Whether the app may quit: unsaved changes were dealt with.
     quitting: bool,
     /// The project path last seen, to notice openings.
     last_project: Option<PathBuf>,
-    /// The format the Export tab writes.
-    pub export_format: Format,
     pub batch: BatchForm,
     /// Whether the viewer switches to the next preview when it comes in: one was asked for since the user last
     /// picked something else.
@@ -162,7 +177,7 @@ pub struct FloraStackApp {
     /// The preview file shown last.
     shown_preview: Option<PathBuf>,
     /// The folder of temporary projects, which the recent projects leave out.
-    temporary: Option<PathBuf>,
+    pub(crate) temporary: Option<PathBuf>,
 }
 
 impl FloraStackApp {
@@ -202,21 +217,56 @@ impl FloraStackApp {
             shown_threshold: None,
             preview_method: "pyramid",
             retouch: crate::retouch_tab::RetouchUi::default(),
-            autosave: Autosave::new(Autosave::DEFAULT_INTERVAL),
+            export: crate::export_tab::ExportUi::default(),
+            built_in: None,
+            autosave: None,
             checked: None,
             quitting: false,
             last_project: None,
-            export_format: Format::Tiff,
             batch: BatchForm::default(),
             follow_preview: false,
             shown_preview: None,
             temporary,
         };
+        app.set_autosave();
+        app.apply_saved();
         app.startup();
         if !options.files.is_empty() {
             app.dropped(options.files);
         }
         app
+    }
+
+    /// Hands the machine's settings the preferences remember to the engine: the device, the memory budget and the
+    /// cache folder, each only when one is set.
+    fn apply_saved(&mut self) {
+        let mut compute = serde_json::Map::new();
+        if let Some(device) = self.prefs.device {
+            compute.insert("device".to_owned(), json!(device));
+        }
+        if let Some(mb) = self.prefs.memory_mb {
+            compute.insert("memoryMb".to_owned(), json!(mb));
+        }
+        if !compute.is_empty() {
+            self.shell.run("compute.set", Value::Object(compute));
+        }
+        if let Some(folder) = self.prefs.cache_folder.clone() {
+            self.set_cache_folder(&folder);
+        }
+    }
+
+    /// Puts temporary projects and spilled tiles in `folder` (`cache.setFolder`); whether it could.
+    pub(crate) fn set_cache_folder(&mut self, folder: &std::path::Path) -> bool {
+        let set = self.shell.run("cache.setFolder", json!({ "folder": folder })).is_some();
+        if set {
+            self.temporary = Some(folder.join("projects"));
+        }
+        set
+    }
+
+    /// Autosave as the preferences say.
+    pub(crate) fn set_autosave(&mut self) {
+        self.autosave = self.prefs.autosave().map(Autosave::new);
     }
 
     /// The startup cleanup: abandoned tile folders, and old temporary projects offered for the trash.
@@ -308,6 +358,7 @@ impl FloraStackApp {
                 apply_theme(ctx, self.prefs.theme);
             }
             Action::Shortcuts => self.dialog = Some(Dialog::Shortcuts),
+            Action::Preferences => self.open_preferences(),
             Action::BrushSmaller => self.retouch.resize_brush(1.0 / 1.25),
             Action::BrushLarger => self.retouch.resize_brush(1.25),
         }
@@ -322,7 +373,7 @@ impl FloraStackApp {
         }
     }
 
-    fn remember_folder(&mut self, path: &std::path::Path) {
+    pub(crate) fn remember_folder(&mut self, path: &std::path::Path) {
         let folder = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
         self.prefs.last_folder = Some(folder.to_path_buf());
     }
@@ -562,6 +613,7 @@ impl FloraStackApp {
             }
         }
         self.found_stacks();
+        self.exported();
         if let Some(output) = self.shell.made.take() {
             self.select(Selection::Output(output));
         }
@@ -633,12 +685,27 @@ impl FloraStackApp {
             }
             ctx.request_repaint_after(film.next.saturating_duration_since(now));
         }
-        let writable = self.shell.engine().project().is_some();
-        if writable && self.autosave.due(Instant::now(), self.shell.engine().is_dirty(), self.shell.busy()) {
-            self.shell.run("project.save", json!({}));
-        }
+        self.autosave_if_due();
         if self.shell.busy() || self.loading.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// Saves the project when autosave says it is time.
+    fn autosave_if_due(&mut self) {
+        let (dirty, busy) = (self.shell.engine().is_dirty(), self.shell.busy());
+        let writable = self.shell.engine().project().is_some();
+        if writable && self.autosave.as_mut().is_some_and(|a| a.due(Instant::now(), dirty, busy)) {
+            self.shell.run("project.save", json!({}));
+        }
+    }
+
+    /// What an `export.run` job just wrote, told.
+    fn exported(&mut self) {
+        if let Some(exported) = self.shell.exported.take() {
+            let files = exported["files"].as_array().map_or(0, Vec::len);
+            let folder = exported["files"][0]["path"].as_str().and_then(|p| std::path::Path::new(p).parent()).map(|p| p.display().to_string());
+            self.shell.notify(tr_args("notice-exported", &[("count", files.into()), ("folder", folder.unwrap_or_default().into())]), false);
         }
     }
 
@@ -730,7 +797,7 @@ impl FloraStackApp {
 }
 
 /// Applies `theme` to the UI.
-fn apply_theme(ctx: &egui::Context, theme: Theme) {
+pub(crate) fn apply_theme(ctx: &egui::Context, theme: Theme) {
     ctx.set_theme(match theme {
         Theme::Dark => egui::Theme::Dark,
         Theme::Light => egui::Theme::Light,

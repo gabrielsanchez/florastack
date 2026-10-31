@@ -76,10 +76,24 @@ fn every_command_dispatches_from_json() {
     let info = calls.run("compute.info", "{}");
     assert_eq!((&info["preference"], &info["device"]), (&json!("cpu"), &json!("cpu")), "{info}");
     assert!(info["reason"].as_str().unwrap().contains("`cpu`"), "{info}");
-    let set = calls.run("compute.set", r#"{ "budgetMb": 512 }"#);
-    assert_eq!((&set["preference"], &set["budgetMb"]), (&json!("cpu"), &json!(512)), "{set}");
+    let set = calls.run("compute.set", r#"{ "budgetMb": 512, "memoryMb": 768 }"#);
+    assert_eq!((&set["preference"], &set["budgetMb"], &set["memory"]["budgetMb"]), (&json!("cpu"), &json!(512), &json!(768)), "{set}");
+    // The GPU's self-test, on demand: with the preference `cpu`, it tests `auto`, and the preference stays.
+    let tested = calls.run("compute.test", "{}");
+    assert_eq!(tested["preference"], "auto", "{tested}");
+    assert!(tested["device"] == "gpu" || tested["reason"].is_string(), "{tested}");
+    assert_eq!(calls.run("compute.info", "{}")["preference"], "cpu");
     assert_eq!(calls.run("project.checkFrames", "{}")["frames"], json!([]), "every frame's file is the one added");
     assert!(calls.run("cache.removeAbandoned", "{}")["removed"].is_array());
+    let caches = calls.run("cache.info", "{}");
+    assert!(caches["project"]["bytes"].is_u64() && caches["tiles"]["folder"].is_string(), "{caches}");
+    // Presets shipped with FloraStack, applied by id.
+    let built_in = calls.run("preset.list", "{}");
+    assert_eq!(built_in["presets"].as_array().unwrap().len(), 4, "{built_in}");
+    assert_eq!(built_in["presets"][0]["id"], "insect-macro");
+    let applied = calls.run("preset.apply", r#"{ "builtin": "landscape", "groups": ["output"] }"#);
+    assert_eq!(applied["groups"], json!(["output"]), "{applied}");
+    calls.run("edit.undo", "{}");
     // Saved in another folder, a named project is copied there and stays open in the copy.
     let saved = calls.run("project.saveAs", &format!(r#"{{ "folder": {} }}"#, quoted(&dir.path().join("saved"))));
     assert_eq!(saved["moved"], false, "{saved}");
@@ -166,6 +180,23 @@ fn every_command_dispatches_from_json() {
     let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
     assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth"]));
+    // Exporting the depth map's output: its settings, an estimate of what it writes, then the files, with the maps
+    // and the aligned frames alongside.
+    assert_eq!(calls.run("export.get", "{}")["settings"]["format"], "tiff");
+    let set = calls.run(
+        "export.set",
+        r#"{ "depth": "u8", "tiff_compression": "none", "template": "{name} {method}", "depth_map": true, "confidence_map": true, "aligned_frames": true }"#,
+    );
+    assert_eq!((&set["settings"]["depth"], &set["settings"]["metadata"]), (&json!("u8"), &json!(true)), "{set}");
+    let estimate = calls.run("export.estimate", &format!(r#"{{ "output": {} }}"#, depth["output"]));
+    assert_eq!((&estimate["files"], &estimate["name"]), (&json!(9), &json!("Depth map depth-map.tif")), "{estimate}");
+    let exported = calls.run("export.run", &format!(r#"{{ "output": {}, "folder": {} }}"#, depth["output"], quoted(&dir.path().join("exported"))));
+    let files = exported["files"].as_array().unwrap();
+    assert_eq!(files.len(), 9, "{exported}");
+    let written: u64 = files.iter().map(|f| f["bytes"].as_u64().unwrap()).sum();
+    let estimated = estimate["bytes"].as_u64().unwrap();
+    assert!(written.abs_diff(estimated) * 5 < written, "estimated {estimated} bytes, wrote {written}");
+    assert_eq!(calls.run("export.reset", "{}")["settings"]["depth"], "u16");
     // Retouching: the depth map tells its sharpest frames; the pyramid maps them, takes a frame and the depth map as
     // sources, and gets a stroke drawn live and committed; closing caches the result, which opening again reads.
     let (target, other, frame) = (pyramid["output"].clone(), depth["output"].clone(), depth["frames"][0].clone());
@@ -200,6 +231,11 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("stack.reset", "{}")["settings"]["average"]["smoothing"], 8.0);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);
+
+    // A cache folder: temporary projects and spilled tiles go there from now on.
+    let cache = calls.run("cache.setFolder", &format!(r#"{{ "folder": {} }}"#, quoted(&dir.path().join("cache"))));
+    assert!(cache["temporaryProjects"]["folder"].as_str().unwrap().ends_with("projects"), "{cache}");
+    assert!(dir.path().join("cache").join("tiles").is_dir());
 
     // Batch and watch also dispatch from JSON; each owns its project, independently of this session.
     let preset = dir.path().join("batch.toml");
@@ -325,13 +361,25 @@ fn presets_are_checked_group_by_group() {
     let mut engine = Engine::new(config(dir.path()));
     run(&mut engine, "project.new", &format!(r#"{{ "name": "Presets", "folder": {} }}"#, quoted(dir.path())));
     let preset = dir.path().join("rail.toml");
-    std::fs::write(&preset, "[preset]\nname = \"Rail\"\n\n[develop]\nexposure = 0.5\n\n[output]\nformat = \"tiff\"\n").unwrap();
+    std::fs::write(&preset, "[preset]\nname = \"Rail\"\n\n[develop]\nexposure = 0.5\n\n[output]\nformat = \"jpeg\"\ndepth = \"u16\"\n").unwrap();
     let e = engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err();
     assert_eq!(e.code(), "params");
-    assert!(e.info().message.contains("`output` can't be checked"), "{}", e.info().message);
+    assert!(e.info().message.contains("output"), "a 16-bit JPEG: {}", e.info().message);
     assert!(engine.project().unwrap().preferences.is_empty(), "nothing applied");
     let applied = run(&mut engine, "preset.apply", &format!(r#"{{ "path": {}, "groups": ["develop"] }}"#, quoted(&preset)));
     assert_eq!(applied, json!({ "name": "Rail", "groups": ["develop"] }));
+    // The output group is checked with the export's settings.
+    std::fs::write(&preset, "[output]\nformat = \"png\"\ndepth = \"u16\"\ntemplate = \"{project}\"\n").unwrap();
+    assert_eq!(run(&mut engine, "preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset)))["groups"], json!(["output"]));
+    assert_eq!(run(&mut engine, "export.get", "{}")["settings"]["format"], "png");
+    std::fs::write(&preset, "[output]\ntemplate = \"{nmae}\"\n").unwrap();
+    assert_eq!(
+        engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err().code(),
+        "params",
+        "an unknown token"
+    );
+    std::fs::write(&preset, "[output]\nfromat = \"png\"\n").unwrap();
+    assert!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).is_err(), "a misspelled key");
     // The align group is checked with florastack-align's settings.
     std::fs::write(&preset, "[align]\nrotation = false\nmax_shift = 2.5\n").unwrap();
     assert_eq!(run(&mut engine, "preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))), json!({ "name": null, "groups": ["align"] }));

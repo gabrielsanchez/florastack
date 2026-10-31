@@ -1,0 +1,32 @@
+# A built-in preset (florastack-engine's `preset.list`): insects and other small living subjects.
+[preset]
+name = "Insect macro"
+description = "Insects and other small subjects, handheld or on a rail: every alignment correction, refined against the master frame, with frames whose subject moved flagged; the pyramid's fine detail held within the frames' range against halos; a 16-bit TIFF in the camera's colors with its metadata."
+
+[align]
+shift_x = true
+shift_y = true
+scale = true
+rotation = true
+brightness = true
+refine = true
+framing = "narrow"
+min_motion = 1.5
+
+[stack.pyramid]
+grit = 0.5
+range_limit = 1.0
+tone = "compress"
+
+[stack.depth_map]
+radius = 2.0
+smoothing = 8.0
+threshold = "auto"
+
+[output]
+format = "tiff"
+depth = "u16"
+tiff_compression = "deflate"
+profile = "input"
+metadata = true
+template = "{project} {name}"

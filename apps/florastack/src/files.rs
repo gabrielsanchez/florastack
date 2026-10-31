@@ -80,9 +80,6 @@ pub struct Autosave {
 }
 
 impl Autosave {
-    /// Two minutes, a few steps' work at most.
-    pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(120);
-
     pub fn new(interval: Duration) -> Autosave {
         Autosave { interval, since: None }
     }

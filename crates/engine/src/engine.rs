@@ -40,6 +40,9 @@ pub struct EngineConfig {
     pub max_preview_jobs: usize,
     /// Which device stacks, and the GPU's memory budget (`compute.set` changes it; [`crate::compute`]).
     pub compute: Compute,
+    /// How stacks keep their working data on the host: the memory budget (1 GiB by default, whatever the machine,
+    /// so that measurements don't depend on it; apps set the one `compute.info` suggests) and the tile folder.
+    pub tiling: florastack_stack::Tiling,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,6 +59,7 @@ impl Default for EngineConfig {
             max_heavy_jobs: 1,
             max_preview_jobs: 2,
             compute: Compute::default(),
+            tiling: florastack_stack::Tiling::default(),
         }
     }
 }
@@ -102,7 +106,7 @@ impl Engine {
     /// An engine with the commands of `registry` (the standard ones and a test's, say).
     pub fn with_registry(config: EngineConfig, registry: Arc<Registry>) -> Engine {
         let jobs = Jobs::new(config.executor, config.clock, config.waker, config.max_heavy_jobs, config.max_preview_jobs);
-        let host = Host { temporary_projects: config.temporary_projects, trash: config.trash, compute: config.compute };
+        let host = Host { temporary_projects: config.temporary_projects, trash: config.trash, compute: config.compute, tiling: config.tiling };
         Engine { registry, session: Session::new(host, jobs), subscribers: Vec::new() }
     }
 

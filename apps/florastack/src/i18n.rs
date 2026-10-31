@@ -16,6 +16,9 @@ use unic_langid::langid;
 /// The English strings, compiled in.
 pub(crate) const EN_US: &str = include_str!("../locales/en-US/florastack.ftl");
 
+/// The languages the app has strings for: each one's tag and its name in itself, as the Preferences dialog lists them.
+pub const LANGUAGES: [(&str, &str); 1] = [("en-US", "English")];
+
 fn bundle() -> &'static FluentBundle<FluentResource> {
     static BUNDLE: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
     BUNDLE.get_or_init(|| {
@@ -118,7 +121,21 @@ mod tests {
     /// The string literals that name a key by its prefix: the settings' labels and tooltips, which pass through helpers
     /// on their way to `tr`.
     fn prefixed(sources: &[String]) -> BTreeSet<String> {
-        const PREFIXES: [&str; 7] = ["tip-", "setting-", "align-", "framing-", "tone-", "decisions-", "brush-"];
+        const PREFIXES: [&str; 13] = [
+            "tip-",
+            "setting-",
+            "align-",
+            "framing-",
+            "tone-",
+            "decisions-",
+            "brush-",
+            "export-",
+            "prefs-",
+            "preset-",
+            "compression-",
+            "subsampling-",
+            "dng-look-",
+        ];
         let key = |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         sources
             .iter()

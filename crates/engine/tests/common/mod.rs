@@ -60,6 +60,7 @@ pub fn config_with(dir: &Path, executor: Arc<dyn Executor>) -> EngineConfig {
         max_preview_jobs: 2,
         // The CPU, whatever the machine has: results and memory the same everywhere. tests/compute.rs stacks on the GPU.
         compute: Compute::CPU,
+        tiling: florastack_engine::Tiling::default(),
     }
 }
 

@@ -32,6 +32,8 @@ half.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 notify.workspace = true
 tempfile.workspace = true
+# The installed memory, for the suggested memory budget (`compute.info`).
+sysinfo.workspace = true
 
 [dev-dependencies]
 florastack-testkit.workspace = true

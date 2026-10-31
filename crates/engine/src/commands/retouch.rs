@@ -8,7 +8,7 @@ use florastack_core::{AnyImage, Image, Monitor};
 use florastack_project::{Area, CacheRef, Edit, FrameId, LayerId, OutputId};
 use florastack_raw::Quality;
 use florastack_retouch::{Fields, LiveStroke, Painted, Source, Stroke, union};
-use florastack_stack::{PREVIEW_FACTOR, StackShape, Tiling};
+use florastack_stack::{PREVIEW_FACTOR, StackShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -419,7 +419,7 @@ fn map_focus(session: &Session, _: NoParams) -> Result<JobPlan<Mapped>, CommandE
         let n = plan.frames.len();
         let mut units = Units::new(n);
         let reduced = depth.reduced(PREVIEW_FACTOR as f64);
-        let mut estimator = reduced.estimator(&Tiling::default())?;
+        let mut estimator = reduced.estimator(&plan.tiling)?;
         let mut feed = Warping { plan: &mut plan, range: 0..n, reduced: true };
         each(&mut feed, ctx, &mut units, |loaded, progress, first| {
             loaded.source(|source| {

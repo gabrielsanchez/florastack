@@ -22,6 +22,8 @@ pub(crate) struct Host {
     pub(crate) trash: Arc<dyn Trash + Send + Sync>,
     /// Which device stacks.
     pub(crate) compute: Compute,
+    /// How stacks keep their working data: the memory they may take, and where tiles beyond it go.
+    pub(crate) tiling: florastack_stack::Tiling,
 }
 
 /// An open project.
@@ -143,6 +145,21 @@ impl Session {
     /// Changes the compute preference, for the jobs planned from now on.
     pub(crate) fn set_compute(&mut self, compute: Compute) {
         self.host.compute = compute;
+    }
+
+    /// How stacks keep their working data: the memory budget and the tile folder.
+    pub fn tiling(&self) -> florastack_stack::Tiling {
+        self.host.tiling.clone()
+    }
+
+    /// Changes how stacks keep their working data, for the jobs planned from now on.
+    pub(crate) fn set_tiling(&mut self, tiling: florastack_stack::Tiling) {
+        self.host.tiling = tiling;
+    }
+
+    /// Changes the folder of temporary projects (where orphan cleanup looks, too), for projects made from now on.
+    pub(crate) fn set_temporary_projects(&mut self, folder: PathBuf) {
+        self.host.temporary_projects = Some(folder);
     }
 
     pub fn is_dirty(&self) -> bool {

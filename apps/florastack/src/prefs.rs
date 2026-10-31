@@ -1,9 +1,12 @@
 //! What the app remembers between runs ([`Prefs`]): the theme, the recent projects, the folders last used, the tab
-//! and the method chosen. eframe keeps them with the window's size and place and the panels' widths (its
-//! `persistence`), in the app's storage folder.
+//! and the method chosen, and the Preferences dialog's settings (the memory budget, the compute device, the cache
+//! folder, the autosave interval, the language). eframe keeps them with the window's size and place and the panels'
+//! widths (its `persistence`), in the app's storage folder, on this machine only.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use florastack_engine::Device;
 use serde::{Deserialize, Serialize};
 
 /// The key the preferences are stored under.
@@ -117,7 +120,20 @@ pub struct Prefs {
     /// Whether the filmstrip plays the frames as shot rather than aligned onto the output's canvas.
     pub film_as_shot: bool,
     pub compare: Compare,
+    /// The memory stacking may use, in MiB; `None` for the budget suggested for this machine's memory.
+    pub memory_mb: Option<u32>,
+    /// The compute device; `None` for the engine's default, `auto`.
+    pub device: Option<Device>,
+    /// The cache folder: temporary projects and spilled tiles; `None` for the app's local data folder.
+    pub cache_folder: Option<PathBuf>,
+    /// Minutes between a project's first unsaved change and its autosave, 0 for none; `None` for the default.
+    pub autosave_minutes: Option<u32>,
+    /// The UI's language (`en-US`); `None` for the first the app has.
+    pub language: Option<String>,
 }
+
+/// The autosave interval when none is set: two minutes, a few steps' work at most.
+pub const DEFAULT_AUTOSAVE_MINUTES: u32 = 2;
 
 impl Prefs {
     /// The preferences eframe stored, or the defaults.
@@ -141,6 +157,12 @@ impl Prefs {
     /// Drops the recent projects whose folder is gone.
     pub fn forget_missing(&mut self) {
         self.recent.retain(|p| p.is_dir());
+    }
+
+    /// How long after a project's first unsaved change it is saved; `None` for never.
+    pub fn autosave(&self) -> Option<Duration> {
+        let minutes = self.autosave_minutes.unwrap_or(DEFAULT_AUTOSAVE_MINUTES);
+        (minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60))
     }
 }
 
@@ -169,5 +191,14 @@ mod tests {
         assert_eq!(serde_json::from_str::<Prefs>(&text).unwrap(), prefs);
         let partial: Prefs = serde_json::from_str(r#"{ "theme": "light", "future": 1 }"#).unwrap();
         assert_eq!(partial.theme, Theme::Light);
+        let machine = Prefs { memory_mb: Some(2048), device: Some(Device::Cpu), autosave_minutes: Some(0), ..Prefs::default() };
+        assert_eq!(serde_json::from_str::<Prefs>(&serde_json::to_string(&machine).unwrap()).unwrap(), machine);
+    }
+
+    #[test]
+    fn autosave_defaults_to_two_minutes_and_zero_turns_it_off() {
+        assert_eq!(Prefs::default().autosave(), Some(Duration::from_secs(120)));
+        assert_eq!(Prefs { autosave_minutes: Some(5), ..Prefs::default() }.autosave(), Some(Duration::from_secs(300)));
+        assert_eq!(Prefs { autosave_minutes: Some(0), ..Prefs::default() }.autosave(), None);
     }
 }

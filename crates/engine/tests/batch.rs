@@ -200,3 +200,42 @@ fn output_cannot_feed_back_into_the_capture() {
     let error = engine.run("watch.run", json!({"input": input, "output": input.join("out"), "preset": preset(dir.path())})).unwrap_err();
     assert!(error.info().message.contains("outside"));
 }
+
+#[test]
+fn a_batch_takes_a_built_in_preset_and_exports_as_a_preset_says() {
+    let dir = common::TempDir::new("batch-presets");
+    let input = dir.path().join("input");
+    common::synthetic_frames(&input, "moth", 80, 64, &common::breathing(3, 0.005, None, 4));
+    let mut engine = Engine::new(common::config(dir.path()));
+    // A built-in preset, by its id: its output settings make a 16-bit ProPhoto TIFF.
+    let result = engine.run("batch.run", json!({"input": input, "output": dir.path().join("built-in"), "preset": "builtin:landscape"})).unwrap();
+    assert_eq!(result["failed"], 0, "{result}");
+    let output = Path::new(result["stacks"][0]["output"].as_str().unwrap());
+    let decoded = florastack_codecs::read_file(output, &ReadOptions::default()).unwrap();
+    assert_eq!(decoded.info.bits_per_sample, 16);
+    assert_eq!(decoded.profile.unwrap().named, Some(florastack_codecs::NamedSpace::ProPhoto));
+    engine.run("project.open", json!({"path": result["stacks"][0]["project"]})).unwrap();
+    assert_eq!(engine.run("stack.get", json!({})).unwrap()["settings"]["depth_map"]["percentile"], 40.0);
+    engine.run("project.close", json!({"discardChanges": true})).unwrap();
+    // A file whose output is an 8-bit PNG with the depth map alongside: the template's extension gives way.
+    let preset = dir.path().join("png.toml");
+    std::fs::write(&preset, "[output]\nformat = 'png'\ndepth = 'u8'\ndepth_map = true\n").unwrap();
+    let result = engine
+        .run(
+            "batch.run",
+            json!({"input": input, "output": dir.path().join("png"), "preset": preset, "method": "depth-map", "template": "{stack}-{method}.tif"}),
+        )
+        .unwrap();
+    assert_eq!(result["failed"], 0, "{result}");
+    let output = Path::new(result["stacks"][0]["output"].as_str().unwrap());
+    assert_eq!(output.file_name().unwrap().to_string_lossy(), "moth-depth-map.png");
+    assert_eq!(florastack_codecs::read_file(output, &ReadOptions::default()).unwrap().info.bits_per_sample, 8);
+    assert!(output.with_file_name("moth-depth-map-depth.tif").is_file(), "the depth map is published with it");
+    assert_eq!(
+        engine
+            .dispatch_json("batch.run", &json!({"input": input, "output": dir.path().join("x"), "preset": "builtin:nope"}).to_string())
+            .unwrap_err()
+            .code(),
+        "params"
+    );
+}

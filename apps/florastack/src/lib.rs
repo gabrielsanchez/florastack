@@ -8,12 +8,15 @@
 
 pub mod actions;
 pub mod app;
+pub mod export_tab;
 pub mod files;
 pub mod i18n;
 pub mod loader;
 pub mod palette;
 pub mod panels;
+pub mod preferences;
 pub mod prefs;
+pub mod presets;
 pub mod retouch_tab;
 pub mod shell;
 pub mod stack_tab;

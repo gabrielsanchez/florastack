@@ -65,6 +65,13 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             params: "{}".into(),
         },
         Case { name: "preset.apply", setup: none(), params: format!(r#"{{ "path": {} }}"#, quoted(&preset)) },
+        Case { name: "preset.apply", setup: none(), params: r#"{ "builtin": "microscope" }"#.into() },
+        Case { name: "export.set", setup: none(), params: r#"{ "format": "png", "depth": "u8", "template": "{project}-{id}" }"#.into() },
+        Case {
+            name: "export.reset",
+            setup: vec![("export.set", r#"{ "format": "jpeg", "depth": "u8" }"#.into()), ("project.save", "{}".into())],
+            params: "{}".into(),
+        },
         Case { name: "align.set", setup: none(), params: r#"{ "framing": "common", "rotation": false }"#.into() },
         Case {
             name: "align.reset",

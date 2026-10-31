@@ -46,6 +46,7 @@ action-previous-frame = Previous frame
 action-remove-frame = Remove frame
 action-toggle-theme = Switch between dark and light
 action-shortcuts = Keyboard shortcuts
+action-preferences = Preferences…
 action-brush-smaller = Smaller brush
 action-brush-larger = Larger brush
 
@@ -67,6 +68,10 @@ job-eta = { $stage }, { $time } left
 notice-dismiss = Dismiss
 notice-saved-as = Saved as { $path }
 notice-no-stacks = No stacks found in that folder.
+notice-exported = Exported { $count ->
+    [one] one file
+   *[other] { $count } files
+} to { $folder }
 device-gpu = GPU: { $name }
 device-cpu = CPU
 
@@ -297,19 +302,151 @@ tip-boost = Shows both images brighter, to work in dark regions. It changes only
 ## Export tab
 
 export-nothing = Stack the frames first: each stack is an output to export.
+export-settings = Export settings
 export-format = Format
+tip-export-format = TIFF for editing; PNG for the web without loss; JPEG for sharing; DNG to develop the stack as a RAW file; OpenEXR for compositing, in 32-bit float.
+export-depth = Bit depth
+tip-export-depth = 16 bits keep smooth gradients through later editing; 8 bits are enough for a final picture; 32-bit float keeps every value, and the extended range.
+export-depth-8 = 8-bit
+export-depth-16 = 16-bit
+export-depth-32 = 32-bit float
+export-compression = Compression
+tip-tiff-compression = Deflate and LZW lose nothing and make smaller files; uncompressed files open in every program.
+tip-exr-compression = ZIP suits most pictures; PIZ suits noisy ones; all of them lose nothing.
+tip-dng-compression = Lossless JPEG makes smaller files that lose nothing.
+compression-none = None
+compression-deflate = Deflate
+compression-lzw = LZW
+compression-zip = ZIP
+compression-zips = ZIP, line by line
+compression-piz = PIZ
+compression-rle = RLE
+compression-lossless-jpeg = Lossless JPEG
+export-exr-half = Half floats
+tip-exr-half = 16-bit floats: half the size, with less precision.
+export-jpeg-quality = Quality
+tip-jpeg-quality = 90 to 95 for a picture to keep, 75 to 85 for the web.
+export-subsampling = Color detail
+tip-jpeg-subsampling = Full color detail (4:4:4) keeps fine colored edges; 4:2:0 makes smaller files.
+subsampling-444 = Full (4:4:4)
+subsampling-422 = Half across (4:2:2)
+subsampling-420 = Quarter (4:2:0)
+export-dng-look = Look
+tip-dng-look = Rendered keeps the colors as the stack has them; raw leaves them to the RAW developer.
+dng-look-rendered = Rendered
+dng-look-raw = Raw
+export-extended-range = Retain extended range
+tip-extended-range = Keeps the stack's values beyond black and white, before they were brought into range, for editing in 32-bit float. Only 32-bit float files can hold them.
+export-profile = Color profile
+export-profile-input = Keep the frames' profile
+tip-profile-input = The profile the frames were shot or exported in, embedded in the file.
+export-profile-srgb = sRGB
+tip-profile-srgb = The web's and most screens' colors: the safest choice for sharing.
+export-profile-pro-photo = Wide gamut (ProPhoto RGB)
+export-profile-rec2020 = Wide gamut (Rec. 2020)
+tip-profile-wide = Keeps saturated colors that sRGB can't hold, for editing; convert to sRGB before sharing.
+export-metadata = Copy metadata from frame
+tip-export-metadata = The camera, lens, exposure, date, place and keywords of the frame, in the file.
+tip-metadata-frame = The frame, counted from 1 in the frame list's order, whose metadata the file gets.
+export-template = File name
+tip-export-template = The file's name without its extension. The tokens below are filled in.
+export-tokens = Tokens: { $tokens }
+export-alongside = Also export
+export-depth-map = Depth map
+tip-export-depth-map = Which frame each point is sharpest in, as a 16-bit gray TIFF beside the output: for masks and 3D.
+export-confidence-map = Confidence map
+tip-export-confidence-map = How sure the depth map is at each point, as a 16-bit gray TIFF beside the output.
+export-maps-none = Only depth-map outputs have a depth map and a confidence map.
+export-aligned-frames = Aligned frames
+tip-export-aligned-frames = Every frame as it was aligned onto the output's canvas, as 16-bit TIFF files in a folder of their own: for retouching in other programs.
 export-pick = Pick an output to export.
-export-save = Save as file…
+export-estimate = { $size } in { $files ->
+    [one] one file
+   *[other] { $files } files
+}
+export-estimate-about = About { $size } in { $files ->
+    [one] one file
+   *[other] { $files } files
+}
+tip-export-estimate = Compressed files' sizes depend on the picture: this is a guess.
+export-overwrite = Replace files that exist
+tip-export-overwrite = Off, an export that would replace a file stops and says which.
+export-run = Export…
+tip-export-run = Writes the output, and what goes with it, into a folder you pick.
 export-remove = Remove output
+
+## Presets
+
+menu-presets = Presets
+presets-built-in = Built-in presets
+presets-apply-file = Apply a preset file…
+presets-save = Save as preset…
+presets-save-title = Save as preset
+preset-apply-title = Apply { $name }
+preset-apply-groups = The settings to take from it:
+preset-apply = Apply
+preset-name = Name
+preset-description = Description
+preset-save-groups = The settings to save:
+preset-complete = Every setting, the defaults too
+tip-preset-complete = On, applying the preset gives these settings whatever the project had. Off, it holds only what you changed, and layers over other settings.
+preset-save = Save…
+preset-group-develop = RAW develop
+preset-group-align = Alignment
+preset-group-stack = Stacking
+preset-group-output = Output
+notice-preset-applied = Applied { $name }.
+notice-preset-saved = Saved the preset as { $path }
+notice-preset-empty = { $name } holds no settings.
 
 ## Batch tab
 
-batch-intro = Stacks every stack in a folder (a folder of stack folders, or one folder of frames to split) into projects and TIFF files, with a summary.
+batch-intro = Stacks every stack in a folder (a folder of stack folders, or one folder of frames to split) into projects and files, as the preset's output settings say, with a summary.
 batch-input = Stacks folder
 batch-output = Results folder
-batch-preset = Preset file
+batch-preset = Preset
+batch-preset-file = A preset file
+batch-preset-path = Preset file
 batch-method = Method: { $method } (as in the Stack tab)
 batch-run = Run batch
+
+## Preferences
+
+prefs-title = Preferences
+prefs-memory = Memory
+prefs-memory-suggested = Use the suggested
+prefs-memory-installed = This computer has { $installed } GB; { $suggested } MiB is suggested.
+prefs-memory-unknown = The memory installed isn't known; { $suggested } MiB is suggested.
+prefs-memory-help = Stacking keeps its work in memory up to this much. Beyond it, the work goes to the cache folder on disk: slower, but large stacks never run out of memory. A quarter of the memory installed leaves the rest for the system and your other programs.
+prefs-compute = Processing
+prefs-device-auto = The GPU when it passes its test, otherwise the CPU
+tip-device-auto = The graphics card stacks when it computes what the CPU does, checked when FloraStack starts.
+prefs-device-cpu = The CPU only
+tip-device-cpu = Never the graphics card: when its driver misbehaves.
+prefs-device-gpu = Any GPU, software ones too
+tip-device-gpu = Software renderers compute correctly, but more slowly than the CPU: for testing.
+prefs-test-gpu = Test the GPU
+tip-test-gpu = Runs the GPU's self-test again, now: after a driver update, say.
+prefs-gpu-passed = The GPU passed: { $name }
+prefs-gpu-unused = The CPU stacks: { $reason }
+prefs-cache = Cache
+prefs-cache-help = Temporary projects and the work beyond the memory above go here. Temporary projects made before stay where they are.
+prefs-cache-projects = Temporary projects
+prefs-cache-tiles = Stacking's work on disk
+prefs-cache-project = The open project's cache
+prefs-cache-clean = Clean up
+tip-cache-clean = Removes what stacks that crashed left on disk.
+prefs-autosave = Autosave
+prefs-minutes = {" "}min
+prefs-autosave-help = after the first unsaved change; 0 for never.
+prefs-appearance = Appearance
+prefs-theme = Theme
+prefs-theme-dark = Dark
+prefs-theme-light = Light
+prefs-language = Language
+prefs-privacy = Privacy
+prefs-no-telemetry = { $name } sends nothing anywhere: no telemetry, no usage statistics, no crash reports, no update checks. Your photos and settings stay on this computer.
+prefs-ok = OK
 
 ## The viewer
 
