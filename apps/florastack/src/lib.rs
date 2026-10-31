@@ -15,6 +15,7 @@ pub mod palette;
 pub mod panels;
 pub mod prefs;
 pub mod shell;
+pub mod stack_tab;
 pub mod viewer;
 
 pub use app::{FloraStackApp, Options};

@@ -150,6 +150,13 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("stack.set", r#"{ "average": { "smoothing": 2.0 } }"#)["settings"]["average"]["smoothing"], 2.0);
     let preview = calls.run("stack.preview", "{}");
     assert!(Path::new(preview["path"].as_str().unwrap()).is_file(), "{preview}");
+    // The depth map's threshold, shown: the first call measures the frames' focus, the next reuses it, and a higher
+    // percentile leaves more of the picture below the threshold; each picture replaces the one before.
+    let first = calls.run("stack.threshold", r#"{ "threshold": "percentile", "percentile": 20 }"#);
+    let second = calls.run("stack.threshold", r#"{ "threshold": "percentile", "percentile": 60 }"#);
+    assert_eq!((&first["measured"], &second["measured"]), (&json!(true), &json!(false)), "{first} {second}");
+    assert!(second["below"].as_f64().unwrap() > first["below"].as_f64().unwrap() + 0.2, "{first} {second}");
+    assert!(Path::new(second["path"].as_str().unwrap()).is_file() && !Path::new(first["path"].as_str().unwrap()).exists());
     let stacked = calls.run("stack.average", r#"{ "name": "Average" }"#);
     assert_eq!((stacked["frames"].as_array().unwrap().len(), &stacked["framing"]), (6, &json!("wide")), "{stacked}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][0]["method"], "average");

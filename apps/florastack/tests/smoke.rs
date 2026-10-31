@@ -5,91 +5,21 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+mod common;
 
+use common::{app, drop_files, frames, until};
 use egui::{Key, Modifiers};
-use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use florastack_app::FloraStackApp;
-use florastack_app::app::{Options, Selection};
-use florastack_app::prefs::Prefs;
-use florastack_engine::{Compute, EngineConfig};
-
-/// A file dropped on the window.
-#[derive(Debug)]
-struct Dropped(PathBuf);
-
-impl egui::DroppedFile for Dropped {
-    fn path(&self) -> &Path {
-        &self.0
-    }
-
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        std::fs::read(&self.0).map_err(|e| e.to_string())
-    }
-}
-
-fn png_file(path: &Path, width: u32, height: u32, pixels: &[u8]) {
-    let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), width, height);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    encoder.write_header().unwrap().write_image_data(pixels).unwrap();
-}
-
-/// Four depth bands with a common low-frequency texture, and fine detail that comes into focus one band at a time
-/// (the CLI's tests' frames).
-fn frames(folder: &Path) -> Vec<PathBuf> {
-    std::fs::create_dir_all(folder).unwrap();
-    (0..4)
-        .map(|focus| {
-            let mut pixels = Vec::new();
-            for y in 0..72_u32 {
-                for x in 0..96_u32 {
-                    let texture = (x * 7 + y * 13 + (x * y) % 29) % 60;
-                    let detail = if x / 24 == focus { (x + y) % 2 * 65 } else { 32 };
-                    let sample = u8::try_from(60 + texture + detail).unwrap();
-                    pixels.extend_from_slice(&[sample, sample.saturating_add(7), sample.saturating_sub(9)]);
-                }
-            }
-            let path = folder.join(format!("focus {focus}.png"));
-            png_file(&path, 96, 72, &pixels);
-            path
-        })
-        .collect()
-}
-
-/// Runs frames until `done` holds, failing after a minute.
-fn until(harness: &mut Harness<'_, FloraStackApp>, what: &str, done: impl Fn(&FloraStackApp) -> bool) {
-    let start = Instant::now();
-    while !done(harness.state()) {
-        let errors: Vec<&str> = harness.state().shell.notices.iter().filter(|n| n.error).map(|n| n.text.as_str()).collect();
-        assert!(errors.is_empty(), "while waiting for {what}: {errors:?}");
-        assert!(start.elapsed() < Duration::from_secs(60), "{what} never happened");
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    harness.step();
-}
+use florastack_app::app::Selection;
 
 #[test]
 fn frames_dropped_aligned_from_the_palette_and_stacked_by_the_button() {
-    let dir = std::env::temp_dir().join(format!("florastack-app-smoke-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let (dir, mut harness) = app("smoke");
     let files = frames(&dir.join("photos"));
-    let engine = EngineConfig { temporary_projects: Some(dir.join("temporary")), compute: Compute::CPU, ..EngineConfig::default() };
-    let options = Options { engine, files: Vec::new() };
-    let mut harness =
-        Harness::builder().with_size([1400.0, 900.0]).build_eframe(|cc| FloraStackApp::with_context(&cc.egui_ctx, options, Prefs::default(), None));
-    harness.step();
     assert!(!harness.state().has_project());
 
     // Dropping the frames makes a temporary project with them, listed by name.
-    for file in &files {
-        harness.input_mut().dropped_files.push(Arc::new(Dropped(file.clone())));
-    }
+    drop_files(&mut harness, &files);
     until(&mut harness, "the frames to be listed", |app| app.shell.frames.len() == 4);
     assert!(harness.state().has_project());
     harness.get_by_label("focus 2.png");
@@ -142,15 +72,9 @@ fn frames_dropped_aligned_from_the_palette_and_stacked_by_the_button() {
 
 #[test]
 fn importing_a_folder_with_one_stack_adds_its_frames() {
-    let dir = std::env::temp_dir().join(format!("florastack-app-import-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let (dir, mut harness) = app("import");
     let folder = dir.join("photos");
     frames(&folder);
-    let engine = EngineConfig { temporary_projects: Some(dir.join("temporary")), compute: Compute::CPU, ..EngineConfig::default() };
-    let options = Options { engine, files: Vec::new() };
-    let mut harness =
-        Harness::builder().with_size([1400.0, 900.0]).build_eframe(|cc| FloraStackApp::with_context(&cc.egui_ctx, options, Prefs::default(), None));
-    harness.step();
     // What File > Import stacks runs on the folder picked.
     harness.state_mut().shell.run("project.findStacks", florastack_engine::json!({ "paths": [folder] }));
     until(&mut harness, "the stack's frames", |app| app.shell.frames.len() == 4);

@@ -54,4 +54,5 @@ stack.pyramid
 stack.reset
 stack.set
 stack.slabbed
+stack.threshold
 watch.run

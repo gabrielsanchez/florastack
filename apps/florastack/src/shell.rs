@@ -24,6 +24,10 @@ pub struct FrameRow {
     pub flags: Vec<String>,
     /// Its preview as shot, a small JPEG in the project's cache, once made.
     pub preview: Option<PathBuf>,
+    /// Its preview aligned onto the output's canvas, once aligned and made.
+    pub aligned_preview: Option<PathBuf>,
+    /// How its alignment went, once aligned (`align.info`).
+    pub alignment: Option<Value>,
 }
 
 /// An output, as the Export tab shows it.
@@ -34,6 +38,8 @@ pub struct OutputRow {
     pub method: String,
     /// Its image, in the project's cache.
     pub image: PathBuf,
+    /// The method's parameters it was made with.
+    pub parameters: Value,
 }
 
 /// Something to tell the user: a result, or what went wrong.
@@ -59,14 +65,23 @@ pub struct Shell {
     pub made: Option<u64>,
     /// What a `project.findStacks` job just found, for the app to offer.
     pub stacks_found: Option<Value>,
+    /// What the latest `stack.threshold` job showed: its picture, level and share below.
+    pub threshold: Option<Value>,
+    /// The stacking settings (`stack.get`), the alignment settings (`align.get`) and the alignment (`align.info`), read
+    /// with the lists.
+    pub stack_settings: Value,
+    pub align_settings: Value,
+    pub alignment: Value,
     /// Projects opened or saved elsewhere since last asked, for the recent projects.
     pub opened: Vec<PathBuf>,
     /// The engine's compute device (`compute.info`), once asked.
     compute: Option<Value>,
     /// Whether the lists need reading again.
     stale: bool,
-    /// Whether `filmstrip.update` was asked for the project open now.
-    previews_asked: bool,
+    /// Counts the project's changes, and the count when `filmstrip.update` was last asked for, which is asked for again
+    /// only after the project changed (a failing update isn't asked for over and over).
+    changes: u64,
+    previews_asked: Option<u64>,
     /// Counts the times the lists were read again, so that what the panels keep from the project can tell it is old.
     pub revision: u64,
 }
@@ -86,10 +101,15 @@ impl Shell {
             preview: None,
             made: None,
             stacks_found: None,
+            threshold: None,
+            stack_settings: Value::Null,
+            align_settings: Value::Null,
+            alignment: Value::Null,
             opened: Vec::new(),
             compute: None,
             stale: true,
-            previews_asked: false,
+            changes: 0,
+            previews_asked: None,
             revision: 0,
         }
     }
@@ -131,6 +151,11 @@ impl Shell {
         }
     }
 
+    /// Whether a job of one of `commands` is queued or running.
+    pub fn running(&self, commands: &[&str]) -> bool {
+        self.jobs.values().any(|j| !j.state.is_finished() && commands.contains(&j.command.as_str()))
+    }
+
     /// Whether a job is queued or running.
     pub fn busy(&self) -> bool {
         self.jobs.values().any(|j| !j.state.is_finished())
@@ -158,11 +183,15 @@ impl Shell {
                     }
                     if matches!(state, ProjectEvent::Opened | ProjectEvent::Closed) {
                         self.preview = None;
-                        self.previews_asked = false;
+                        self.threshold = None;
                     }
+                    self.changes += 1;
                     self.stale = true;
                 }
-                Event::Changed { .. } => self.stale = true,
+                Event::Changed { .. } => {
+                    self.changes += 1;
+                    self.stale = true;
+                }
                 Event::History { .. } => {}
             }
         }
@@ -185,6 +214,7 @@ impl Shell {
                     self.preview = job.result.as_ref().and_then(|r| r["path"].as_str()).map(PathBuf::from);
                 }
                 JobState::Done if job.command == "project.findStacks" => self.stacks_found.clone_from(&job.result),
+                JobState::Done if job.command == "stack.threshold" => self.threshold.clone_from(&job.result),
                 JobState::Done if job.command.starts_with("stack.") => {
                     self.made = job.result.as_ref().and_then(|r| r["output"].as_u64());
                 }
@@ -204,14 +234,26 @@ impl Shell {
         let Some(project) = self.engine.project() else {
             self.frames.clear();
             self.outputs.clear();
+            (self.stack_settings, self.align_settings, self.alignment) = (Value::Null, Value::Null, Value::Null);
             return;
         };
         let root = self.engine.project_path().map(std::path::Path::to_path_buf).unwrap_or_default();
         self.outputs = project
             .outputs
             .iter()
-            .map(|o| OutputRow { id: o.id().get(), name: o.name.clone(), method: o.method.clone(), image: o.image.path.resolve(&root) })
+            .map(|o| OutputRow {
+                id: o.id().get(),
+                name: o.name.clone(),
+                method: o.method.clone(),
+                image: o.image.path.resolve(&root),
+                parameters: o.parameters.clone(),
+            })
             .collect();
+        self.stack_settings = self.engine.run("stack.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());
+        self.align_settings = self.engine.run("align.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());
+        self.alignment = self.engine.run("align.info", json!({})).unwrap_or(Value::Null);
+        let aligned: BTreeMap<u64, &Value> =
+            self.alignment["run"]["frames"].as_array().into_iter().flatten().filter_map(|f| Some((f["frame"].as_u64()?, f))).collect();
         let listed = self.engine.run("project.frames", json!({})).unwrap_or(Value::Null);
         let strip = self.engine.run("filmstrip.list", json!({})).unwrap_or(Value::Null);
         let previews: BTreeMap<u64, &Value> =
@@ -231,12 +273,15 @@ impl Shell {
                     enabled: f["enabled"].as_bool().unwrap_or(true),
                     flags: f["flags"].as_array().into_iter().flatten().filter_map(flag_name).collect(),
                     preview: strip.and_then(|s| s["preview"].as_str()).map(PathBuf::from),
+                    aligned_preview: strip.and_then(|s| s["alignedPreview"].as_str()).map(PathBuf::from),
+                    alignment: aligned.get(&id).map(|&a| a.clone()),
                 })
             })
             .collect();
         let stale = strip["stale"].as_u64().unwrap_or(0);
-        if stale > 0 && !self.previews_asked {
-            self.previews_asked = true;
+        let updating = self.jobs.values().any(|j| j.command == "filmstrip.update" && !j.state.is_finished());
+        if stale > 0 && !updating && self.previews_asked != Some(self.changes) {
+            self.previews_asked = Some(self.changes);
             self.run("filmstrip.update", json!({}));
         }
     }
