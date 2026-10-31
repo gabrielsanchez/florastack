@@ -5,6 +5,8 @@ align.run
 align.set
 align.sortByScale
 batch.run
+compute.info
+compute.set
 defects.clear
 defects.detect
 defects.export

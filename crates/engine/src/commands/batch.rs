@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{MAX_ITEMS, absolute, check_path, display};
+use crate::compute::Compute;
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Effects, Meta, Params};
@@ -205,8 +206,9 @@ impl Workspace {
         Ok(Self { output, stage, _lock: lock })
     }
 
-    pub(super) fn engine(&self, capture: bool) -> Result<Engine, CommandError> {
-        let config = EngineConfig { temporary_projects: Some(self.stage.path().join("temporary")), ..EngineConfig::default() };
+    /// An engine for the workspace's projects, stacking as the parent engine does (`compute`).
+    pub(super) fn engine(&self, capture: bool, compute: Compute) -> Result<Engine, CommandError> {
+        let config = EngineConfig { temporary_projects: Some(self.stage.path().join("temporary")), compute, ..EngineConfig::default() };
         if !capture {
             return Ok(Engine::new(config));
         }
@@ -446,10 +448,11 @@ fn queue(engine: &mut Engine, ctx: &JobContext, input: &str, split: SplitSetting
         .collect())
 }
 
-fn run(_: &Session, p: BatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
+fn run(session: &Session, p: BatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
+    let compute = session.compute();
     Ok(JobPlan::new(move |ctx| {
         let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
-        let mut engine = workspace.engine(false)?;
+        let mut engine = workspace.engine(false, compute)?;
         let queue = queue(&mut engine, ctx, &p.input, p.split)?;
         let mut names = BTreeSet::new();
         if queue.iter().any(|(name, _)| !names.insert(name.to_lowercase())) {

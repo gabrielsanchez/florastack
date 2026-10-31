@@ -9,6 +9,7 @@ use std::time::Duration;
 use florastack_project::{Aspects, CacheDir, Edit, Project, ProjectFolder, Trash};
 
 use crate::Dispatched;
+use crate::compute::Compute;
 use crate::error::{CommandError, Invalid};
 use crate::events::{Event, ProjectEvent};
 use crate::history::{History, StepList};
@@ -19,6 +20,8 @@ use crate::registry::{CommandSpec, Requires, Runner, normalize};
 pub(crate) struct Host {
     pub(crate) temporary_projects: Option<PathBuf>,
     pub(crate) trash: Arc<dyn Trash + Send + Sync>,
+    /// Which device stacks.
+    pub(crate) compute: Compute,
 }
 
 /// An open project.
@@ -112,6 +115,16 @@ impl Session {
     /// Where orphaned temporary projects are moved.
     pub fn trash(&self) -> &dyn Trash {
         self.host.trash.as_ref()
+    }
+
+    /// Which device stacks: the engine's preference, which jobs take when they are planned.
+    pub fn compute(&self) -> Compute {
+        self.host.compute
+    }
+
+    /// Changes the compute preference, for the jobs planned from now on.
+    pub(crate) fn set_compute(&mut self, compute: Compute) {
+        self.host.compute = compute;
     }
 
     pub fn is_dirty(&self) -> bool {

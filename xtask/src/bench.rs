@@ -9,7 +9,9 @@
 //! Benches that score quality as well as time, such as florastack-stack's `quality.rs`, write metric records (an `id`
 //! and numbers such as `ssim` and `halo`) as JSON files into the folder named by `FLORASTACK_BENCH_METRICS`, which this
 //! sets to `<target>/bench-metrics/` and empties first: the summary's `metrics` lists the records, and a table of them
-//! is printed after the timings.
+//! is printed after the timings. Records with `seconds` are timed runs rather than scores, such as florastack-gpu's
+//! `compositors` bench (each method on the CPU and on the GPU, 100 frames of 24 MP): they get a table of their own,
+//! with the milliseconds a frame and the GPU's speed-up and adapter.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -132,8 +134,12 @@ pub fn run(meta: &Value, args: &[&str]) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&summary).map_err(|e| format!("cannot write the summary: {e}"))?;
     std::fs::write(&path, text + "\n").map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     print!("{}", table(&benchmarks));
-    if !metrics.is_empty() {
-        print!("{}", metrics_table(&metrics));
+    let (timed, scored): (Vec<Value>, Vec<Value>) = metrics.iter().cloned().partition(|r| r["seconds"].is_number());
+    if !scored.is_empty() {
+        print!("{}", metrics_table(&scored));
+    }
+    if !timed.is_empty() {
+        print!("{}", timings_table(&timed));
     }
     println!("bench: {} benchmark(s) and {} metric record(s) summarized in {}", benchmarks.len(), metrics.len(), path.display());
     Ok(())
@@ -290,6 +296,30 @@ fn metrics_table(records: &[Value]) -> String {
     s
 }
 
+/// The printed table of timed records, such as florastack-gpu's CPU-against-GPU runs: their id, seconds, milliseconds
+/// a frame and, for the GPU's, the speed-up over the CPU and the adapter.
+fn timings_table(records: &[Value]) -> String {
+    let width = records.iter().filter_map(|r| r["id"].as_str()).map(str::len).max().unwrap_or(0);
+    let mut s = format!(
+        "  {:<width$}  {:>9}  {:>9}  {:>8}  adapter
+",
+        "timings", "seconds", "ms/frame", "speed-up"
+    );
+    for r in records {
+        let number = |key: &str, digits: usize| r[key].as_f64().map_or_else(|| "-".to_owned(), |v| format!("{v:.digits$}"));
+        let speedup = r["speedup"].as_f64().map_or_else(|| "-".to_owned(), |v| format!("{v:.2}x"));
+        let _ = writeln!(
+            s,
+            "  {:<width$}  {:>9}  {:>9}  {speedup:>8}  {}",
+            r["id"].as_str().unwrap_or("?"),
+            number("seconds", 2),
+            number("per_frame_ms", 1),
+            r["adapter"].as_str().unwrap_or("")
+        );
+    }
+    s
+}
+
 /// The trimmed standard output of a successful command, if it ran.
 pub(crate) fn command_line(root: &Path, program: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new(program).args(args).current_dir(root).output().ok()?;
@@ -405,6 +435,13 @@ mod tests {
         let table = metrics_table(&records);
         assert!(table.contains("stack/quality/b") && table.contains("0.9500") && table.contains("0.00400"), "{table}");
         assert!(table.lines().nth(1).unwrap().contains("31.20"), "{table}");
+        let timed = [
+            json!({ "id": "compositors/average/cpu/100x6000x4000", "seconds": 61.5, "per_frame_ms": 615.0 }),
+            json!({ "id": "compositors/average/gpu/100x6000x4000", "seconds": 9.25, "per_frame_ms": 92.5, "speedup": 6.65, "adapter": "Some GPU" }),
+        ];
+        let table = timings_table(&timed);
+        assert!(table.contains("61.50") && table.contains("615.0") && table.contains('-'), "{table}");
+        assert!(table.lines().nth(2).unwrap().contains("6.65x") && table.contains("Some GPU"), "{table}");
         std::fs::write(dir.join("bad.json"), r#"{ "records": [{ "ssim": 1 }] }"#).unwrap();
         assert!(collect_metrics(&dir).unwrap_err().contains("without an `id`"));
         clear_metrics(&dir).unwrap();

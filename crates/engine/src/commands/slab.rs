@@ -40,12 +40,13 @@ use florastack_align::Framing;
 use florastack_core::{AnyImage, Image, Monitor};
 use florastack_project::{CacheDir, CacheRef, ContentHash, Edit, FrameId, Input, NewOutput, OutputId, Project};
 use florastack_raw::Quality;
-use florastack_stack::{CoveredFrame, FrameSource, StackError, Stacked, Tiling};
+use florastack_stack::{StackError, Stacked, Tiling};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::stack::{
-    DepthSummary, Feed, MethodName, MethodParams, RangeSummary, StackPlan, Stored, Units, UsedSettings, Warping, locks, stack_feed, store, unclipped,
+    DepthSummary, Feed, Loaded, MethodName, MethodParams, RangeSummary, StackPlan, Stored, Units, UsedSettings, Warping, locks, stack_feed, store,
+    unclipped,
 };
 use super::{MAX_ITEMS, Quiet, check_name};
 use crate::error::{CommandError, Invalid};
@@ -280,7 +281,7 @@ impl Feed for Cached<'_> {
         self.sources.len()
     }
 
-    fn with(&mut self, i: usize, f: &mut dyn FnMut(&dyn FrameSource) -> Result<(), CommandError>) -> Result<(), CommandError> {
+    fn load(&mut self, i: usize) -> Result<Loaded, CommandError> {
         let internal = || CommandError::Internal { command: COMMAND.to_owned() };
         let reference = self.sources.get(i).ok_or_else(internal)?;
         // Slabs are stored as linear f32, which reads back as such.
@@ -301,9 +302,9 @@ impl Feed for Cached<'_> {
         if matches!(image.channels(), 2 | 4) {
             let (color, alpha) = split_alpha(&image)?;
             drop(image);
-            f(&CoveredFrame::new(color, alpha)?)
+            Ok(Loaded::Canvas { image: color, coverage: Some(alpha) })
         } else {
-            f(&image)
+            Ok(Loaded::Canvas { image, coverage: None })
         }
     }
 }
@@ -424,7 +425,8 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
         for j in todo {
             let (range, settings) = (slabs.get(j).map(|s| s.range.clone()).ok_or_else(|| plan.internal())?, plan.settings.clone());
             let mut feed = Warping { plan: &mut plan, range, reduced: false };
-            let (stacked, depth) = stack_feed(&mut feed, &settings, &Tiling::default(), ctx, &quiet, &mut units, |_, _| {})?;
+            let compute = feed.plan.compute;
+            let (stacked, depth) = stack_feed(&mut feed, &settings, &Tiling::default(), &compute, ctx, &quiet, &mut units, |_, _| {})?;
             let stored = store_slab(&plan, j, stacked, depth, &slabs)?;
             *made.get_mut(j).ok_or_else(|| plan.internal())? = Some(stored);
         }
@@ -444,7 +446,7 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
         let mut units = Units::new(passes * sources.len());
         let mut feed = Cached { cache: &plan.cache, sources: &sources, size: (width, height) };
         let quiet = Quiet(ctx);
-        let (stacked, depth) = stack_feed(&mut feed, &final_settings, &Tiling::default(), ctx, &quiet, &mut units, |i, _| {
+        let (stacked, depth) = stack_feed(&mut feed, &final_settings, &Tiling::default(), &plan.compute, ctx, &quiet, &mut units, |i, _| {
             if i == passes {
                 ctx.stage(2);
             }

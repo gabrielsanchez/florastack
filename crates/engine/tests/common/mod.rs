@@ -13,8 +13,8 @@ use florastack_codecs::{OutputMetadata, OutputSpec};
 use florastack_core::{AnyImage, ColorSpace, Image};
 use florastack_engine::model::{FrameId, OutputId};
 use florastack_engine::{
-    CommandError, CommandSpec, Dispatched, Engine, EngineConfig, Executor, JobId, JobPlan, Lane, Meta, Monitor, Params, Registry, Requires, Session,
-    SystemClock, ThreadExecutor, Value, commit,
+    CommandError, CommandSpec, Compute, Dispatched, Engine, EngineConfig, Executor, JobId, JobPlan, Lane, Meta, Monitor, Params, Registry, Requires,
+    Session, SystemClock, ThreadExecutor, Value, commit,
 };
 use florastack_project::{Area, Aspects, Edit, FolderTrash, Input, LayerId, NewOutput, ProjectFolder};
 use schemars::JsonSchema;
@@ -58,6 +58,8 @@ pub fn config_with(dir: &Path, executor: Arc<dyn Executor>) -> EngineConfig {
         waker: None,
         max_heavy_jobs: 1,
         max_preview_jobs: 2,
+        // The CPU, whatever the machine has: results and memory the same everywhere. tests/compute.rs stacks on the GPU.
+        compute: Compute::CPU,
     }
 }
 

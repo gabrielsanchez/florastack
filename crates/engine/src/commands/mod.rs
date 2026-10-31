@@ -21,7 +21,8 @@
 //! - [`preset`]: preference presets (`preset.apply`, `preset.save`, `preset.read`);
 //! - [`output`]: the outputs (`output.list`, `output.rename`, `output.remove`, and `output.save`, a job);
 //! - [`edit`]: undo and redo (`edit.undo`, `edit.redo`, `edit.history`);
-//! - [`job`]: the jobs (`job.list`, `job.cancel`).
+//! - [`job`]: the jobs (`job.list`, `job.cancel`);
+//! - [`compute`]: which device stacks, the GPU or the CPU (`compute.info`, `compute.set`).
 //! - `batch` and `watch` (native): serial queues of independent projects (`batch.run`) and tethered capture with
 //!   incremental alignment and live previews (`watch.run`).
 //!
@@ -34,6 +35,7 @@
 pub mod align;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod batch;
+pub mod compute;
 pub mod defects;
 pub mod develop;
 pub mod edit;
@@ -70,6 +72,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(output::specs());
     all.extend(edit::specs());
     all.extend(job::specs());
+    all.extend(compute::specs());
     #[cfg(not(target_arch = "wasm32"))]
     {
         all.extend(batch::specs());

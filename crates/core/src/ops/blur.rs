@@ -9,7 +9,10 @@
 //!   8(2), 1986); the extended box adds a fractional weight at both ends so that the passes' variances add up to
 //!   `sigma^2` exactly rather than to the nearest integer box widths (P. Gwosdek, S. Grewenig, A. Bruhn and J. Weickert,
 //!   "Theoretical foundations of Gaussian convolution by extended box filtering", Scale Space and Variational Methods in
-//!   Computer Vision, LNCS 6667, 2011). The passes run in `f64`, rounded to `f32` once at the end.
+//!   Computer Vision, LNCS 6667, 2011). The passes run in `f64`, rounded to `f32` once at the end. A running sum that
+//!   cancels (large samples leaving the window, small ones staying) is summed again from its window, so that the large
+//!   samples' rounding doesn't stay in it: samples spanning 40 orders of magnitude, as the weighted average's weights
+//!   can, blur as accurately as any others.
 //!
 //! Both work in place. Rows are filtered in parallel, each through a scratch row. The exact column pass goes down the
 //! image in bands of rows, keeping the original rows it still needs in one ring of `64 + 2 ceil(3 sigma)` rows and
@@ -75,8 +78,21 @@ pub fn gaussian_blur(image: &Image<f32>, sigma: f64) -> Result<Image<f32>, OpErr
     Ok(out)
 }
 
-/// Blurs `image` in place with a Gaussian of standard deviation `sigma` pixels (nothing happens at 0).
-pub fn gaussian_blur_in_place(image: &mut Image<f32>, sigma: f64, method: BlurMethod) -> Result<(), OpError> {
+/// What [`gaussian_blur_in_place`] does for a sigma and a method: nothing, the exact kernel, or box passes. The GPU
+/// blur (`florastack-gpu`) follows the same plan, so that the two compute the same filter.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BlurPlan {
+    /// A sigma of 0: the image is unchanged.
+    Identity,
+    /// The separable kernel of [`gaussian_kernel`], rows then columns.
+    Exact(Vec<f32>),
+    /// `passes` extended box filters along the rows, then as many along the columns: weight 1 on `-radius ..=
+    /// radius`, `alpha` on `-radius - 1` and `radius + 1`, times `norm`.
+    Boxes { radius: usize, alpha: f64, norm: f64, passes: usize },
+}
+
+/// The plan of a blur of standard deviation `sigma` by `method`, after checking both.
+pub fn blur_plan(sigma: f64, method: BlurMethod) -> Result<BlurPlan, OpError> {
     if !(sigma.is_finite() && (0.0..=MAX_SIGMA).contains(&sigma)) {
         return Err(OpError::Param { name: "sigma", value: sigma, expected: "finite, from 0 to 10000" });
     }
@@ -93,12 +109,24 @@ pub fn gaussian_blur_in_place(image: &mut Image<f32>, sigma: f64, method: BlurMe
         BlurMethod::Boxes { passes } => Some(passes),
     };
     if sigma == 0.0 {
-        return Ok(());
+        return Ok(BlurPlan::Identity);
     }
-    match passes {
-        None => blur_exact(image, &gaussian_kernel(sigma)),
+    Ok(match passes {
+        None => BlurPlan::Exact(gaussian_kernel(sigma)),
         Some(passes) => {
-            blur_boxes(image, &ExtendedBox::for_sigma(sigma / (passes as f64).sqrt()), passes);
+            let ExtendedBox { radius, alpha, norm } = ExtendedBox::for_sigma(sigma / (passes as f64).sqrt());
+            BlurPlan::Boxes { radius, alpha, norm, passes }
+        }
+    })
+}
+
+/// Blurs `image` in place with a Gaussian of standard deviation `sigma` pixels (nothing happens at 0).
+pub fn gaussian_blur_in_place(image: &mut Image<f32>, sigma: f64, method: BlurMethod) -> Result<(), OpError> {
+    match blur_plan(sigma, method)? {
+        BlurPlan::Identity => Ok(()),
+        BlurPlan::Exact(kernel) => blur_exact(image, &kernel),
+        BlurPlan::Boxes { radius, alpha, norm, passes } => {
+            blur_boxes(image, &ExtendedBox { radius, alpha, norm }, passes);
             Ok(())
         }
     }
@@ -261,21 +289,31 @@ fn pad_row(row: &[f64], padded: &mut Vec<f64>, c: usize, pad: usize) {
 
 /// One extended box pass along a row, from `padded` (the row with `radius + 1` pixels of padding either side) into
 /// `out`. Output pixel `x` sums padded pixels `x + 1 ..= x + 2 r + 1` and takes `alpha` of pixels `x` and
-/// `x + 2 r + 2`; the window then slides by one.
+/// `x + 2 r + 2`; the window then slides by one. A running sum that cancels is summed again from its window
+/// ([`CANCELLED`]).
 fn box_row(padded: &[f64], out: &mut [f64], c: usize, filter: &ExtendedBox) {
     let r = filter.radius;
     let mut sums = [0.0f64; crate::image::MAX_CHANNELS];
+    // The magnitudes each running sum was built from since it was last summed from its window: they bound its error.
+    let mut scale = [0.0f64; crate::image::MAX_CHANNELS];
     for pixel in padded.chunks_exact(c).skip(1).take(2 * r + 1) {
-        for (s, v) in sums.iter_mut().zip(pixel) {
+        for ((s, m), v) in sums.iter_mut().zip(scale.iter_mut()).zip(pixel) {
             *s += v;
+            *m += v.abs();
         }
     }
     let (low, leave, high) = (padded.chunks_exact(c), padded.chunks_exact(c).skip(1), padded.chunks_exact(c).skip(2 * r + 2));
-    for (((o, lo), le), hi) in out.chunks_exact_mut(c).zip(low).zip(leave).zip(high) {
+    for (x, (((o, lo), le), hi)) in out.chunks_exact_mut(c).zip(low).zip(leave).zip(high).enumerate() {
         for ch in 0..c.min(crate::image::MAX_CHANNELS) {
             let (l, e, h) = (lo[ch], le[ch], hi[ch]);
             o[ch] = (sums[ch] + filter.alpha * (l + h)) * filter.norm;
             sums[ch] += h - e;
+            scale[ch] += h.abs();
+            if sums[ch].abs() < CANCELLED * scale[ch] {
+                // The window of output x + 1: padded pixels x + 2 ..= x + 2 r + 2.
+                let window = padded.chunks_exact(c).skip(x + 2).take(2 * r + 1).filter_map(|p| p.get(ch));
+                (sums[ch], scale[ch]) = window.fold((0.0, 0.0), |(s, m), v| (s + v, m + v.abs()));
+            }
         }
     }
 }
@@ -285,10 +323,19 @@ fn box_row(padded: &[f64], out: &mut [f64], c: usize, filter: &ExtendedBox) {
 struct Stage {
     rows: Vec<f64>,
     sums: Vec<f64>,
+    /// Each sum's magnitudes since it was last summed from its window ([`CANCELLED`]).
+    scale: Vec<f64>,
     out: Vec<f64>,
     received: usize,
     emitted: usize,
 }
+
+/// The share of its magnitude a running sum may keep before it is summed again from its window: below it, the sum's
+/// rounding error (about 2^-53 of the magnitudes it was built from) would be more than 2^-33 of its value. Without it,
+/// a sum that has held large values keeps their rounding error after they leave the window: blurring weights of 1e18
+/// next to weights of 1e-24, as the weighted average's are around a sharp edge and a noiseless flat region, gave the
+/// flat region weights below 0. Sums that don't cancel never meet it, so their arithmetic is unchanged.
+const CANCELLED: f64 = 1.0 / (1u64 << 20) as f64;
 
 /// What every [`Stage`] of a strip shares.
 struct Strip<'a> {
@@ -307,6 +354,8 @@ impl Stage {
         self.rows.resize(s.ring * s.width, 0.0);
         self.sums.clear();
         self.sums.resize(s.width, 0.0);
+        self.scale.clear();
+        self.scale.resize(s.width, 0.0);
         self.out.clear();
         self.out.resize(s.width, 0.0);
         self.received = 0;
@@ -331,10 +380,12 @@ impl Stage {
         if y == 0 {
             // The window of row 0: rows -r ..= r, the ones above the image being row 0.
             self.sums.fill(0.0);
+            self.scale.fill(0.0);
             for i in 0..=r {
                 let weight = if i == 0 { (r + 1) as f64 } else { 1.0 };
-                for (acc, v) in self.sums.iter_mut().zip(input(rows, i, s)) {
+                for ((acc, m), v) in self.sums.iter_mut().zip(self.scale.iter_mut()).zip(input(rows, i, s)) {
                     *acc += weight * v;
+                    *m += weight * v.abs();
                 }
             }
         }
@@ -345,8 +396,20 @@ impl Stage {
         }
         // Slide the window: row y + r + 1 enters, row y - r leaves.
         let (enter, leave) = (input(rows, y + r + 1, s), input(rows, y.saturating_sub(r), s));
-        for ((acc, e), l) in self.sums.iter_mut().zip(enter).zip(leave) {
+        for (column, (((acc, m), e), l)) in self.sums.iter_mut().zip(self.scale.iter_mut()).zip(enter).zip(leave).enumerate() {
             *acc += e - l;
+            *m += e.abs();
+            if acc.abs() < CANCELLED * *m {
+                // The window of output row y + 1: rows y + 1 - r ..= y + 1 + r, those above the image being row 0.
+                let (mut sum, mut magnitude) = (0.0, 0.0);
+                for i in (y + 1).saturating_sub(r)..=y + 1 + r {
+                    let v = input(rows, i, s).get(column).copied().unwrap_or(0.0);
+                    (sum, magnitude) = (sum + v, magnitude + v.abs());
+                }
+                let above = r.saturating_sub(y + 1);
+                let v = input(rows, 0, s).get(column).copied().unwrap_or(0.0);
+                (*acc, *m) = (sum + above as f64 * v, magnitude + above as f64 * v.abs());
+            }
         }
         self.emitted += 1;
         true
@@ -364,7 +427,7 @@ fn input<'a>(rows: &'a [f64], i: usize, s: &Strip<'_>) -> &'a [f64] {
 fn box_strip(strip: &mut [&mut [f32]], filter: &ExtendedBox, passes: usize, ring: usize, stages: &mut Vec<Stage>) {
     let width = strip.first().map_or(0, |row| row.len());
     let s = Strip { filter, h: strip.len(), ring, width };
-    stages.resize_with(passes, || Stage { rows: Vec::new(), sums: Vec::new(), out: Vec::new(), received: 0, emitted: 0 });
+    stages.resize_with(passes, || Stage { rows: Vec::new(), sums: Vec::new(), scale: Vec::new(), out: Vec::new(), received: 0, emitted: 0 });
     for stage in stages.iter_mut() {
         stage.reset(&s);
     }
@@ -439,6 +502,27 @@ mod tests {
             }
         }
         moment / sum
+    }
+
+    #[test]
+    fn box_sums_recover_once_large_values_leave_their_window() {
+        // Weights of 1e18 next to 1e-24, as the weighted average's are around a sharp edge beside a noiseless flat
+        // region, along the rows and down the columns. Before the running sums were summed again on cancelling, the
+        // rounding error of the large values stayed in them, and the flat region came out below 0.
+        let (w, h) = (300, 200);
+        let image = Image::from_fn(w, h, 1, ColorSpace::LINEAR, |x, y, _| if x < 40 || y < 30 { 1e18 } else { 1e-24 }).unwrap();
+        for method in [BlurMethod::Auto, BlurMethod::Boxes { passes: 3 }] {
+            let mut blurred = image.clone();
+            gaussian_blur_in_place(&mut blurred, 8.0, method).unwrap();
+            assert!(blurred.as_raw().iter().all(|&v| v > 0.0), "{method:?}: a blur of positive samples is positive");
+            // Far from the large values (beyond the blur's reach), the blur of a constant is the constant.
+            for y in 120..h {
+                for x in 160..w {
+                    let v = blurred.get(x, y, 0).unwrap();
+                    assert!((v - 1e-24).abs() < 1e-30, "{method:?} at {x},{y}: {v}");
+                }
+            }
+        }
     }
 
     #[test]

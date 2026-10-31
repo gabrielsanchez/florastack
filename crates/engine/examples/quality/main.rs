@@ -38,7 +38,7 @@ use florastack_core::ops::{Border, Interpolation, warp_into};
 use florastack_core::testutil::{GroundTruth, transform_error};
 use florastack_core::{Affine, AnyImage, ColorSpace, Encoding, Image, Rect};
 use florastack_engine::model::FolderTrash;
-use florastack_engine::{Dispatched, Engine, EngineConfig, SystemClock, ThreadExecutor, Value, json};
+use florastack_engine::{Compute, Dispatched, Engine, EngineConfig, SystemClock, ThreadExecutor, Value, json};
 use florastack_metrics::{HaloParams, NoiseParams, color_shift, halo, noise, psnr, ssim};
 use regions::{Plane, Window};
 use serde::{Deserialize, Serialize};
@@ -311,6 +311,8 @@ impl Stack {
             waker: None,
             max_heavy_jobs: 1,
             max_preview_jobs: 1,
+            // The CPU, whatever the machine has: the baseline's measures, peak heap included, are the CPU stackers'.
+            compute: Compute::CPU,
         };
         let mut engine = Engine::new(config);
         command(&mut engine, "project.new", json!({ "name": "Quality", "folder": work }))?;

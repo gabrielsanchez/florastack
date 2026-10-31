@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use florastack_engine::branding;
+use florastack_engine::{Device, branding};
 
 pub const EXIT_CODES: &str =
     "Exit codes: 0 success (including help/version); 1 processing or I/O failure; 2 invalid arguments or command parameters; 130 cancelled.";
@@ -31,8 +31,29 @@ pub struct Cli {
     /// Folder for unnamed projects (default: the system temporary folder / app ID / projects).
     #[arg(long, global = true, value_name = "FOLDER")]
     pub temporary_projects: Option<PathBuf>,
+    /// Which device stacks: auto (the GPU when a hardware adapter passes its self-test, else the CPU), cpu, or gpu
+    /// (software adapters such as lavapipe and WARP too).
+    #[arg(long, global = true, value_enum, default_value = "auto")]
+    pub device: DeviceArg,
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DeviceArg {
+    Auto,
+    Cpu,
+    Gpu,
+}
+
+impl DeviceArg {
+    pub fn device(self) -> Device {
+        match self {
+            Self::Auto => Device::Auto,
+            Self::Cpu => Device::Cpu,
+            Self::Gpu => Device::Gpu,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

@@ -72,6 +72,12 @@ fn every_command_dispatches_from_json() {
     assert_eq!(jobs["jobs"][0]["command"], "project.addFrames");
     assert_eq!(jobs["jobs"][0]["state"], "done");
     assert_eq!(calls.run("job.cancel", r#"{ "job": 999 }"#)["cancelled"], false);
+    // The test engines stack on the CPU (common::config); tests/compute.rs stacks on the GPU.
+    let info = calls.run("compute.info", "{}");
+    assert_eq!((&info["preference"], &info["device"]), (&json!("cpu"), &json!("cpu")), "{info}");
+    assert!(info["reason"].as_str().unwrap().contains("`cpu`"), "{info}");
+    let set = calls.run("compute.set", r#"{ "budgetMb": 512 }"#);
+    assert_eq!((&set["preference"], &set["budgetMb"]), (&json!("cpu"), &json!(512)), "{set}");
     calls.run("project.save", "{}");
     calls.run("project.close", "{}");
 

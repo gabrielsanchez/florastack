@@ -18,7 +18,8 @@ mod resize;
 mod warp;
 
 pub use blur::{
-    AUTO_EXACT_MAX_SIGMA, BlurMethod, MAX_BOX_PASSES, MAX_EXACT_SIGMA, MAX_SIGMA, gaussian_blur, gaussian_blur_in_place, gaussian_kernel,
+    AUTO_EXACT_MAX_SIGMA, BlurMethod, BlurPlan, MAX_BOX_PASSES, MAX_EXACT_SIGMA, MAX_SIGMA, blur_plan, gaussian_blur, gaussian_blur_in_place,
+    gaussian_kernel,
 };
 pub use gradient::{Gradients, laplacian, sobel, sobel_magnitude};
 pub use resize::{lanczos3, resize};

@@ -10,6 +10,8 @@
 //! - [`session`]: what commands see ([`Session`]): the open project, which changes only through
 //!   [`Session::apply`], as one undo step per command ([`history`]).
 //! - [`jobs`]: long commands as jobs on workers, in lanes, with progress, ETAs and cancellation at checkpoints.
+//! - [`compute`]: which device stacks, the GPU (florastack-gpu) when one passes its self-test or the CPU, and the
+//!   preference that chooses (`compute.info`, `compute.set`).
 //! - [`frames`]: reading a stack's frames, each file sent to the crate that reads it (camera RAW and DNG files to
 //!   florastack-raw, developed alike; 16-bit TIFF and other image files to florastack-codecs, unchanged).
 //! - [`project`]: the project with the other crates' types: the develop settings and their resolution, the alignment
@@ -18,6 +20,7 @@
 //!   (JPEG: the filmstrip's, as shot and aligned), which it stores as bytes.
 
 pub mod commands;
+pub mod compute;
 pub mod engine;
 pub mod error;
 pub mod events;
@@ -29,6 +32,7 @@ pub mod registry;
 pub mod schema;
 pub mod session;
 
+pub use compute::{Compute, ComputeInfo, Device};
 pub use engine::{DispatchOptions, Dispatched, Engine, EngineConfig, MAX_PARAMS_BYTES};
 pub use error::{CommandError, ErrorInfo, Invalid};
 pub use events::{Event, ProjectEvent};
