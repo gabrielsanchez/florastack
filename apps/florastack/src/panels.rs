@@ -9,7 +9,7 @@ use florastack_engine::{Format, OutputSpec, Value, json};
 use crate::actions::Action;
 use crate::app::{Banner, Dialog, FILM_SIDE, FloraStackApp, Selection, THUMBNAIL_SIDE};
 use crate::i18n::{tr, tr_args};
-use crate::prefs::Tab;
+use crate::prefs::{Method, Tab};
 
 /// The height of a frame list row's thumbnail, in points.
 const ROW_THUMBNAIL: f32 = 40.0;
@@ -461,11 +461,13 @@ fn batch_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     folder(ui, &mut app.batch.input, "batch-input", false);
     folder(ui, &mut app.batch.output, "batch-output", false);
     folder(ui, &mut app.batch.preset, "batch-preset", true);
-    ui.label(tr_args("batch-method", &[("method", tr(app.prefs.method.label_key()).into())]));
+    // Batches have no "both": they stack by the pyramid then.
+    let method = if app.prefs.method == Method::Both { Method::Pyramid } else { app.prefs.method };
+    ui.label(tr_args("batch-method", &[("method", tr(method.label_key()).into())]));
     let ready = !app.batch.input.is_empty() && !app.batch.output.is_empty() && !app.batch.preset.is_empty();
     if ui.add_enabled(ready, egui::Button::new(tr("batch-run"))).clicked() {
         let form = app.batch.clone();
-        let method = app.prefs.method.name();
+        let method = method.name();
         app.shell.run("batch.run", json!({ "input": form.input, "output": form.output, "preset": form.preset, "method": method }));
     }
 }
