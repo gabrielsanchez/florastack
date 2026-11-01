@@ -122,8 +122,9 @@ pub struct WatchArgs {
 
 #[derive(Debug, Args)]
 pub struct QueueOptions {
-    /// TOML preset, including depth-map contrast thresholds.
-    #[arg(long, value_name = "FILE")]
+    /// TOML preset, including depth-map contrast thresholds and the output's format; or a built-in one as
+    /// `builtin:<id>` (insect-macro, product-shot, landscape, microscope).
+    #[arg(long, value_name = "PRESET")]
     pub preset: PathBuf,
     /// Stacking method (one output per stack).
     #[arg(long, default_value = "pyramid", value_parser = parse_queue_method)]
@@ -162,8 +163,8 @@ pub struct StackArgs {
     /// Output framing; omit to keep the preset/engine default.
     #[arg(long, value_enum)]
     pub crop: Option<Crop>,
-    /// Layer a TOML preset before explicit options.
-    #[arg(long, value_name = "FILE")]
+    /// Layer a TOML preset, or a built-in one as `builtin:<id>`, before explicit options.
+    #[arg(long, value_name = "PRESET")]
     pub preset: Option<PathBuf>,
     /// Use the camera's white balance for the whole RAW stack.
     #[arg(long, value_enum)]

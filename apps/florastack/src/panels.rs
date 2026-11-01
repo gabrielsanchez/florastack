@@ -4,7 +4,7 @@
 //! engine's commands; nothing here computes anything about the project.
 
 use egui::{Align, Layout, RichText, Sense};
-use florastack_engine::{Format, OutputSpec, Value, json};
+use florastack_engine::{Value, json};
 
 use crate::actions::Action;
 use crate::app::{Banner, Dialog, FILM_SIDE, FloraStackApp, Selection, THUMBNAIL_SIDE};
@@ -19,17 +19,21 @@ const ROW_THUMBNAIL: f32 = 40.0;
 pub struct BatchForm {
     pub input: String,
     pub output: String,
+    /// The preset file, when no built-in preset is picked.
     pub preset: String,
+    /// The built-in preset picked, by its id.
+    pub built_in: Option<String>,
 }
 
-/// The formats the Export tab writes, with their files' extensions.
-pub const EXPORT_FORMATS: [(Format, &str, &str); 5] = [
-    (Format::Tiff, "TIFF", "tif"),
-    (Format::Jpeg, "JPEG", "jpg"),
-    (Format::Png, "PNG", "png"),
-    (Format::OpenExr, "OpenEXR", "exr"),
-    (Format::Dng, "DNG", "dng"),
-];
+impl BatchForm {
+    /// The preset as `batch.run` takes it; `None` until one is picked.
+    pub fn preset(&self) -> Option<String> {
+        match &self.built_in {
+            Some(id) => Some(crate::presets::batch_preset(&crate::presets::Source::BuiltIn(id.clone()))),
+            None => Some(self.preset.trim()).filter(|p| !p.is_empty()).map(str::to_owned),
+        }
+    }
+}
 
 /// Draws the whole window.
 pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
@@ -40,7 +44,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| match app.prefs.tab {
             Tab::Stack => crate::stack_tab::show(app, ui),
             Tab::Retouch => crate::retouch_tab::panel(app, ui),
-            Tab::Export => export_tab(app, ui),
+            Tab::Export => crate::export_tab::show(app, ui),
             Tab::Batch => batch_tab(app, ui),
         });
     });
@@ -103,6 +107,8 @@ fn top_bar(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             item(app, ui, Action::SaveAs, project);
             item(app, ui, Action::Close, project);
             ui.separator();
+            item(app, ui, Action::Preferences, true);
+            ui.separator();
             item(app, ui, Action::Quit, true);
         });
         ui.menu_button(tr("menu-edit"), |ui| {
@@ -121,6 +127,7 @@ fn top_bar(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             ui.separator();
             item(app, ui, Action::CancelJobs, busy);
         });
+        crate::presets::menu(app, ui);
         ui.menu_button(tr("menu-view"), |ui| {
             for action in [Action::ZoomFit, Action::Zoom100, Action::Zoom200, Action::ZoomIn, Action::ZoomOut] {
                 item(app, ui, action, true);
@@ -393,56 +400,6 @@ fn flag_text(flag: &str) -> (String, String) {
     (tr(label), tr(help))
 }
 
-fn export_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
-    ui.heading(tr("tab-export"));
-    if app.shell.outputs.is_empty() {
-        ui.label(tr("export-nothing"));
-        return;
-    }
-    crate::stack_tab::outputs(app, ui);
-    ui.add_space(8.0);
-    let (_, name, _) = EXPORT_FORMATS.iter().find(|(f, _, _)| *f == app.export_format).copied().unwrap_or(EXPORT_FORMATS[0]);
-    egui::ComboBox::from_label(tr("export-format")).selected_text(name).show_ui(ui, |ui| {
-        for (format, name, _) in EXPORT_FORMATS {
-            ui.selectable_value(&mut app.export_format, format, name);
-        }
-    });
-    let Selection::Output(id) = app.selection else {
-        ui.weak(tr("export-pick"));
-        return;
-    };
-    if ui.button(tr("export-save")).clicked() {
-        app.export(id);
-    }
-    ui.horizontal(|ui| {
-        if ui.button(tr("export-remove")).clicked() {
-            app.shell.run("output.remove", json!({ "output": id }));
-            app.select(Selection::Nothing);
-        }
-    });
-}
-
-impl FloraStackApp {
-    /// Saves output `id` to a file the user picks, in the Export tab's format.
-    pub fn export(&mut self, id: u64) {
-        let Some((format, name, extension)) = EXPORT_FORMATS.iter().find(|(f, _, _)| *f == self.export_format).copied() else { return };
-        let Ok(spec) = OutputSpec::new(format) else { return };
-        let stem = self.shell.outputs.iter().find(|o| o.id == id).map_or_else(|| "stack".to_owned(), |o| o.name.clone());
-        let mut dialog = rfd::FileDialog::new().add_filter(name, &[extension]).set_file_name(format!("{stem}.{extension}"));
-        if let Some(folder) = &self.prefs.last_folder {
-            dialog = dialog.set_directory(folder);
-        }
-        let Some(path) = dialog.save_file() else { return };
-        self.save_output(id, &path, spec);
-    }
-
-    /// Writes output `id` to `path` with `spec`, replacing the file (the file dialog asked).
-    pub fn save_output(&mut self, id: u64, path: &std::path::Path, spec: OutputSpec) {
-        let spec = serde_json::to_value(spec).unwrap_or(Value::Null);
-        self.shell.run("output.save", json!({ "output": id, "path": path, "spec": spec, "overwrite": true }));
-    }
-}
-
 fn batch_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     ui.heading(tr("tab-batch"));
     ui.label(tr("batch-intro"));
@@ -462,15 +419,34 @@ fn batch_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     };
     folder(ui, &mut app.batch.input, "batch-input", false);
     folder(ui, &mut app.batch.output, "batch-output", false);
-    folder(ui, &mut app.batch.preset, "batch-preset", true);
+    // The preset: a built-in one, or a file.
+    let presets = app.built_in_presets();
+    let name = |id: &str| presets.iter().find(|p| p["id"] == json!(id)).and_then(|p| p["name"].as_str()).unwrap_or(id).to_owned();
+    let shown = app.batch.built_in.as_deref().map_or_else(|| tr("batch-preset-file"), name);
+    egui::ComboBox::from_label(tr("batch-preset")).selected_text(shown).show_ui(ui, |ui| {
+        for preset in &presets {
+            let (Some(id), Some(label)) = (preset["id"].as_str(), preset["name"].as_str()) else { continue };
+            let picked = app.batch.built_in.as_deref() == Some(id);
+            if ui.selectable_label(picked, label).on_hover_text(preset["description"].as_str().unwrap_or("")).clicked() {
+                app.batch.built_in = Some(id.to_owned());
+            }
+        }
+        if ui.selectable_label(app.batch.built_in.is_none(), tr("batch-preset-file")).clicked() {
+            app.batch.built_in = None;
+        }
+    });
+    if app.batch.built_in.is_none() {
+        folder(ui, &mut app.batch.preset, "batch-preset-path", true);
+    }
     // Batches have no "both": they stack by the pyramid then.
     let method = if app.prefs.method == Method::Both { Method::Pyramid } else { app.prefs.method };
     ui.label(tr_args("batch-method", &[("method", tr(method.label_key()).into())]));
-    let ready = !app.batch.input.is_empty() && !app.batch.output.is_empty() && !app.batch.preset.is_empty();
+    let preset = app.batch.preset();
+    let ready = !app.batch.input.is_empty() && !app.batch.output.is_empty() && preset.is_some();
     if ui.add_enabled(ready, egui::Button::new(tr("batch-run"))).clicked() {
         let form = app.batch.clone();
         let method = method.name();
-        app.shell.run("batch.run", json!({ "input": form.input, "output": form.output, "preset": form.preset, "method": method }));
+        app.shell.run("batch.run", json!({ "input": form.input, "output": form.output, "preset": preset, "method": method }));
     }
 }
 
@@ -540,6 +516,29 @@ fn drop_overlay(ctx: &egui::Context) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("drop-overlay")));
     painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
     painter.text(screen.center(), egui::Align2::CENTER_CENTER, tr("drop-hint"), egui::FontId::proportional(24.0), egui::Color32::WHITE);
+}
+
+/// The dialogs of the presets and the preferences, drawn by their modules: whether it closes. Open, it keeps its state.
+fn settings_dialog(app: &mut FloraStackApp, ui: &mut egui::Ui, dialog: Dialog) -> bool {
+    let (close, kept) = match dialog {
+        Dialog::ApplyPreset(applying) => {
+            let (close, applying) = crate::presets::apply_dialog(app, ui, applying);
+            (close, Dialog::ApplyPreset(applying))
+        }
+        Dialog::SavePreset(saving) => {
+            let (close, saving) = crate::presets::save_dialog(app, ui, saving);
+            (close, Dialog::SavePreset(saving))
+        }
+        Dialog::Preferences(form) => {
+            let (close, form) = crate::preferences::dialog(app, ui, *form);
+            (close, Dialog::Preferences(Box::new(form)))
+        }
+        other => (false, other),
+    };
+    if !close {
+        app.dialog = Some(kept);
+    }
+    close
 }
 
 fn dialogs(app: &mut FloraStackApp, ctx: &egui::Context) {
@@ -618,6 +617,7 @@ fn dialogs(app: &mut FloraStackApp, ctx: &egui::Context) {
                     close = true;
                 }
             }
+            dialog @ (Dialog::ApplyPreset(_) | Dialog::SavePreset(_) | Dialog::Preferences(_)) => close = settings_dialog(app, ui, dialog),
             Dialog::Stacks { stacks } => {
                 ui.heading(tr("stacks-title"));
                 ui.label(tr_args("stacks-found", &[("count", stacks.len().into())]));

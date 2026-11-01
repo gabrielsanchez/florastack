@@ -313,6 +313,7 @@ impl Stack {
             max_preview_jobs: 1,
             // The CPU, whatever the machine has: the baseline's measures, peak heap included, are the CPU stackers'.
             compute: Compute::CPU,
+            tiling: florastack_engine::Tiling::default(),
         };
         let mut engine = Engine::new(config);
         command(&mut engine, "project.new", json!({ "name": "Quality", "folder": work }))?;

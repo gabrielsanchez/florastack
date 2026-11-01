@@ -95,6 +95,9 @@ rfd = "0.17.2"
 # Fluent, the UI's strings (English first).
 fluent-bundle = "0.16.0"
 unic-langid = { version = "0.9.6", features = ["macros"] }
+# The installed memory, from which the desktop app suggests the stacking memory budget (florastack-engine's
+# `compute.info`): its `system` feature alone. MIT; the operating systems' own calls, no C compiled.
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 # Where the desktop app's log goes: standard error, at the level `FLORASTACK_LOG` names (the libraries log through
 # `tracing`; the apps choose where it goes).
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }

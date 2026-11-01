@@ -14,7 +14,7 @@ use std::sync::Arc;
 use florastack_core::{AnyImage, ColorSpace, Image, Monitor, Sample};
 use florastack_project::{Area, ContentHash};
 use florastack_raw::Quality;
-use florastack_stack::{DepthSettings, FocusStats, PREVIEW_FACTOR, StackError, StackShape, ThresholdMode, Tiling};
+use florastack_stack::{DepthSettings, FocusStats, PREVIEW_FACTOR, StackError, StackShape, ThresholdMode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -137,7 +137,7 @@ fn threshold(session: &Session, p: ThresholdParams) -> Result<JobPlan<Shown>, Co
             plan.reader.load_mask()?;
             let n = plan.frames.len();
             let mut units = Units::new(n);
-            let mut estimator = reduced.estimator(&Tiling::default())?;
+            let mut estimator = reduced.estimator(&plan.tiling)?;
             let mut feed = Warping { plan: &mut plan, range: 0..n, reduced: true };
             each(&mut feed, ctx, &mut units, |loaded, progress, first| {
                 loaded.source(|source| {

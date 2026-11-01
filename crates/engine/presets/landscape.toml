@@ -1,0 +1,32 @@
+# A built-in preset (florastack-engine's `preset.list`): near-to-far scenes on a tripod.
+[preset]
+name = "Landscape"
+description = "Near-to-far scenes on a tripod: focus breathing and brightness corrected, no rotation; the depth map with a smoother blend and a threshold that fills smooth skies and water from around them; a 16-bit TIFF in a wide gamut (ProPhoto) for editing."
+
+[align]
+shift_x = true
+shift_y = true
+scale = true
+rotation = false
+brightness = true
+framing = "narrow"
+min_motion = 3.0
+
+[stack.depth_map]
+radius = 3.0
+smoothing = 16.0
+threshold = "percentile"
+percentile = 40.0
+
+[stack.pyramid]
+grit = 0.35
+range_limit = 1.0
+tone = "compress"
+
+[output]
+format = "tiff"
+depth = "u16"
+tiff_compression = "deflate"
+profile = { wide = "pro-photo" }
+metadata = true
+template = "{project} {name}"

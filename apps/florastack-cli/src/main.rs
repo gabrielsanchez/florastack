@@ -89,7 +89,12 @@ fn stack(client: &mut Client, args: &StackArgs) -> Result<(), Failure> {
     path_text(&args.out)?;
     client.run("project.new", json!({}))?;
     if let Some(preset) = &args.preset {
-        client.run("preset.apply", json!({ "path": path_text(preset)? }))?;
+        let preset = path_text(preset)?;
+        let params = match preset.strip_prefix("builtin:") {
+            Some(id) => json!({ "builtin": id }),
+            None => json!({ "path": preset }),
+        };
+        client.run("preset.apply", params)?;
     }
     let mut align = json!({});
     if let Some(terms) = &args.align {

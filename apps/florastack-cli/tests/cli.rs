@@ -128,6 +128,23 @@ fn both() {
 }
 
 #[test]
+fn a_built_in_preset_is_named_by_its_id() {
+    let dir = TempDir::new().unwrap();
+    let files = frames(dir.path());
+    let output = cli(dir.path())
+        .arg("stack")
+        .arg(files[0].parent().unwrap())
+        .args(["--preset", "builtin:product-shot", "--out", "result.tif"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let result = json_output(&output);
+    assert_eq!(result["outputs"][0]["stack"]["settings"]["grit"], 0.25, "the product shot's grit: {result}");
+    cli(dir.path()).arg("stack").arg(files[0].parent().unwrap()).args(["--preset", "builtin:underwater", "--out", "other.tif"]).assert().failure();
+}
+
+#[test]
 fn slab_preset_and_explicit_options_reach_the_engine() {
     let dir = TempDir::new().unwrap();
     frames(dir.path());

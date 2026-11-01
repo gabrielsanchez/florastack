@@ -191,6 +191,10 @@ struct SaveParams {
     /// The frame whose metadata the file gets; by default the first of the output's frames.
     #[serde(default)]
     metadata_from: Option<FrameId>,
+    /// Copy that frame's metadata (EXIF, IPTC, XMP) into the file; on by default. Off, the file has only what
+    /// FloraStack writes itself (the frame count).
+    #[serde(default = "yes")]
+    metadata: bool,
     /// One of the output's maps to write instead of the output, such as `depth` or `confidence`; the spec's profile
     /// must then be `untagged`.
     #[serde(default)]
@@ -251,52 +255,105 @@ enum Retouched {
     Paint { strokes: Vec<florastack_retouch::Stroke>, loader: Box<crate::retouch::SourceLoader> },
 }
 
+/// What a file of an output is written from: one of its maps, its result from before tone compression (extended
+/// range), or its result, retouched when it has visible strokes. Chosen when the job is planned, read when it runs.
+pub(super) struct Pixels {
+    image: florastack_project::CacheRef,
+    base: florastack_project::CacheRef,
+    retouched: Option<Retouched>,
+}
+
+impl Pixels {
+    /// The pixels of output `id` for a file with `spec`: `map`, or the result (see [`Pixels`]); what the choice
+    /// leaves out goes into `notes`.
+    pub(super) fn of(session: &Session, id: OutputId, map: Option<&str>, spec: OutputSpec, notes: &mut Vec<String>) -> Result<Pixels, CommandError> {
+        let output = find(session, id)?;
+        // "Retain extended range": the output's result from before its tone compression, when it has one.
+        let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();
+        let image = match (map, extended) {
+            (Some(map), _) => {
+                let name = MapName::new(map).map_err(|e| session.invalid("map", e.to_string()))?;
+                output.maps.get(&name).cloned().ok_or_else(|| {
+                    let names: Vec<&str> = output.maps.keys().map(MapName::as_str).collect();
+                    session.invalid(
+                        "map",
+                        format!(
+                            "output {id} has no map {map}: {}",
+                            if names.is_empty() { "it has none".to_owned() } else { format!("it has {}", names.join(", ")) }
+                        ),
+                    )
+                })?
+            }
+            (None, Some(extended)) if spec.extended_range && spec.depth == BitDepth::F32 => extended,
+            (None, Some(_)) if spec.extended_range => {
+                notes.push("extended range is kept in 32-bit float files only: this file holds the output brought into [0, 1]".to_owned());
+                output.image.clone()
+            }
+            (None, _) => output.image.clone(),
+        };
+        // A retouched output is written with its visible strokes: the result open for retouching, the result cached,
+        // or the strokes painted again.
+        let strokes = crate::retouch::visible_strokes(output);
+        let retouched = if map.is_none() && !strokes.is_empty() {
+            if image != output.image {
+                notes.push("a retouched output is written as retouched, brought into [0, 1]: its extended range isn't retouched".to_owned());
+            }
+            let key = crate::retouch::render_key(output, &strokes);
+            let open = session.retouch.as_ref().filter(|r| r.output == id && r.live.is_none() && r.painted == strokes);
+            let cached = output.maps.get(&crate::retouch::map_name(crate::retouch::RETOUCHED)?).filter(|r| r.key.as_deref() == Some(key.as_str()));
+            Some(match (open, cached) {
+                (Some(open), _) => Retouched::Painted(open.canvas.clone()),
+                (None, Some(reference)) => Retouched::Cached(reference.clone()),
+                (None, None) => Retouched::Paint { strokes, loader: Box::new(crate::retouch::SourceLoader::new(session, "output.save", id)?) },
+            })
+        } else {
+            None
+        };
+        Ok(Pixels { image, base: output.image.clone(), retouched })
+    }
+
+    /// Reads the pixels (painting the strokes again when they must be); what goes wrong on the way goes into `notes`.
+    pub(super) fn read(self, cache: &florastack_project::CacheDir, notes: &mut Vec<String>) -> Result<AnyImage, CommandError> {
+        Ok(match self.retouched {
+            None => crate::project::read_image(cache, &self.image)?,
+            Some(Retouched::Painted(canvas)) => AnyImage::F32(canvas),
+            Some(Retouched::Cached(reference)) => crate::project::read_image(cache, &reference)?,
+            Some(Retouched::Paint { strokes, mut loader }) => {
+                let base = crate::retouch::read_f32(cache, &self.base)?;
+                let mut sources = Vec::new();
+                // The frames' warped images aren't kept here: writing a file changes nothing in the project.
+                let _ = crate::retouch::load_sources(&strokes, &mut sources, &mut loader, (base.width(), base.height()));
+                let usable = crate::retouch::paintable(&strokes, &sources);
+                if usable.len() < strokes.len() {
+                    notes.push(format!("{} of the strokes can't be painted, their source being gone", strokes.len() - usable.len()));
+                }
+                AnyImage::F32(florastack_retouch::render(&base, &crate::retouch::painted(&usable, &base, &sources))?)
+            }
+        })
+    }
+}
+
+/// The metadata of the frame file at `path`, for a file written from it; what goes wrong goes into `notes`.
+pub(super) fn frame_metadata(path: Option<&Path>, notes: &mut Vec<String>) -> Option<florastack_codecs::Metadata> {
+    let frame = path?;
+    match std::fs::read(frame) {
+        Ok(bytes) => Some(florastack_codecs::read_metadata(&bytes)),
+        Err(e) => {
+            notes.push(format!("the metadata of {} can't be read, so the file has none: {e}", frame.display()));
+            None
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
 fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandError> {
     let (project, folder) = (session.project()?, session.folder()?);
     let output = find(session, p.output)?;
-    // "Retain extended range": the output's result from before its tone compression, when it has one.
-    let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();
     let mut early = Vec::new();
-    let image = match (&p.map, extended) {
-        (Some(map), _) => {
-            let name = MapName::new(map).map_err(|e| session.invalid("map", e.to_string()))?;
-            output.maps.get(&name).cloned().ok_or_else(|| {
-                let names: Vec<&str> = output.maps.keys().map(MapName::as_str).collect();
-                session.invalid(
-                    "map",
-                    format!(
-                        "output {} has no map {map}: {}",
-                        p.output,
-                        if names.is_empty() { "it has none".to_owned() } else { format!("it has {}", names.join(", ")) }
-                    ),
-                )
-            })?
-        }
-        (None, Some(extended)) if p.spec.extended_range && p.spec.depth == BitDepth::F32 => extended,
-        (None, Some(_)) if p.spec.extended_range => {
-            early.push("extended range is kept in 32-bit float files only: this file holds the output brought into [0, 1]".to_owned());
-            output.image.clone()
-        }
-        (None, _) => output.image.clone(),
-    };
-    // A retouched output is written with its visible strokes: the result open for retouching, the result cached, or
-    // the strokes painted again.
-    let strokes = crate::retouch::visible_strokes(output);
-    let retouched = if p.map.is_none() && !strokes.is_empty() {
-        if image != output.image {
-            early.push("a retouched output is written as retouched, brought into [0, 1]: its extended range isn't retouched".to_owned());
-        }
-        let key = crate::retouch::render_key(output, &strokes);
-        let open = session.retouch.as_ref().filter(|r| r.output == p.output && r.live.is_none() && r.painted == strokes);
-        let cached = output.maps.get(&crate::retouch::map_name(crate::retouch::RETOUCHED)?).filter(|r| r.key.as_deref() == Some(key.as_str()));
-        Some(match (open, cached) {
-            (Some(open), _) => Retouched::Painted(open.canvas.clone()),
-            (None, Some(reference)) => Retouched::Cached(reference.clone()),
-            (None, None) => Retouched::Paint { strokes, loader: Box::new(crate::retouch::SourceLoader::new(session, "output.save", p.output)?) },
-        })
-    } else {
-        None
-    };
+    let pixels = Pixels::of(session, p.output, p.map.as_deref(), p.spec, &mut early)?;
     let frames: Vec<FrameId> = output.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect();
     let source = match p.metadata_from {
         Some(id) => Some(project.frame(id).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?),
@@ -310,39 +367,13 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
     }
     let cache = session.cache_dir()?;
     let spec = p.spec;
-    let base = output.image.clone();
-    let mut warnings_early: Vec<String> = Vec::new();
+    let with_metadata = p.metadata;
     let plan = JobPlan::new(move |ctx| {
         ctx.stage(0);
-        let pixels = match retouched {
-            None => crate::project::read_image(&cache, &image)?,
-            Some(Retouched::Painted(canvas)) => AnyImage::F32(canvas),
-            Some(Retouched::Cached(reference)) => crate::project::read_image(&cache, &reference)?,
-            Some(Retouched::Paint { strokes, mut loader }) => {
-                let base = crate::retouch::read_f32(&cache, &base)?;
-                let mut sources = Vec::new();
-                // The frames' warped images aren't kept here: an export changes nothing in the project.
-                let _ = crate::retouch::load_sources(&strokes, &mut sources, &mut loader, (base.width(), base.height()));
-                let usable = crate::retouch::paintable(&strokes, &sources);
-                if usable.len() < strokes.len() {
-                    warnings_early.push(format!("{} of the strokes can't be painted, their source being gone", strokes.len() - usable.len()));
-                }
-                AnyImage::F32(florastack_retouch::render(&base, &crate::retouch::painted(&usable, &base, &sources))?)
-            }
-        };
-        ctx.checkpoint()?;
         let mut warnings = early;
-        warnings.append(&mut warnings_early);
-        let metadata = match &source {
-            Some(frame) => match std::fs::read(frame) {
-                Ok(bytes) => Some(florastack_codecs::read_metadata(&bytes)),
-                Err(e) => {
-                    warnings.push(format!("the metadata of {} can't be read, so the file has none: {e}", frame.display()));
-                    None
-                }
-            },
-            None => None,
-        };
+        let pixels = pixels.read(&cache, &mut warnings)?;
+        ctx.checkpoint()?;
+        let metadata = if with_metadata { frame_metadata(source.as_deref(), &mut warnings) } else { None };
         let metadata = OutputMetadata { source: metadata, frame_count: Some(frame_count), modified: None };
         ctx.checkpoint()?;
         ctx.stage(1);

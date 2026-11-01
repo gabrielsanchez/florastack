@@ -855,6 +855,8 @@ pub(super) struct StackPlan {
     pub(super) cache: CacheDir,
     /// Which device stacks, resolved on the worker when the stack starts (`crate::compute`).
     pub(super) compute: Compute,
+    /// How the stack keeps its working data: the memory budget and the tile folder (`compute.set`).
+    pub(super) tiling: Tiling,
 }
 
 /// The gain as the frames' samples take it.
@@ -937,6 +939,7 @@ impl StackPlan {
             settings,
             cache: session.cache_dir()?,
             compute: session.compute(),
+            tiling: session.tiling(),
         })
     }
 
@@ -988,9 +991,9 @@ impl StackPlan {
         self.reader.load_mask()?;
         let n = self.frames.len();
         let mut units = Units::new(n);
-        let compute = self.compute;
+        let (compute, tiling) = (self.compute, self.tiling.clone());
         let mut feed = Warping { plan: self, range: 0..n, reduced };
-        stack_feed(&mut feed, &settings, &Tiling::default(), &compute, ctx, ctx, &mut units, |stage, units| {
+        stack_feed(&mut feed, &settings, &tiling, &compute, ctx, ctx, &mut units, |stage, units| {
             ctx.stage(stage);
             *units = Units::new(n);
         })

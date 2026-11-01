@@ -307,42 +307,75 @@ impl SourceLoader {
                 Ok((SourceImage { image, coverage: None }, None))
             }
             Source::Frame(id) => {
-                let (plan, canvas, aligned) = self.frames.as_mut().map_err(|reason| unavailable(format!("frames can't be sources: {reason}")))?;
-                if (canvas.width, canvas.height) != size {
-                    return Err(unavailable(format!(
-                        "frames can't be sources: as aligned now, they make a {}x{} canvas, but the output is {}x{}, so they were aligned or framed again since it was stacked",
-                        canvas.width, canvas.height, size.0, size.1
-                    )));
-                }
-                let Some((_, transform, gain, cached)) = aligned.iter().find(|a| a.0 == id).cloned() else {
-                    return Err(unavailable(format!("{id} isn't aligned: align the stack with it first")));
-                };
-                let index = plan.ids().iter().position(|f| *f == id).ok_or(CommandError::NotFound { what: id.to_string() })?;
-                let key = aligned_key(&plan.frame_key(index)?, &transform, gain, canvas);
+                let key = self.frame_key(id, size)?;
+                let cached = self.frames.as_ref().ok().and_then(|(_, _, aligned)| aligned.iter().find(|a| a.0 == id).and_then(|a| a.3.clone()));
                 if let Some(reference) = cached.filter(|r| r.key.as_deref() == Some(key.as_str()))
                     && let Ok(image) = read_f32(&self.cache, &reference)
                 {
                     return Ok((split_coverage(image)?, None));
                 }
-                if !self.mask_loaded {
-                    plan.load_mask()?;
-                    self.mask_loaded = true;
-                }
-                let mut image = plan.read(index)?;
-                // A gain of exactly 1 changes nothing, the common case, as stacking skips it too.
-                #[allow(clippy::float_cmp)] // Exactly 1: the gain of a frame not corrected.
-                if gain != 1.0 {
-                    use rayon::prelude::*;
-                    image.par_rows_mut().for_each(|row| row.iter_mut().for_each(|v| *v *= gain));
-                }
-                let whole = Rect::new(0, 0, canvas.width, canvas.height);
-                let covered = warp_to_canvas(&image, &transform, canvas, whole, DEFAULT_FEATHER)?;
-                drop(image);
-                let joined = join_coverage(&covered.image, &covered.coverage)?;
+                let warped = self.warp(id, size)?;
+                let Some(coverage) = &warped.coverage else { return Ok((warped, None)) };
+                let joined = join_coverage(&warped.image, coverage)?;
                 let reference = write_image_in(&self.cache, Area::Cache, &format!("retouch-frame-{}", id.get()), &AnyImage::F32(joined), Some(key))?;
-                Ok((SourceImage { image: covered.image, coverage: Some(covered.coverage) }, Some((id, reference))))
+                Ok((warped, Some((id, reference))))
             }
         }
+    }
+
+    /// The frames, the canvas and the frames' alignment, when frames can be loaded onto an output of `size`.
+    fn frames(&mut self, size: (usize, usize)) -> Result<(&mut Plan, &Canvas, &[AlignedSource]), CommandError> {
+        let unavailable = |reason: String| CommandError::Unavailable { command: "retouch".to_owned(), reason };
+        let (plan, canvas, aligned) = self.frames.as_mut().map_err(|reason| unavailable(format!("frames can't be sources: {reason}")))?;
+        if (canvas.width, canvas.height) != size {
+            return Err(unavailable(format!(
+                "frames can't be sources: as aligned now, they make a {}x{} canvas, but the output is {}x{}, so they were aligned or framed again since it was stacked",
+                canvas.width, canvas.height, size.0, size.1
+            )));
+        }
+        Ok((plan, canvas, aligned))
+    }
+
+    /// The key of frame `id`'s warped image on the canvas of an output of `size`.
+    fn frame_key(&mut self, id: FrameId, size: (usize, usize)) -> Result<String, CommandError> {
+        let (plan, canvas, aligned) = self.frames(size)?;
+        let Some(&(_, transform, gain, _)) = aligned.iter().find(|a| a.0 == id) else {
+            return Err(CommandError::Unavailable {
+                command: "retouch".to_owned(),
+                reason: format!("{id} isn't aligned: align the stack with it first"),
+            });
+        };
+        let index = plan.ids().iter().position(|f| *f == id).ok_or(CommandError::NotFound { what: id.to_string() })?;
+        Ok(aligned_key(&plan.frame_key(index)?, &transform, gain, canvas))
+    }
+
+    /// Frame `id`, read and developed as stacking reads it, its gain applied, and warped onto the canvas of an output of
+    /// `size` with its coverage; not cached (what exporting the aligned frames writes).
+    pub fn warp(&mut self, id: FrameId, size: (usize, usize)) -> Result<SourceImage, CommandError> {
+        let load_mask = !self.mask_loaded;
+        let (plan, canvas, aligned) = self.frames(size)?;
+        let Some(&(_, transform, gain, _)) = aligned.iter().find(|a| a.0 == id) else {
+            return Err(CommandError::Unavailable {
+                command: "retouch".to_owned(),
+                reason: format!("{id} isn't aligned: align the stack with it first"),
+            });
+        };
+        let canvas = *canvas;
+        let index = plan.ids().iter().position(|f| *f == id).ok_or(CommandError::NotFound { what: id.to_string() })?;
+        if load_mask {
+            plan.load_mask()?;
+        }
+        let mut image = plan.read(index)?;
+        self.mask_loaded = true;
+        // A gain of exactly 1 changes nothing, the common case, as stacking skips it too.
+        #[allow(clippy::float_cmp)] // Exactly 1: the gain of a frame not corrected.
+        if gain != 1.0 {
+            use rayon::prelude::*;
+            image.par_rows_mut().for_each(|row| row.iter_mut().for_each(|v| *v *= gain));
+        }
+        let whole = Rect::new(0, 0, canvas.width, canvas.height);
+        let covered = warp_to_canvas(&image, &transform, &canvas, whole, DEFAULT_FEATHER)?;
+        Ok(SourceImage { image: covered.image, coverage: Some(covered.coverage) })
     }
 }
 

@@ -1,0 +1,30 @@
+# A built-in preset (florastack-engine's `preset.list`): still objects on a tripod, for catalogs and the web.
+[preset]
+name = "Product shot"
+description = "Still objects on a tripod under controlled light: shift and scale corrected (focus breathing), no rotation, flash-to-flash brightness matched, cropped to what every frame covers; the pyramid with less grit for clean surfaces; a 16-bit TIFF in sRGB, ready for catalogs and the web."
+
+[align]
+shift_x = true
+shift_y = true
+scale = true
+rotation = false
+brightness = true
+framing = "common"
+
+[stack.pyramid]
+grit = 0.25
+range_limit = 1.0
+tone = "compress"
+
+[stack.average]
+radius = 3.0
+smoothing = 8.0
+power = 3.0
+
+[output]
+format = "tiff"
+depth = "u16"
+tiff_compression = "deflate"
+profile = "srgb"
+metadata = true
+template = "{project} {name}"

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use florastack_align::SplitSettings;
 use florastack_core::{LockFile, Monitor, branding};
-use florastack_project::{Preset, ProjectError, Timestamp};
+use florastack_project::{ProjectError, Timestamp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -20,17 +20,23 @@ use crate::{Dispatched, Engine, EngineConfig, Session};
 
 pub(super) fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::job(
-        Meta::new("batch.run", "Process batch", "Queues stacks as separate projects, exports TIFFs and writes a summary CSV.")
+        Meta::new("batch.run", "Process batch", "Queues stacks as separate projects, exports their outputs and writes a summary CSV.")
             .help(
                 "Immediate subfolders are stacks; a folder with images directly inside is auto-split with project.findStacks. \
-                   Mixed layouts are refused. Each stack receives the preset, including depth-map contrast thresholds. \
+                   Mixed layouts are refused. Each stack receives the preset, a TOML file or a built-in one as \
+                   `builtin:<id>` (`preset.list`), including depth-map contrast thresholds; each output is exported as the \
+                   preset's output settings say (`export.run`: a 16-bit TIFF unless they say otherwise, with the maps and \
+                   aligned frames they ask for), the template's extension giving way to their format's. \
                    Failures are recorded and the queue continues. Outputs and projects are staged until the cancellable \
                    work ends, then published without replacing existing files. summary.csv lists stack, frames, method, \
                    time in seconds, warnings, project, output and error. Templates accept {stack}, {method}, {range}, \
                    {first}, {last}, {date} (UTC YYYY-MM-DD), and {params} (the method's effective settings).",
             )
             .effects(Effects::Files)
-            .examples(&[r#"{"input":"C:/Stacks","output":"C:/Results","preset":"C:/Presets/macro.toml"}"#]),
+            .examples(&[
+                r#"{"input":"C:/Stacks","output":"C:/Results","preset":"C:/Presets/macro.toml"}"#,
+                r#"{"input":"C:/Stacks","output":"C:/Results","preset":"builtin:insect-macro"}"#,
+            ]),
         Lane::Heavy,
         run,
     )]
@@ -84,7 +90,8 @@ struct BatchParams {
     input: String,
     /// Destination for individual projects, TIFFs and summary.csv; existing entries are refused.
     output: String,
-    /// TOML preset applied to each project, including its depth-map contrast threshold.
+    /// TOML preset applied to each project, including its depth-map contrast threshold; or a built-in one as
+    /// `builtin:<id>` (`preset.list`).
     preset: String,
     /// Method to run for each stack; pyramid by default.
     #[serde(default)]
@@ -107,7 +114,14 @@ impl Params for BatchParams {
 pub(super) fn check_paths(input: &str, output: &str, preset: &str, template: &str) -> Result<(), Invalid> {
     check_path("input", input)?;
     check_path("output", output)?;
-    check_path("preset", preset)?;
+    match preset.strip_prefix(super::preset::BUILT_IN_PREFIX) {
+        Some(id) if super::preset::BUILT_IN.iter().any(|(name, _)| *name == id) => {}
+        Some(_) => {
+            let ids = super::preset::BUILT_IN.map(|(id, _)| format!("{}{id}", super::preset::BUILT_IN_PREFIX));
+            return Err(Invalid::new("preset", format!("names no built-in preset: there are {}", ids.join(", "))));
+        }
+        None => check_path("preset", preset)?,
+    }
     filename(template, "stack", Method::Pyramid, &[PathBuf::from("first.tif"), PathBuf::from("last.tif")], &json!({}))?;
     Ok(())
 }
@@ -188,7 +202,7 @@ impl Workspace {
         if !input.is_dir() {
             return Err(unavailable("batch.run", "input must be a folder"));
         }
-        Preset::load(&absolute(preset)?)?;
+        super::preset::load(preset)?;
         let output = absolute(output)?;
         std::fs::create_dir_all(&output).map_err(|e| io_error(&output, e))?;
         let output = std::fs::canonicalize(&output).map_err(|e| io_error(&output, e))?;
@@ -206,9 +220,9 @@ impl Workspace {
         Ok(Self { output, stage, _lock: lock })
     }
 
-    /// An engine for the workspace's projects, stacking as the parent engine does (`compute`).
-    pub(super) fn engine(&self, capture: bool, compute: Compute) -> Result<Engine, CommandError> {
-        let config = EngineConfig { temporary_projects: Some(self.stage.path().join("temporary")), compute, ..EngineConfig::default() };
+    /// An engine for the workspace's projects, stacking as the parent engine does (`compute`, `tiling`).
+    pub(super) fn engine(&self, capture: bool, compute: Compute, tiling: florastack_stack::Tiling) -> Result<Engine, CommandError> {
+        let config = EngineConfig { temporary_projects: Some(self.stage.path().join("temporary")), compute, tiling, ..EngineConfig::default() };
         if !capture {
             return Ok(Engine::new(config));
         }
@@ -345,10 +359,28 @@ pub(super) fn filename(template: &str, stack: &str, method: Method, files: &[Pat
         rest = after;
     }
     out.push_str(rest);
-    if !portable(&out) || !out.to_ascii_lowercase().ends_with(".tif") && !out.to_ascii_lowercase().ends_with(".tiff") {
-        return Err(Invalid::new("template", "must render one portable TIFF filename of at most 240 bytes"));
+    let lower = out.to_ascii_lowercase();
+    if !portable(&out) || !IMAGE_EXTENSIONS.iter().any(|extension| lower.ends_with(&format!(".{extension}"))) {
+        return Err(Invalid::new(
+            "template",
+            format!("must render one portable image filename of at most 240 bytes, ending in .{}", IMAGE_EXTENSIONS.join(", .")),
+        ));
     }
     Ok(out)
+}
+
+/// The extensions a template may end in; the file gets its format's (`with_format`).
+const IMAGE_EXTENSIONS: [&str; 7] = ["tif", "tiff", "png", "jpg", "jpeg", "dng", "exr"];
+
+/// `name` with the extension of `format` in place of its own, kept when it is one of the format's.
+fn with_format(name: &str, format: super::export::FileFormat) -> String {
+    let (stem, extension) = name.rsplit_once('.').unwrap_or((name, ""));
+    let same = match format {
+        super::export::FileFormat::Tiff => matches!(extension.to_ascii_lowercase().as_str(), "tif" | "tiff"),
+        super::export::FileFormat::Jpeg => matches!(extension.to_ascii_lowercase().as_str(), "jpg" | "jpeg"),
+        other => extension.eq_ignore_ascii_case(other.extension()),
+    };
+    if same { name.to_owned() } else { format!("{stem}.{}", format.extension()) }
 }
 
 pub(super) fn new_project(engine: &mut Engine, ctx: &JobContext, workspace: &Workspace, name: &str, preset: &str) -> Result<(), CommandError> {
@@ -357,7 +389,11 @@ pub(super) fn new_project(engine: &mut Engine, ctx: &JobContext, workspace: &Wor
         return Err(ProjectError::Exists { path: target }.into());
     }
     call(engine, ctx, "project.new", json!({"name": name, "folder": display(workspace.stage.path())}))?;
-    call(engine, ctx, "preset.apply", json!({"path": preset}))?;
+    let params = match preset.strip_prefix(super::preset::BUILT_IN_PREFIX) {
+        Some(id) => json!({ "builtin": id }),
+        None => json!({ "path": preset }),
+    };
+    call(engine, ctx, "preset.apply", params)?;
     Ok(())
 }
 
@@ -386,15 +422,23 @@ pub(super) fn finish_stack(
     let settings = settings.get("settings").and_then(|s| s.get(method.key())).unwrap_or(&Value::Null);
     let name =
         filename(template, &entry.stack, method, files, settings).map_err(|source| CommandError::Invalid { command: "batch.run".into(), source })?;
+    // The file is written as the preset's output settings say, named by the template.
+    let export = call(engine, ctx, "export.get", json!({}))?;
+    let format: super::export::FileFormat =
+        serde_json::from_value(export.get("settings").and_then(|s| s.get("format")).cloned().unwrap_or(Value::Null)).unwrap_or_default();
+    let name = with_format(&name, format);
     let target = workspace.output.join(&name);
     if target.exists() {
         return Err(ProjectError::Exists { path: target }.into());
     }
     let stacked = call(engine, ctx, method.command(), json!({}))?;
     let output = stacked.get("output").and_then(Value::as_u64).ok_or_else(|| unavailable("batch.run", "stack returned no output"))?;
-    let spec = florastack_codecs::OutputSpec::new(florastack_codecs::Format::Tiff)?;
-    let saved = call(engine, ctx, "output.save", json!({"output": output, "path": display(&workspace.stage.path().join(&name)), "spec": spec}))?;
-    entry.warnings.extend(saved.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
+    let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
+    let exported =
+        call(engine, ctx, "export.run", json!({"output": output, "folder": display(workspace.stage.path()), "settings": { "template": stem }}))?;
+    entry.warnings.extend(exported.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
+    let written = exported.get("files").and_then(|f| f.get(0)).and_then(|f| f.get("path")).and_then(Value::as_str).map(Path::new);
+    let target = written.and_then(Path::file_name).map_or(target, |file| workspace.output.join(file));
     call(engine, ctx, "project.save", json!({}))?;
     call(engine, ctx, "project.close", json!({}))?;
     entry.project = Some(display(&workspace.output.join(format!("{}{}", entry.stack, branding::PROJECT_EXTENSION))));
@@ -449,10 +493,10 @@ fn queue(engine: &mut Engine, ctx: &JobContext, input: &str, split: SplitSetting
 }
 
 fn run(session: &Session, p: BatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
-    let compute = session.compute();
+    let (compute, tiling) = (session.compute(), session.tiling());
     Ok(JobPlan::new(move |ctx| {
         let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
-        let mut engine = workspace.engine(false, compute)?;
+        let mut engine = workspace.engine(false, compute, tiling)?;
         let queue = queue(&mut engine, ctx, &p.input, p.split)?;
         let mut names = BTreeSet::new();
         if queue.iter().any(|(name, _)| !names.insert(name.to_lowercase())) {

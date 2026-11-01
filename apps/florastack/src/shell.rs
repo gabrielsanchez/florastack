@@ -67,11 +67,17 @@ pub struct Shell {
     pub stacks_found: Option<Value>,
     /// What the latest `stack.threshold` job showed: its picture, level and share below.
     pub threshold: Option<Value>,
+    /// What an `export.run` job just wrote, for the app to tell.
+    pub exported: Option<Value>,
+    /// What the latest `compute.test` found, until the Preferences dialog opens again.
+    pub tested: Option<Value>,
     /// The stacking settings (`stack.get`), the alignment settings (`align.get`) and the alignment (`align.info`), read
     /// with the lists.
     pub stack_settings: Value,
     pub align_settings: Value,
     pub alignment: Value,
+    /// The export settings (`export.get`), read with the lists.
+    pub export_settings: Value,
     /// What changed in the retouch session since the Retouch tab last drew it.
     pub retouch: Option<florastack_engine::retouch::RetouchChanges>,
     /// Projects opened or saved elsewhere since last asked, for the recent projects.
@@ -104,10 +110,13 @@ impl Shell {
             made: None,
             stacks_found: None,
             threshold: None,
+            exported: None,
+            tested: None,
             retouch: None,
             stack_settings: Value::Null,
             align_settings: Value::Null,
             alignment: Value::Null,
+            export_settings: Value::Null,
             opened: Vec::new(),
             compute: None,
             stale: true,
@@ -187,6 +196,11 @@ impl Shell {
         self.compute.as_ref().unwrap_or(&Value::Null)
     }
 
+    /// Asks the engine for its compute device again next time: its preference changed.
+    pub fn forget_compute(&mut self) {
+        self.compute = None;
+    }
+
     /// Brings the jobs' progress and results in and folds the engine's events; reads the lists again when the project
     /// changed. Returns whether anything changed.
     pub fn poll(&mut self) -> bool {
@@ -234,6 +248,11 @@ impl Shell {
                 }
                 JobState::Done if job.command == "project.findStacks" => self.stacks_found.clone_from(&job.result),
                 JobState::Done if job.command == "stack.threshold" => self.threshold.clone_from(&job.result),
+                JobState::Done if job.command == "export.run" => self.exported.clone_from(&job.result),
+                JobState::Done if job.command == "compute.test" => {
+                    self.tested.clone_from(&job.result);
+                    self.compute = None;
+                }
                 JobState::Done if job.command.starts_with("stack.") => {
                     self.made = job.result.as_ref().and_then(|r| r["output"].as_u64());
                 }
@@ -254,6 +273,7 @@ impl Shell {
             self.frames.clear();
             self.outputs.clear();
             (self.stack_settings, self.align_settings, self.alignment) = (Value::Null, Value::Null, Value::Null);
+            self.export_settings = Value::Null;
             return;
         };
         let root = self.engine.project_path().map(std::path::Path::to_path_buf).unwrap_or_default();
@@ -271,6 +291,7 @@ impl Shell {
         self.stack_settings = self.engine.run("stack.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());
         self.align_settings = self.engine.run("align.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());
         self.alignment = self.engine.run("align.info", json!({})).unwrap_or(Value::Null);
+        self.export_settings = self.engine.run("export.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());
         let aligned: BTreeMap<u64, &Value> =
             self.alignment["run"]["frames"].as_array().into_iter().flatten().filter_map(|f| Some((f["frame"].as_u64()?, f))).collect();
         let listed = self.engine.run("project.frames", json!({})).unwrap_or(Value::Null);

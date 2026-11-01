@@ -141,6 +141,66 @@ impl Compute {
     }
 }
 
+/// Probes for a GPU again, now, for `device`: the self-test that `compute.test` runs on demand.
+pub(crate) fn reprobe(device: Device) {
+    let software = match device {
+        Device::Cpu => return,
+        Device::Auto => false,
+        Device::Gpu => true,
+    };
+    let mut probes = PROBES.lock().unwrap_or_else(PoisonError::into_inner);
+    probes[usize::from(software)] = None;
+}
+
+/// The memory installed, in bytes, when the system says.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn installed_memory() -> Option<u64> {
+    let mut system = sysinfo::System::new().ok()?;
+    system.refresh_memory();
+    Some(system.total_memory()).filter(|&m| m > 0)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn installed_memory() -> Option<u64> {
+    None
+}
+
+/// The memory budget suggested for stacking with `installed` bytes of memory: a quarter of it, from 512 MiB to 16 GiB;
+/// 1 GiB when the memory isn't known.
+pub fn suggested_budget(installed: Option<u64>) -> usize {
+    const MIB: u64 = 1 << 20;
+    let bytes = installed.map_or(1 << 30, |m| (m / 4).clamp(512 * MIB, 16 * 1024 * MIB));
+    usize::try_from(bytes).unwrap_or(usize::MAX)
+}
+
+/// How much memory stacking may use, as `compute.info` reports it.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryInfo {
+    /// The memory a stack's working data may take before tiles move to the tile folder, in MiB.
+    pub budget_mb: usize,
+    /// The memory installed, in MiB, when the system says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_mb: Option<u64>,
+    /// The budget suggested for this machine, in MiB: a quarter of the memory installed, from 512 MiB to 16 GiB.
+    pub suggested_mb: usize,
+    /// Where tiles beyond the budget go: the folder set, or the system's temporary folder.
+    pub tile_folder: String,
+}
+
+impl MemoryInfo {
+    pub(crate) fn of(tiling: &florastack_stack::Tiling) -> MemoryInfo {
+        let installed = installed_memory();
+        let folder = tiling.spill_dir.clone().unwrap_or_else(std::env::temp_dir);
+        MemoryInfo {
+            budget_mb: tiling.budget >> 20,
+            installed_mb: installed.map(|m| m >> 20),
+            suggested_mb: suggested_budget(installed) >> 20,
+            tile_folder: folder.display().to_string(),
+        }
+    }
+}
+
 /// The compute device as `compute.info` and `compute.set` report it.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -157,6 +217,8 @@ pub struct ComputeInfo {
     pub reason: Option<String>,
     /// The GPU memory a stack's accumulators may take, in MiB.
     pub budget_mb: usize,
+    /// The memory stacking may use on the host, and where it spills beyond it.
+    pub memory: MemoryInfo,
 }
 
 /// A GPU adapter.
@@ -177,11 +239,11 @@ impl From<&AdapterSummary> for Adapter {
 }
 
 impl ComputeInfo {
-    pub(crate) fn of(compute: &Compute) -> ComputeInfo {
+    pub(crate) fn of(compute: &Compute, tiling: &florastack_stack::Tiling) -> ComputeInfo {
         let (device, adapter, reason) = match compute.backend() {
             Backend::Gpu { gpu, .. } => ("gpu", Some(Adapter::from(gpu.adapter())), None),
             Backend::Cpu { reason } => ("cpu", None, Some(reason)),
         };
-        ComputeInfo { preference: compute.device, device, adapter, reason, budget_mb: compute.budget >> 20 }
+        ComputeInfo { preference: compute.device, device, adapter, reason, budget_mb: compute.budget >> 20, memory: MemoryInfo::of(tiling) }
     }
 }

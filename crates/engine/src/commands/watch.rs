@@ -55,12 +55,12 @@ struct WatchParams {
     input: String,
     /// Folder for the saved project, TIFF and summary.csv, outside input.
     output: String,
-    /// TOML preset, including contrast thresholds for unattended depth-map runs.
+    /// TOML preset, including contrast thresholds for unattended depth-map runs; or a built-in one as `builtin:<id>`.
     preset: String,
     /// Method used for the running preview and the final output.
     #[serde(default)]
     method: Method,
-    /// A portable TIFF filename; accepts batch.run's template tokens.
+    /// A portable image filename; accepts batch.run's template tokens, its extension following the preset's format.
     #[serde(default = "batch::default_template")]
     template: String,
     /// Seconds without a new or changed frame before finalization; waits at least settleMs too.
@@ -187,11 +187,11 @@ impl Capture {
 }
 
 fn run(session: &Session, p: WatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
-    let compute = session.compute();
+    let (compute, tiling) = (session.compute(), session.tiling());
     Ok(JobPlan::new(move |ctx| {
         let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
         let input = super::absolute(&p.input)?;
-        let mut engine = workspace.engine(true, compute)?;
+        let mut engine = workspace.engine(true, compute, tiling)?;
         let name = format!("{}-capture", batch::safe(input.file_name().and_then(|s| s.to_str()).unwrap_or("stack")));
         batch::new_project(&mut engine, ctx, &workspace, &name, &p.preset)?;
         let settings = crate::project::develop_settings(engine.project().ok_or_else(|| unavailable("watch.run", "capture project is missing"))?)?;
