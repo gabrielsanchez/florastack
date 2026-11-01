@@ -155,6 +155,7 @@ fn a_reopened_project_is_retouched_with_no_recomputation() {
         name: "Pyramid".into(),
         method: "pyramid".into(),
         parameters: json!({ "grit": 0.5 }),
+        source_state: None,
         inputs: frames.iter().map(|&f| Input::Frame(f)).collect(),
         image: output,
         preview: Some(preview),

@@ -329,7 +329,7 @@ fn a_depth_map_stack_becomes_an_output_with_its_depth_and_confidence_maps() {
     used.sort_unstable();
     assert_eq!(used, ids);
 
-    // Listed with its method, its parameters and its two maps; one undo step.
+    // Listed with its method, parameters, normalized maps and full-precision frame coordinates; one undo step.
     let listed = run(&mut engine, "output.list", "{}");
     let entry = &listed["outputs"][1];
     assert_eq!((&entry["name"], &entry["method"]), (&json!("Depth"), &json!("depth-map")));
@@ -337,7 +337,7 @@ fn a_depth_map_stack_becomes_an_output_with_its_depth_and_confidence_maps() {
         entry["parameters"],
         json!({ "radius": 0.7, "smoothing": 2.7, "threshold": "auto", "level": 0.001, "percentile": 30.0, "framing": "narrow" })
     );
-    assert_eq!(entry["maps"], json!(["confidence", "depth"]));
+    assert_eq!(entry["maps"], json!(["confidence", "depth", "depth-frames"]));
     let output = depth["output"].as_u64().unwrap();
 
     // The maps are saved as data, 16-bit: the depth map is the frame index scaled, 0 for the first frame.

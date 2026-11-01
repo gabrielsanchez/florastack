@@ -83,6 +83,11 @@ Running the binary with file arguments alone, including dragging photos onto its
 | 2 | Invalid CLI arguments, unknown command, invalid JSON or command parameters |
 | 130 | An engine job was cancelled |
 
+The Export tab also offers [scientific outputs and non-destructive annotations](docs/scientific-exports.md): calibrated
+depth in micrometers, confidence and contribution maps, corrected aligned frames, alignment CSVs, objective
+calibrations, scale bars and text labels. Every export writes a settings/version/input-hash JSON sidecar. Recompute it
+without the original project cache with `florastack-cli reproduce result.tif.json --out reproduced`.
+
 ## Contributing
 
 Read [AGENTS.md](AGENTS.md) first: it has the crate map and the rules every change follows, for human contributors and AI coding agents alike. [docs/ROADMAP.md](docs/ROADMAP.md) tracks what is done and what comes next.

@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use florastack_core::Affine;
@@ -313,6 +314,9 @@ pub struct Output {
     pub method: String,
     /// The method's parameters (florastack-stack's).
     pub parameters: Value,
+    /// Immutable processing input state (the engine's record), independent of later project edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<Arc<Project>>,
     created: Timestamp,
     /// The frames and outputs it was made from, in order.
     pub inputs: Vec<Input>,
@@ -326,6 +330,9 @@ pub struct Output {
     /// Retouch layers, bottom first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retouch: Vec<RetouchLayer>,
+    /// Non-destructive annotation layers (the engine's records), rendered only on exported copies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Value>,
 }
 
 impl Output {
@@ -352,6 +359,7 @@ pub struct NewOutput {
     pub name: String,
     pub method: String,
     pub parameters: Value,
+    pub source_state: Option<Arc<Project>>,
     pub inputs: Vec<Input>,
     pub image: CacheRef,
     pub preview: Option<CacheRef>,
@@ -519,12 +527,14 @@ impl Project {
             name: new.name,
             method: new.method,
             parameters: new.parameters,
+            source_state: new.source_state,
             created: Timestamp::now(),
             inputs: new.inputs,
             image: new.image,
             preview: new.preview,
             maps: new.maps,
             retouch: Vec::new(),
+            annotations: Vec::new(),
         });
         id
     }
@@ -560,6 +570,9 @@ impl Project {
         refs.extend(self.maps.values());
         for o in &self.outputs {
             refs.extend(std::iter::once(&o.image).chain(&o.preview).chain(o.maps.values()));
+            if let Some(source) = &o.source_state {
+                refs.extend(source.cache_refs());
+            }
         }
         refs
     }
@@ -606,6 +619,12 @@ impl Project {
             for layer in &o.retouch {
                 id(layer.id.0)?;
                 check_name("retouch layer name", &layer.name)?;
+            }
+            if let Some(source) = &o.source_state {
+                if !source.outputs.is_empty() {
+                    return Err(Problem::Text { what: "output input state", reason: "must not contain nested outputs" });
+                }
+                source.validate()?;
             }
         }
         self.preferences.validate()

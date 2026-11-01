@@ -47,6 +47,7 @@
 //! pass 2 keeps the blend's sums tile by tile (`8 C + 8` bytes a pixel for `C` channels).
 
 mod composite;
+mod contribution;
 mod filter;
 mod focus;
 mod resolve;
@@ -56,6 +57,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use composite::CompositeKernel;
+pub use contribution::Contributions;
 pub use focus::{Estimator, FocusKernel, FocusStats};
 pub use resolve::DepthMap;
 

@@ -41,6 +41,10 @@ pub struct ExportUi {
     template: Option<String>,
     /// Whether an export replaces files that exist.
     pub overwrite: bool,
+    pub(crate) profile_name: String,
+    pub(crate) profile_ppm: f64,
+    pub(crate) label: String,
+    pub(crate) profiles: Option<Value>,
 }
 
 /// Changes export settings (`export.set`; with `drag`, one undo step for a slider's whole drag), keeping the settings
@@ -120,6 +124,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         ui.weak(tr("export-pick"));
         return;
     };
+    crate::scientific_export::show(app, ui, output.id);
     estimate(app, ui, output.id);
     ui.checkbox(&mut app.export.overwrite, tr("export-overwrite")).on_hover_text(tr("tip-export-overwrite"));
     ui.horizontal(|ui| {

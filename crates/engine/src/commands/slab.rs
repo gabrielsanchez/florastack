@@ -224,6 +224,7 @@ fn reusable(project: &Project, cache: &CacheDir, key: &str, method: &str) -> Opt
             name: output.name.clone(),
             method: output.method.clone(),
             parameters: output.parameters.clone(),
+            source_state: output.source_state.clone(),
             inputs: output.inputs.clone(),
             image: output.image.clone(),
             preview: output.preview.clone(),
@@ -252,11 +253,11 @@ fn slab_key(plan: &StackPlan, parameters: &serde_json::Value, develop: &str, ran
 
 /// The slabs' outputs, read back from the cache in the stack's order, each with its coverage: an alpha channel, when
 /// it has one (2 or 4 channels), is the slab's coverage.
-struct Cached<'a> {
-    cache: &'a CacheDir,
-    sources: &'a [CacheRef],
+pub(super) struct Cached<'a> {
+    pub(super) cache: &'a CacheDir,
+    pub(super) sources: &'a [CacheRef],
     /// The canvas's size, which every slab has.
-    size: (usize, usize),
+    pub(super) size: (usize, usize),
 }
 
 /// `image` without its last channel, and that channel.
@@ -378,6 +379,7 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
     let final_settings = p.final_stack.chosen(MethodName::Pyramid, &project_settings);
     final_settings.validate()?;
     let mut plan = StackPlan::new(session, COMMAND, p.slabs.chosen(MethodName::Pyramid, &project_settings), Quality::Output)?;
+    let mut source = super::scientific::snapshot(session)?;
     let n = plan.frames.len();
     if n < MIN_FRAMES {
         return Err(session.unavailable(format!(
@@ -462,6 +464,10 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
             None => None,
         };
         let ids = plan.ids();
+        if let Some(develop) = &develop {
+            source.develop = Some(develop.clone());
+        }
+        let source_state = std::sync::Arc::new(source);
         let mut outputs = Vec::with_capacity(count);
         let mut summaries = Vec::with_capacity(count);
         for (j, (slab, made)) in slabs.into_iter().zip(made).enumerate() {
@@ -481,6 +487,7 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
                             name: format!("{} slab {} of {count}", plan.settings.title(), j + 1),
                             method: plan.settings.name().to_owned(),
                             parameters,
+                            source_state: Some(source_state.clone()),
                             inputs: frames.iter().copied().map(Input::Frame).collect(),
                             image: stored.image,
                             preview: Some(stored.preview),
@@ -531,6 +538,7 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
                 name,
                 method: method.to_owned(),
                 parameters,
+                source_state: Some(source_state),
                 inputs: slab_ids.iter().copied().map(Input::Output).collect(),
                 image,
                 preview: Some(preview),

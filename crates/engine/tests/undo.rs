@@ -68,6 +68,13 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
         Case { name: "preset.apply", setup: none(), params: r#"{ "builtin": "microscope" }"#.into() },
         Case { name: "export.set", setup: none(), params: r#"{ "format": "png", "depth": "u8", "template": "{project}-{id}" }"#.into() },
         Case {
+            name: "annotation.set",
+            setup: none(),
+            params: format!(
+                r#"{{"output":{output},"layers":[{{"name":"Label","visible":true,"white":true,"textSize":8,"annotation":{{"kind":"text","text":"A","position":[0,0]}}}}]}}"#
+            ),
+        },
+        Case {
             name: "export.reset",
             setup: vec![("export.set", r#"{ "format": "jpeg", "depth": "u8" }"#.into()), ("project.save", "{}".into())],
             params: "{}".into(),

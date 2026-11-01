@@ -27,8 +27,10 @@ florastack-metrics = { path = "crates/metrics" }
 florastack-testkit = { path = "crates/testkit" }
 
 # External crates.
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+# Deterministic, platform-independent bitmap glyphs for scientific annotations (MIT, pure Rust).
+font8x8 = "0.3.1"
 # The CLI's argument syntax/help, and its executable integration tests (pure Rust).
 clap = { version = "4.6", features = ["derive"] }
 assert_cmd = "2.1"

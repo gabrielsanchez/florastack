@@ -38,9 +38,11 @@
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
 pub mod align;
+pub mod annotation;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod batch;
 pub mod cache;
+pub mod calibration;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capture;
 pub mod compute;
@@ -54,7 +56,9 @@ pub mod job;
 pub mod output;
 pub mod preset;
 pub mod project;
+pub mod reproduce;
 pub mod retouch;
+pub(crate) mod scientific;
 pub mod slab;
 pub mod split;
 pub mod stack;
@@ -81,6 +85,10 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(threshold::specs());
     all.extend(retouch::specs());
     all.extend(export::specs());
+    all.extend(annotation::specs());
+    all.extend(calibration::specs());
+    #[cfg(not(target_arch = "wasm32"))]
+    all.extend(reproduce::specs());
     all.extend(slab::specs());
     all.extend(preset::specs());
     all.extend(output::specs());

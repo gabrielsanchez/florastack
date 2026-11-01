@@ -98,6 +98,9 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub(crate) fn session(&self) -> &Session {
+        &self.session
+    }
     /// An engine with FloraStack's commands.
     pub fn new(config: EngineConfig) -> Engine {
         Engine::with_registry(config, Registry::standard())
