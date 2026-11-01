@@ -41,6 +41,8 @@ pub mod align;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod batch;
 pub mod cache;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod capture;
 pub mod compute;
 pub mod defects;
 pub mod develop;
@@ -90,6 +92,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     {
         all.extend(batch::specs());
         all.extend(watch::specs());
+        all.extend(capture::specs());
     }
     all
 }

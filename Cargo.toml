@@ -21,6 +21,7 @@ florastack-stack = { path = "crates/stack" }
 florastack-gpu = { path = "crates/gpu" }
 florastack-project = { path = "crates/project" }
 florastack-retouch = { path = "crates/retouch" }
+florastack-capture = { path = "crates/capture" }
 florastack-engine = { path = "crates/engine" }
 florastack-metrics = { path = "crates/metrics" }
 florastack-testkit = { path = "crates/testkit" }
@@ -34,6 +35,9 @@ assert_cmd = "2.1"
 tempfile = "3"
 # Native filesystem events for tethered capture; kqueue avoids a C build on macOS.
 notify = { version = "8.2.1", default-features = false, features = ["macos_kqueue"] }
+# Serial I/O uses the operating system directly; no libudev or C build. LGPL camera libraries are loaded at runtime.
+serialport = { version = "4.10.1", default-features = false }
+libloading = "0.9"
 thiserror = "2"
 toml = "1"
 # Content hashes of frames and cache files (florastack-project): SHA-256, so that users can check them with any

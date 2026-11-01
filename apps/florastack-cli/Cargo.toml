@@ -9,6 +9,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+gphoto = ["florastack-engine/gphoto"]
+
 [dependencies]
 florastack-engine.workspace = true
 clap.workspace = true

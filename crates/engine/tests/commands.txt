@@ -8,6 +8,11 @@ batch.run
 cache.info
 cache.removeAbandoned
 cache.setFolder
+capture.calculate
+capture.camera
+capture.info
+capture.rail
+capture.run
 compute.info
 compute.set
 compute.test

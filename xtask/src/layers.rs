@@ -45,6 +45,7 @@ pub const RULES: Rules = Rules {
         ("florastack-gpu", &[CORE]),
         ("florastack-project", &[CORE]),
         ("florastack-retouch", &[CORE, "florastack-project"]),
+        ("florastack-capture", &[CORE]),
         (
             ENGINE,
             &[
@@ -56,6 +57,7 @@ pub const RULES: Rules = Rules {
                 "florastack-gpu",
                 "florastack-project",
                 "florastack-retouch",
+                "florastack-capture",
             ],
         ),
         ("florastack-metrics", &[CORE]),
@@ -442,7 +444,7 @@ mod tests {
         ws.retain(|c| c.name != "florastack-gpu");
         get(&mut ws, ENGINE).deps.retain(|d| d.name != "florastack-gpu");
         ws.push(Crate {
-            name: "florastack-capture".to_owned(),
+            name: "florastack-unregistered".to_owned(),
             deps: Vec::new(),
             inherits_lints: true,
             bins: Vec::new(),
@@ -451,7 +453,7 @@ mod tests {
         let v = violations(&ws);
         assert_eq!(v.len(), 2, "{v:?}");
         assert!(v.contains(&Violation::StaleEntry { krate: "florastack-gpu" }), "{v:?}");
-        assert!(v.contains(&Violation::Unregistered { krate: "florastack-capture".to_owned() }), "{v:?}");
+        assert!(v.contains(&Violation::Unregistered { krate: "florastack-unregistered".to_owned() }), "{v:?}");
     }
 
     #[test]

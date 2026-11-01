@@ -307,6 +307,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] The GPU's fallback to the CPU part way through a stack is reached only by a real failure: a fault-injection hook would let a test cover it
 - [ ] The quality gate stacks on the CPU only: a GPU run of the synthetic stacks, with tolerances of its own, would catch GPU regressions on CI's software adapters too
 - [ ] Alignment (ECC, phase correlation, the band-pass levels) on the GPU, which 4.3 left on the CPU
+- [ ] Investigate Windows `STATUS_HEAP_CORRUPTION` during repeated `compute.test` reprobes with default adapter selection; the arbitrary-JSON test reproduces it under native permissions, while repeated runs on WARP pass
 
 ## Phase 5 — Desktop UI and retouching
 
@@ -375,12 +376,13 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 6.1 Camera and rail control *(plan first)*
 
-- [ ] florastack-capture crate (core only; the engine may depend on it; RULES updated) and a Capture tab
-- [ ] Watch-folder capture documented with in-camera focus bracketing and, on Windows, the camera makers' tethering apps
-- [ ] libgphoto2 camera control on Linux and macOS behind the `gphoto` feature, loaded at run time through a thin FFI module, the one module AGENTS.md lists for `unsafe`; ATTRIBUTION.md entry
-- [ ] Serial rail control: G-code and the simple serial protocols of DIY rails, stubs for commercial rails with public protocols
-- [ ] Focus bracketing by lens (gphoto builds), a wave-optics step-size calculator, and captured frames streamed into the watch-folder ingest
-- [ ] Tests: builds with and without `--features gphoto`; a mock camera and rail drive an end-to-end capture
+- [x] florastack-capture crate (core only; the engine may depend on it; RULES updated) and a Capture tab
+- [x] Watch-folder capture documented with in-camera focus bracketing and, on Windows, the camera makers' tethering apps (`docs/capture.md`)
+- [x] libgphoto2 camera control on Linux and macOS behind the `gphoto` feature, loaded at run time through a thin FFI module, the one module AGENTS.md lists for `unsafe`; ATTRIBUTION.md entry
+- [x] Serial rail control: explicit Marlin G-code and a documented DIY Arduino line protocol, calibrated travel, movement completion, timeout/cancellation stops, and an unavailable Zaber ASCII stub tied to its public protocol
+- [x] Focus bracketing by lens (session-relative near/far motor marks), a wave-optics step-size calculator with numerical reference cases, and captured frames streamed into reusable watch-folder ingest with explicit completion and live previews
+- [x] Tests: default Windows build and full `cargo xtask ci` (all 8 steps passed, no skipped tests, WARP with `FLORASTACK_REQUIRE_GPU=1`); `gphoto` capture crate cross-linted for Linux and Apple silicon, and the engine with the feature for Linux. Eight mock-camera/rail JSON capture tests cover real watched files, previews before shooting finishes, a final stack, slow exposures, cancellation, disconnection, external/controller triggering, lens marks and unavailable capabilities; eight capture unit tests and a headless Capture-tab test. CI and xtask additionally lint the full workspace and test capture/engine with the feature natively on Linux/macOS
+- [ ] Validate physical camera/lens models and rail firmware, and implement the documented Zaber ASCII stub after hardware validation; current acceptance uses mock devices and cross-compilation for the optional Linux/macOS camera driver
 
 ### 6.2 Scientific exports and annotations
 

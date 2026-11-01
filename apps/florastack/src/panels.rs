@@ -46,6 +46,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             Tab::Retouch => crate::retouch_tab::panel(app, ui),
             Tab::Export => crate::export_tab::show(app, ui),
             Tab::Batch => batch_tab(app, ui),
+            Tab::Capture => crate::capture_tab::show(app, ui),
         });
     });
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {

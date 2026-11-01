@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod capture_tab;
 pub mod export_tab;
 pub mod files;
 pub mod i18n;

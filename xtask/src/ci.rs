@@ -45,6 +45,16 @@ pub const STEPS: &[Step] = &[
     Step { name: "check-layers", args: &["xtask", "check-layers"], tool: None },
     Step { name: "fixtures", args: &["xtask", "corpus", "--fixtures"], tool: None },
     Step { name: TEST_STEP, args: &["test", "--workspace", "--locked"], tool: None },
+    Step {
+        name: "gphoto-clippy",
+        args: &["clippy", "--workspace", "--all-targets", "--features", "gphoto", "--locked", "--", "-D", "warnings"],
+        tool: None,
+    },
+    Step {
+        name: "gphoto-test",
+        args: &["test", "-p", "florastack-capture", "-p", "florastack-engine", "--features", "gphoto", "--locked"],
+        tool: None,
+    },
     Step { name: "quality", args: &["xtask", "quality", "--gate"], tool: None },
     Step { name: "deny", args: &["deny", "check"], tool: Some("cargo-deny") },
     Step { name: "audit", args: &["audit"], tool: Some("cargo-audit") },
@@ -88,6 +98,10 @@ pub fn run(meta: &Value) -> Result<(), String> {
     let mut outcomes: Vec<(&Step, Outcome)> = Vec::with_capacity(STEPS.len());
     let mut failed = false;
     for step in STEPS {
+        // These match the workflow's runner.os conditions. Windows deliberately has no gphoto build.
+        if cfg!(target_os = "windows") && step.name.starts_with("gphoto-") {
+            continue;
+        }
         if failed {
             outcomes.push((step, Outcome::NotRun));
             continue;
@@ -376,7 +390,7 @@ mod tests {
         list.push(skip("gpu", "the adapter failed the self-test", "main"));
         let text = summary(&steps, &Skips { list, unreadable: 0 }, Duration::from_secs(125), "target/ci/skips.jsonl");
         assert!(text.contains(&format!("CI summary: all {} steps passed in 2m 05s", STEPS.len())), "{text}");
-        assert!(text.contains("  ok       clippy          1.2 s  cargo clippy --workspace --all-targets --locked -- -D warnings\n"), "{text}");
+        assert!(text.contains("  ok       clippy           1.2 s  cargo clippy --workspace --all-targets --locked -- -D warnings\n"), "{text}");
         assert!(text.contains("Skipped tests: 9, which passed without running their checks (records in target/ci/skips.jsonl):"), "{text}");
         let gpu = text.find("  gpu (8): needs a GPU adapter that passes the self-test\n").expect("the gpu group");
         let corpus =
