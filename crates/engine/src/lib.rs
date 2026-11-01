@@ -40,6 +40,7 @@ pub use compute::{Compute, ComputeInfo, Device};
 pub use engine::{DispatchOptions, Dispatched, Engine, EngineConfig, MAX_PARAMS_BYTES};
 pub use error::{CommandError, ErrorInfo, Invalid};
 pub use events::{Event, ProjectEvent};
+pub use florastack_capture as capture;
 pub use jobs::{
     Clock, Executor, InlineExecutor, JobContext, JobId, JobInfo, JobPlan, JobState, Lane, LivePreview, ManualClock, Progress, Waker, commit,
 };

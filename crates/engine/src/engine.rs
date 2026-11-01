@@ -114,6 +114,12 @@ impl Engine {
         &self.registry
     }
 
+    /// Installs host-supplied camera and rail drivers (including hardware simulators), before capture jobs run.
+    /// Device access is serialized by the capture commands, independently of the project.
+    pub fn capture_devices(&self) -> Arc<std::sync::Mutex<florastack_capture::Devices>> {
+        self.session.capture.clone()
+    }
+
     /// Runs the command `name` with JSON parameters (an object, or `null` for none). A job command returns
     /// [`Dispatched::Started`]; its result comes through [`Engine::wait`], [`Engine::job`] or the job events.
     pub fn dispatch(&mut self, name: &str, params: Value) -> Result<Dispatched, CommandError> {

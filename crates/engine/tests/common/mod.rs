@@ -19,6 +19,7 @@ use florastack_engine::{
 use florastack_project::{Area, Aspects, Edit, FolderTrash, Input, LayerId, NewOutput, ProjectFolder};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+pub mod capture;
 
 /// A folder of its own in the system's temporary directory, removed with everything in it when dropped.
 pub struct TempDir(PathBuf);

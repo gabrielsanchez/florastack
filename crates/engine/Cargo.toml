@@ -9,6 +9,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+gphoto = ["florastack-capture/gphoto"]
+
 [dependencies]
 florastack-core.workspace = true
 florastack-codecs.workspace = true
@@ -18,6 +22,7 @@ florastack-stack.workspace = true
 florastack-gpu.workspace = true
 florastack-project.workspace = true
 florastack-retouch.workspace = true
+florastack-capture.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true

@@ -82,6 +82,7 @@ impl Executor for ThreadExecutor {
         let name = match lane {
             Lane::Heavy => "florastack-job",
             Lane::Preview => "florastack-preview",
+            Lane::Device => "florastack-device",
         };
         std::thread::Builder::new().name(name.into()).spawn(task).map(drop)
     }

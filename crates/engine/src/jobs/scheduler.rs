@@ -135,14 +135,22 @@ impl Jobs {
 
     /// Whether a job submitted to `lane` now would start at once: the lane has room and nobody waits in it.
     pub(crate) fn has_room(&self, lane: Lane) -> bool {
-        let max = if lane == Lane::Heavy { self.max_heavy } else { self.max_preview };
+        let max = match lane {
+            Lane::Heavy => self.max_heavy,
+            Lane::Preview => self.max_preview,
+            Lane::Device => 1,
+        };
         self.running(lane) < max && !self.active.iter().any(|a| a.lane == lane && matches!(a.state, State::Queued(_)))
     }
 
     /// The next queued job whose lane has room, marked running, with its spec and parameters, for the engine to plan.
     pub(crate) fn next_to_start(&mut self) -> Option<(JobId, Arc<CommandSpec>, Value)> {
-        for lane in [Lane::Heavy, Lane::Preview] {
-            let max = if lane == Lane::Heavy { self.max_heavy } else { self.max_preview };
+        for lane in [Lane::Heavy, Lane::Preview, Lane::Device] {
+            let max = match lane {
+                Lane::Heavy => self.max_heavy,
+                Lane::Preview => self.max_preview,
+                Lane::Device => 1,
+            };
             if self.running(lane) >= max {
                 continue;
             }

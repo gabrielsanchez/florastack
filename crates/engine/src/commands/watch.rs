@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::batch::{self, BatchResult, Method, Workspace, call, children, io_error, unavailable};
 use crate::error::{CommandError, Invalid};
-use crate::jobs::{JobPlan, Lane, commit};
+use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Effects, Meta, Params};
 use crate::session::Session;
 
@@ -48,21 +48,21 @@ fn poll() -> u64 {
 }
 
 /// Watches one capture and finalizes after a quiet period.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct WatchParams {
+pub(super) struct WatchParams {
     /// Folder populated by a tethered camera or its capture application.
-    input: String,
+    pub(super) input: String,
     /// Folder for the saved project, TIFF and summary.csv, outside input.
-    output: String,
+    pub(super) output: String,
     /// TOML preset, including contrast thresholds for unattended depth-map runs; or a built-in one as `builtin:<id>`.
-    preset: String,
+    pub(super) preset: String,
     /// Method used for the running preview and the final output.
     #[serde(default)]
-    method: Method,
+    pub(super) method: Method,
     /// A portable image filename; accepts batch.run's template tokens, its extension following the preset's format.
     #[serde(default = "batch::default_template")]
-    template: String,
+    pub(super) template: String,
     /// Seconds without a new or changed frame before finalization; waits at least settleMs too.
     #[serde(default = "idle")]
     #[schemars(range(min = 0.1, max = 86400))]
@@ -189,98 +189,146 @@ impl Capture {
 fn run(session: &Session, p: WatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
     let (compute, tiling) = (session.compute(), session.tiling());
     Ok(JobPlan::new(move |ctx| {
-        let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
-        let input = super::absolute(&p.input)?;
-        let mut engine = workspace.engine(true, compute, tiling)?;
-        let name = format!("{}-capture", batch::safe(input.file_name().and_then(|s| s.to_str()).unwrap_or("stack")));
-        batch::new_project(&mut engine, ctx, &workspace, &name, &p.preset)?;
-        let settings = crate::project::develop_settings(engine.project().ok_or_else(|| unavailable("watch.run", "capture project is missing"))?)?;
-        let (tx, rx) = sync_channel(1);
-        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok_and(|event| !matches!(event.kind, EventKind::Access(_))) {
-                let _ = tx.try_send(());
-            }
-        });
-        // Events are an optimization. Polling remains active even when setup fails or the event queue overflows.
-        let mut watcher = watcher.ok();
-        if let Some(watcher) = &mut watcher {
-            if let Err(error) = watcher.watch(&input, RecursiveMode::NonRecursive) {
-                tracing::warn!(%error, "filesystem events unavailable; polling capture folder");
-            }
-        } else {
-            tracing::warn!("filesystem events unavailable; polling capture folder");
-        }
-        let mut capture = Capture::new();
-        let start = Instant::now();
-        let settle = Duration::from_millis(p.settle_ms);
-        let quiet = Duration::from_secs_f64(p.idle_seconds).max(settle);
-        let interval = Duration::from_millis(p.poll_ms).min(Duration::from_millis(100));
-        let mut entry = batch::entry(name, 0, p.method);
-        let preview_name = format!("{}-preview.tif", entry.stack);
-        loop {
-            ctx.checkpoint()?;
-            capture.scan(&input)?;
-            let ready = capture.ready(settle, &settings, ctx)?;
-            if !ready.is_empty() {
-                let added = call(&mut engine, ctx, "project.addFrames", json!({"paths": ready}))?;
-                for skip in added.get("skipped").and_then(Value::as_array).into_iter().flatten() {
-                    if let Some(file) = skip.get("path").and_then(Value::as_str).and_then(|path| capture.files.get_mut(Path::new(path))) {
-                        file.error = Some(skip.get("reason").and_then(Value::as_str).unwrap_or("not ingested").into());
-                    }
-                }
-                let accepted: Vec<_> =
-                    engine.project().into_iter().flat_map(|project| &project.frames).map(|frame| PathBuf::from(&frame.path)).collect();
-                for path in ready {
-                    if accepted.contains(&path) {
-                        if let Some(file) = capture.files.get_mut(&path) {
-                            if stamp(&path)? != file.stamp {
-                                return Err(unavailable("watch.run", "a frame changed while being ingested: increase settleMs"));
-                            }
-                            file.accepted = true;
-                            file.error = None;
-                        }
-                        capture.frames.push(path);
-                    }
-                }
-                if added.get("added").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
-                    call(&mut engine, ctx, "watch.align", json!({}))?;
-                    let preview = call(&mut engine, ctx, "stack.preview", json!({"method": p.method.name()}))?;
-                    if let Some(path) = preview.get("path").and_then(Value::as_str) {
-                        let destination = workspace.stage.path().join(&preview_name);
-                        let bytes = std::fs::read(path).map_err(|e| io_error(Path::new(path), e))?;
-                        super::output::write_atomically(&destination, &bytes)?;
-                        // stack.preview creates an unreferenced cache file. Keep only the published capture copy.
-                        std::fs::remove_file(path).map_err(|e| io_error(Path::new(path), e))?;
-                        ctx.preview(super::display(&destination), capture.frames.len());
-                    }
-                    call(&mut engine, ctx, "project.save", json!({}))?;
-                    ctx.step(capture.frames.len() as u64, 0)?;
-                    // Always rescan after processing before deciding that capture is quiet.
-                    continue;
-                }
-            }
-            if !capture.files.is_empty() && capture.activity.elapsed() >= quiet {
-                for (path, file) in &capture.files {
-                    if !file.accepted {
-                        entry.warnings.push(format!("{}: {}", path.display(), file.error.as_deref().unwrap_or("file did not finish writing")));
-                    }
-                }
-                if capture.frames.is_empty() {
-                    return Err(unavailable("watch.run", format!("no readable frames arrived: {}", entry.warnings.join("; "))));
-                }
-                break;
-            }
-            // A disconnected event source must not turn the polling fallback into a busy loop.
-            if matches!(rx.recv_timeout(interval), Err(RecvTimeoutError::Disconnected)) {
-                std::thread::sleep(interval);
-            }
-        }
-        entry.frames = capture.frames.len();
-        batch::finish_stack(&mut engine, ctx, &workspace, &mut entry, &capture.frames, &p.template, p.method)?;
-        entry.time = start.elapsed().as_secs_f64();
-        let result = workspace.publish(ctx, vec![entry])?;
-        ctx.preview(super::display(&workspace.output.join(preview_name)), capture.frames.len());
+        let result = ingest(ctx, p, compute, tiling, None)?;
         Ok(commit(move |_| Ok(result)))
     })
     .stages(&[("Capturing frames and updating preview", 1.0)]))
+}
+
+/// Managed capture supplies explicit completion and waits for this initialization barrier before shooting.
+pub(super) struct Managed {
+    pub ready: std::sync::mpsc::Sender<()>,
+    pub completion: std::sync::mpsc::Receiver<Result<usize, CommandError>>,
+    pub accepted: std::sync::mpsc::Sender<usize>,
+}
+
+fn notifications(input: &Path) -> (Option<notify::RecommendedWatcher>, std::sync::mpsc::Receiver<()>) {
+    let (tx, rx) = sync_channel(1);
+    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_ok_and(|event| !matches!(event.kind, EventKind::Access(_))) {
+            let _ = tx.try_send(());
+        }
+    });
+    // Events are an optimization. Polling remains active even when setup fails or the event queue overflows.
+    let mut watcher = watcher.ok();
+    if let Some(watcher) = &mut watcher {
+        if let Err(error) = watcher.watch(input, RecursiveMode::NonRecursive) {
+            tracing::warn!(%error, "filesystem events unavailable; polling capture folder");
+        }
+    } else {
+        tracing::warn!("filesystem events unavailable; polling capture folder");
+    }
+    (watcher, rx)
+}
+
+pub(super) fn ingest(
+    ctx: &JobContext,
+    p: WatchParams,
+    compute: crate::compute::Compute,
+    tiling: florastack_stack::Tiling,
+    managed: Option<Managed>,
+) -> Result<BatchResult, CommandError> {
+    let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
+    let input = super::absolute(&p.input)?;
+    let mut engine = workspace.engine(true, compute, tiling)?;
+    let name = format!("{}-capture", batch::safe(input.file_name().and_then(|s| s.to_str()).unwrap_or("stack")));
+    batch::new_project(&mut engine, ctx, &workspace, &name, &p.preset)?;
+    let settings = crate::project::develop_settings(engine.project().ok_or_else(|| unavailable("watch.run", "capture project is missing"))?)?;
+    let (_watcher, rx) = notifications(&input);
+    let mut capture = Capture::new();
+    let start = Instant::now();
+    let settle = Duration::from_millis(p.settle_ms);
+    let quiet = Duration::from_secs_f64(p.idle_seconds).max(settle);
+    let interval = Duration::from_millis(p.poll_ms).min(Duration::from_millis(100));
+    let mut entry = batch::entry(name, 0, p.method);
+    let preview_name = format!("{}-preview.tif", entry.stack);
+    if let Some(managed) = &managed {
+        managed.ready.send(()).map_err(|_| unavailable("capture.run", "device worker disconnected before shooting"))?;
+    }
+    let mut expected = None;
+    loop {
+        ctx.checkpoint()?;
+        if expected.is_none()
+            && let Some(managed) = &managed
+        {
+            match managed.completion.try_recv() {
+                Ok(result) => expected = Some(result?),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err(unavailable("capture.run", "device worker disconnected")),
+            }
+        }
+        capture.scan(&input)?;
+        let ready = capture.ready(settle, &settings, ctx)?;
+        if !ready.is_empty() {
+            let added = call(&mut engine, ctx, "project.addFrames", json!({"paths": ready}))?;
+            for skip in added.get("skipped").and_then(Value::as_array).into_iter().flatten() {
+                if let Some(file) = skip.get("path").and_then(Value::as_str).and_then(|path| capture.files.get_mut(Path::new(path))) {
+                    file.error = Some(skip.get("reason").and_then(Value::as_str).unwrap_or("not ingested").into());
+                }
+            }
+            let accepted: Vec<_> = engine.project().into_iter().flat_map(|project| &project.frames).map(|frame| PathBuf::from(&frame.path)).collect();
+            for path in ready {
+                if accepted.contains(&path) {
+                    if let Some(file) = capture.files.get_mut(&path) {
+                        if stamp(&path)? != file.stamp {
+                            return Err(unavailable("watch.run", "a frame changed while being ingested: increase settleMs"));
+                        }
+                        file.accepted = true;
+                        file.error = None;
+                    }
+                    capture.frames.push(path);
+                }
+            }
+            if added.get("added").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
+                call(&mut engine, ctx, "watch.align", json!({}))?;
+                let preview = call(&mut engine, ctx, "stack.preview", json!({"method": p.method.name()}))?;
+                if let Some(path) = preview.get("path").and_then(Value::as_str) {
+                    let destination = workspace.stage.path().join(&preview_name);
+                    let bytes = std::fs::read(path).map_err(|e| io_error(Path::new(path), e))?;
+                    super::output::write_atomically(&destination, &bytes)?;
+                    // stack.preview creates an unreferenced cache file. Keep only the published capture copy.
+                    std::fs::remove_file(path).map_err(|e| io_error(Path::new(path), e))?;
+                    ctx.preview(super::display(&destination), capture.frames.len());
+                }
+                call(&mut engine, ctx, "project.save", json!({}))?;
+                if let Some(managed) = &managed {
+                    let _ = managed.accepted.send(capture.frames.len());
+                }
+                ctx.step(capture.frames.len() as u64, 0)?;
+                // Always rescan after processing before deciding that capture is quiet.
+                continue;
+            }
+        }
+        let completed = expected.is_some_and(|count| capture.frames.len() >= count);
+        let quiet_end = capture.activity.elapsed() >= quiet && (expected.is_some() || managed.is_none());
+        if completed || (!capture.files.is_empty() && quiet_end) {
+            for (path, file) in &capture.files {
+                if !file.accepted {
+                    entry.warnings.push(format!("{}: {}", path.display(), file.error.as_deref().unwrap_or("file did not finish writing")));
+                }
+            }
+            if capture.frames.is_empty() {
+                return Err(unavailable("watch.run", format!("no readable frames arrived: {}", entry.warnings.join("; "))));
+            }
+            if let Some(expected) = expected
+                && capture.frames.len() != expected
+            {
+                return Err(unavailable(
+                    "capture.run",
+                    format!("expected {expected} frames, ingested {}: {}", capture.frames.len(), entry.warnings.join("; ")),
+                ));
+            }
+            break;
+        }
+        // A disconnected event source must not turn the polling fallback into a busy loop.
+        if matches!(rx.recv_timeout(interval), Err(RecvTimeoutError::Disconnected)) {
+            std::thread::sleep(interval);
+        }
+    }
+    entry.frames = capture.frames.len();
+    batch::finish_stack(&mut engine, ctx, &workspace, &mut entry, &capture.frames, &p.template, p.method)?;
+    entry.time = start.elapsed().as_secs_f64();
+    let result = workspace.publish(ctx, vec![entry])?;
+    ctx.preview(super::display(&workspace.output.join(preview_name)), capture.frames.len());
+    Ok(result)
 }

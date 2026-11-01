@@ -253,6 +253,15 @@ fn every_command_dispatches_from_json() {
         );
         assert_eq!(result["failed"], 0, "{result}");
     }
+    common::capture::install(calls.engine, stack, None);
+    assert!(calls.run("capture.calculate", r#"{"magnification":1,"aperture":4,"pixelPitch":4}"#)["stepMicrometers"].as_f64().unwrap() > 0.0);
+    assert!(calls.run("capture.info", "{}")["camera"].is_object());
+    calls.run("capture.camera", r#"{"action":"markNear"}"#);
+    calls.run("capture.rail", r#"{"action":"move","micrometers":50}"#);
+    let capture_input = dir.path().join("managed-input");
+    std::fs::create_dir(&capture_input).unwrap();
+    let result = calls.run("capture.run", &json!({"watch":{"input":capture_input,"output":dir.path().join("managed-output"),"preset":"builtin:insect-macro","settleMs":50,"pollMs":10},"frames":3,"mode":"rail","trigger":"camera","stepMicrometers":50,"settleMs":0}).to_string());
+    assert_eq!(result["stacks"][0]["frames"], 3);
     let all: BTreeSet<String> = Registry::standard().names().into_iter().map(str::to_owned).collect();
     let missed: Vec<&String> = all.difference(&calls.names).collect();
     assert!(missed.is_empty(), "commands this test never dispatched: {missed:?}");

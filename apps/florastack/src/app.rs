@@ -160,6 +160,7 @@ pub struct FloraStackApp {
     pub retouch: crate::retouch_tab::RetouchUi,
     /// The Export tab's estimate and template being typed.
     pub export: crate::export_tab::ExportUi,
+    pub capture: crate::capture_tab::CaptureUi,
     /// The built-in presets (`preset.list`), once asked.
     pub(crate) built_in: Option<Vec<Value>>,
     /// When to save on its own; `None` when autosave is off.
@@ -176,6 +177,7 @@ pub struct FloraStackApp {
     pub follow_preview: bool,
     /// The preview file shown last.
     shown_preview: Option<PathBuf>,
+    shown_preview_revision: u64,
     /// The folder of temporary projects, which the recent projects leave out.
     pub(crate) temporary: Option<PathBuf>,
 }
@@ -218,6 +220,7 @@ impl FloraStackApp {
             preview_method: "pyramid",
             retouch: crate::retouch_tab::RetouchUi::default(),
             export: crate::export_tab::ExportUi::default(),
+            capture: crate::capture_tab::CaptureUi::default(),
             built_in: None,
             autosave: None,
             checked: None,
@@ -226,6 +229,7 @@ impl FloraStackApp {
             batch: BatchForm::default(),
             follow_preview: false,
             shown_preview: None,
+            shown_preview_revision: 0,
             temporary,
         };
         app.set_autosave();
@@ -634,8 +638,9 @@ impl FloraStackApp {
             }
         }
         // A preview that just came in replaces the one shown, or takes the viewer when one was asked for.
-        if self.shell.preview.is_some() && self.shell.preview != self.shown_preview {
+        if self.shell.preview.is_some() && (self.shell.preview != self.shown_preview || self.shell.preview_revision != self.shown_preview_revision) {
             self.shown_preview.clone_from(&self.shell.preview);
+            self.shown_preview_revision = self.shell.preview_revision;
             if self.follow_preview || self.selection == Selection::Preview {
                 let keep = self.selection == Selection::Preview;
                 self.follow_preview = false;

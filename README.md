@@ -22,6 +22,10 @@ cargo xtask quality                                     # every method on every 
 
 `cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures` before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks. `cargo xtask quality` stacks the synthetic stacks and every corpus stack by every method, scores and times each output, and fails when one is worse than `quality/baseline.json` beyond its tolerance; `cargo xtask ci` runs its gate on the synthetic stacks, as CI does.
 
+## Capture
+
+The [Capture tab and workflow](docs/capture.md) connect in-camera bracketing or tethering apps to the watch folder on all platforms, with serial rails and a diffraction step calculator. Linux/macOS can add built-in camera control with `cargo build -p florastack --features gphoto` and a separately installed libgphoto2 shared library. Windows builds omit that feature and use the camera maker's tethering app.
+
 ## GPU
 
 Stacking runs on the GPU through [wgpu](https://wgpu.rs) (Vulkan, Metal or DX12; WebGPU in a browser later) when a hardware adapter passes a self-test, and on the CPU otherwise; the log says which and why, and `compute.info` reports it. Nothing needs installing beyond the graphics driver. `--device cpu` (CLI) or `compute.set` with `{"device": "cpu"}` forces the CPU; `gpu` also takes software adapters such as Mesa's lavapipe and Windows' WARP, which compute correctly but more slowly than the CPU. The GPU's results agree with the CPU's within the tolerances that `crates/gpu/tests/` documents, and a GPU that fails part way through a stack makes it start again on the CPU.

@@ -1,5 +1,14 @@
 # Attribution
 
+Capture uses the following dependencies and public specifications (no proprietary or GPL/LGPL implementation code was read or adapted):
+
+| Component | Source | License | Use |
+|---|---|---|---|
+| libgphoto2 | <https://www.gphoto.org/proj/libgphoto2/>; public API <https://gphoto.sourceforge.io/doc/api/> | LGPL-2.1 | Optional Linux/macOS camera control through a thin original FFI module, loaded dynamically as a separately installed shared library; no library is bundled or statically linked. Users can replace it with an ABI-compatible library by setting `FLORASTACK_GPHOTO_LIBRARY` to an absolute path. See `docs/capture.md` for replacement and distribution requirements. |
+| serialport-rs | <https://github.com/serialport/serialport-rs> | MPL-2.0 | Pure-Rust serial driver, default features disabled (no libudev). |
+| libloading | <https://github.com/nagisa/rust_libloading> | ISC | Runtime library loading for the optional camera FFI. |
+| Nikon MicroscopyU | <https://www.microscopyu.com/microscopy-basics/depth-of-field-and-depth-of-focus> | Public equation; no code or assets copied | Diffraction-only depth-of-field term, independently implemented with documented paraxial and pupil assumptions. |
+
 This file lists every third-party project that FloraStack takes code, data, assets or design from, and the main dependencies chosen for core jobs such as image codecs, RAW decoding and color management. FloraStack's own code is MIT OR Apache-2.0 (see [`LICENSE-MIT`](LICENSE-MIT), [`LICENSE-APACHE`](LICENSE-APACHE) and [`NOTICE`](NOTICE)).
 
 When a change adds such a source, add its row in the same commit. Only permissively licensed sources and published papers may be used. Never take code, shaders or assets from proprietary focus stackers or from GPL/LGPL image projects.

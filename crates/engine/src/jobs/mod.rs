@@ -15,7 +15,9 @@
 //!    project lives: it changes the project, as one undo step, and returns the job's result.
 //!
 //! A job that is cancelled, fails or panics never reaches its commit: the project is exactly as it was. Cache files it
-//! wrote are new files that nothing refers to, removed when the project is next closed or opened. Cancelling wins over
+//! wrote are new files that nothing refers to, removed when the project is next closed or opened. Managed capture
+//! deliberately publishes completed original photos incrementally to the watched folder: cancellation preserves those
+//! originals while discarding staged stack outputs. Cancelling wins over
 //! a job that finishes anyway: its commit is dropped.
 //!
 //! # Lanes
@@ -24,7 +26,8 @@
 //! up to two alongside it, on a smaller share of the machine ([`executor`]), and a newer preview of a command that
 //! supersedes its older calls cancels them. The scheduler itself lives on the engine's thread: workers only send
 //! messages (progress and their outcome) to the engine's inbox, a channel the engine drains when it is polled or waits,
-//! so that the engine's thread never shares a lock with a worker (the browser build's main thread may not block).
+//! so that the engine's thread never shares a project lock with a worker (the browser build's main thread may not block).
+//! [`Lane::Device`] serializes camera and rail I/O independently; device queries use `try_lock` to stay responsive.
 
 mod clock;
 pub mod executor;
@@ -77,6 +80,8 @@ pub enum Lane {
     Heavy,
     /// Quick previews alongside, on a smaller share of the machine.
     Preview,
+    /// Serialized camera/rail I/O, alongside image processing.
+    Device,
 }
 
 /// Where a job is in its life.

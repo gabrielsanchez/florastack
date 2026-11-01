@@ -59,6 +59,9 @@ pub struct Session {
     /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
     pub(crate) retouch: Option<crate::retouch::RetouchSession>,
     pub(crate) retouch_closed: bool,
+    pub(crate) capture: Arc<std::sync::Mutex<florastack_capture::Devices>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) capture_preview: Arc<std::sync::Mutex<Option<tempfile::TempPath>>>,
 }
 
 /// Runs `f`, turning a panic into an error (AGENTS.md, Never crash: a last resort; the project only changes through
@@ -87,6 +90,9 @@ impl Session {
             focus: None,
             retouch: None,
             retouch_closed: false,
+            capture: Arc::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            capture_preview: Arc::default(),
         }
     }
 

@@ -61,6 +61,8 @@ pub struct Shell {
     pub notices: Vec<Notice>,
     /// The latest preview stack (`stack.preview`'s file), until a project is opened or closed.
     pub preview: Option<PathBuf>,
+    /// Advances when a running capture replaces the contents at its preview path.
+    pub preview_revision: u64,
     /// The output a stacking job just made, for the viewer to show.
     pub made: Option<u64>,
     /// What a `project.findStacks` job just found, for the app to offer.
@@ -107,6 +109,7 @@ impl Shell {
             outputs: Vec::new(),
             notices: Vec::new(),
             preview: None,
+            preview_revision: 0,
             made: None,
             stacks_found: None,
             threshold: None,
@@ -237,6 +240,14 @@ impl Shell {
     }
 
     fn job_event(&mut self, job: JobInfo) {
+        if matches!(job.command.as_str(), "watch.run" | "capture.run")
+            && let Some(preview) = &job.preview
+        {
+            self.preview = Some(PathBuf::from(&preview.path));
+            if self.jobs.get(&job.id).and_then(|previous| previous.preview.as_ref()) != Some(preview) {
+                self.preview_revision = self.preview_revision.saturating_add(1);
+            }
+        }
         if job.state.is_finished() {
             match job.state {
                 JobState::Failed => {
@@ -245,6 +256,11 @@ impl Shell {
                 }
                 JobState::Done if job.command == "stack.preview" => {
                     self.preview = job.result.as_ref().and_then(|r| r["path"].as_str()).map(PathBuf::from);
+                }
+                JobState::Done if job.command == "capture.camera" => {
+                    if let Some(path) = job.result.as_ref().and_then(|r| r["path"].as_str()) {
+                        self.preview = Some(PathBuf::from(path));
+                    }
                 }
                 JobState::Done if job.command == "project.findStacks" => self.stacks_found.clone_from(&job.result),
                 JobState::Done if job.command == "stack.threshold" => self.threshold.clone_from(&job.result),

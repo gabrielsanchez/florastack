@@ -43,6 +43,16 @@ fn hostile_values_are_refused_with_what_is_wrong() {
     let many: Vec<u64> = (0..100_001).collect();
     let long = "x".repeat(40 * 1024);
     let cases = [
+        ("capture.calculate", json!({"magnification":0,"aperture":4,"pixelPitch":4})),
+        ("capture.calculate", json!({"magnification":1,"aperture":1e300,"pixelPitch":4})),
+        ("capture.calculate", json!({"magnification":1,"aperture":4,"pixelPitch":-1})),
+        ("capture.camera", json!({"action":"focus","pulses":i32::MIN})),
+        ("capture.camera", json!({"action":"focus","pulses":0})),
+        ("capture.camera", json!({"action":"markNear","pulses":1})),
+        ("capture.rail", json!({"action":"connect"})),
+        ("capture.rail", json!({"action":"move","micrometers":1e300})),
+        ("capture.run", json!({"watch":{"input":"x","output":"y","preset":"p"},"frames":0,"mode":"rail","trigger":"camera","stepMicrometers":1})),
+        ("capture.run", json!({"watch":{"input":"x","output":"y","preset":"p"},"frames":2,"mode":"lens","trigger":"external"})),
         ("job.cancel", json!({ "job": -1 })),
         ("compute.set", json!({ "device": "fastest" })),
         ("compute.set", json!({ "device": 1 })),
@@ -240,9 +250,20 @@ fn deep_or_huge_json_is_refused() {
     assert_eq!(engine.dispatch_json("project.findOrphans", "{ not json").unwrap_err().code(), "params");
 }
 
-/// Commands left out of the arbitrary-JSON test: they create, move or write files outside the test's folders when
-/// their parameters happen to be valid paths, such as `"."`.
-const WRITES_FILES: [&str; 7] = ["project.new", "project.trashOrphans", "preset.save", "output.save", "defects.export", "batch.run", "watch.run"];
+/// Commands left out of arbitrary JSON: they can write outside the test folders or operate real hardware when
+/// parameters happen to be valid. Capture actions have dedicated hostile-parameter and mock-device tests.
+const WRITES_FILES: [&str; 10] = [
+    "project.new",
+    "project.trashOrphans",
+    "preset.save",
+    "output.save",
+    "defects.export",
+    "batch.run",
+    "watch.run",
+    "capture.camera",
+    "capture.rail",
+    "capture.run",
+];
 
 fn leaf() -> impl Strategy<Value = Value> {
     prop_oneof![

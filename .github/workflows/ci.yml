@@ -96,6 +96,14 @@ jobs:
           FLORASTACK_REQUIRE_GPU: ${{ matrix.require_gpu }}
         run: cargo test --workspace --locked
 
+      - name: Clippy with dynamic camera control
+        if: runner.os != 'Windows'
+        run: cargo clippy --workspace --all-targets --features gphoto --locked -- -D warnings
+
+      - name: Test with dynamic camera control
+        if: runner.os != 'Windows'
+        run: cargo test -p florastack-capture -p florastack-engine --features gphoto --locked
+
       # Every stacking method and slab combination on the synthetic stacks, scored against their ground truth and
       # compared with quality/baseline.json: fails when a measure is worse than the baseline by more than its tolerance
       # (runtimes aren't compared here, the baseline being measured on another machine). It runs the dev-profile build

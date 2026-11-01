@@ -32,10 +32,11 @@ pub enum Tab {
     Retouch,
     Export,
     Batch,
+    Capture,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Stack, Tab::Retouch, Tab::Export, Tab::Batch];
+    pub const ALL: [Tab; 5] = [Tab::Stack, Tab::Retouch, Tab::Export, Tab::Batch, Tab::Capture];
 
     pub fn label_key(self) -> &'static str {
         match self {
@@ -43,6 +44,7 @@ impl Tab {
             Tab::Retouch => "tab-retouch",
             Tab::Export => "tab-export",
             Tab::Batch => "tab-batch",
+            Tab::Capture => "tab-capture",
         }
     }
 }
