@@ -85,8 +85,12 @@ Running the binary with file arguments alone, including dragging photos onto its
 
 The Export tab also offers [scientific outputs and non-destructive annotations](docs/scientific-exports.md): calibrated
 depth in micrometers, confidence and contribution maps, corrected aligned frames, alignment CSVs, objective
-calibrations, scale bars and text labels. Every export writes a settings/version/input-hash JSON sidecar. Recompute it
+calibrations, scale bars and text labels. Every `export.run` or `output.save` image export writes a settings/version/input-hash JSON sidecar. Recompute it
 without the original project cache with `florastack-cli reproduce result.tif.json --out reproduced`.
+
+Depth-map outputs also support [3D relief, synthetic stereo and rocking GIF exports](docs/3d-stereo.md), with an
+in-app wgpu orbit viewer. The GLB acceptance test uses Khronos' official validator: install Node.js/npm and run
+`cargo xtask gltf-validator` to prepare that test fixture. `cargo xtask ci` fetches it automatically.
 
 ## Contributing
 

@@ -90,6 +90,10 @@ jobs:
       - name: Fetch test fixtures
         run: cargo xtask corpus --fixtures
 
+      # Khronos' official JS validator, pinned and installed outside the source tree; runners include Node.js.
+      - name: Fetch glTF validator
+        run: cargo xtask gltf-validator
+
       # FLORASTACK_REQUIRE_GPU turns a missing adapter into a failure of the GPU tests instead of a skip.
       - name: Test
         env:

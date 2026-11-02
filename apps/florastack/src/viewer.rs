@@ -644,7 +644,7 @@ impl egui_wgpu::CallbackTrait for Paint {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -665,7 +665,7 @@ mod tests {
     }
 
     /// A device on any adapter (`WGPU_ADAPTER_NAME` picks one by name), or why there is none.
-    fn device() -> Result<(wgpu::Device, wgpu::Queue), String> {
+    pub(crate) fn device() -> Result<(wgpu::Device, wgpu::Queue), String> {
         let backends = wgpu::Backends::VULKAN | wgpu::Backends::METAL | wgpu::Backends::DX12;
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.backends = backends;

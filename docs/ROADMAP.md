@@ -397,10 +397,13 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 6.3 3D model and stereo
 
-- [ ] Textured mesh from the depth map, exported as glTF 2.0 (.glb) and OBJ, with an in-app 3D viewer
-- [ ] Synthetic stereo: parallel and cross-eyed pairs, and red-cyan anaglyphs
-- [ ] Rocking parallax animation as video or animated WebP or GIF
-- [ ] Tests: the .glb passes the glTF validator; the stereo parallax goes the right way
+- [x] Textured relative-depth mesh with confidence masking, weighted smoothing, depth reversal and discontinuity limits; self-contained glTF 2.0 GLB and OBJ/MTL/PNG exports (`parallax.mesh`), with a depth-tested wgpu orbit viewer (`parallax.preview`) in the Export tab; [usage and coordinate conventions](3d-stereo.md)
+- [x] Synthetic stereo: configurable baseline, parallel and cross-eyed PNG pairs, and red-cyan anaglyphs (`parallax.stereo`), with foreground depth testing and transparent unknown surfaces
+- [x] Rocking parallax animation as a looping GIF (`parallax.animate`), with a sinusoidal camera excursion, configurable frame count and fps, and cumulative centisecond timing
+- [x] Tests: exported GLB passes Khronos' official validator with zero errors or warnings (pinned fixture prepared by `cargo xtask gltf-validator`, in CI); features in a PNG stereo pair exported from a synthetic focus stack have the correct near and far disparity. Engine tests also cover reversed depth, masking/smoothing, winding, occlusion, eye packing, OBJ companions/overwrite, GIF decoding/timing, cancellation and hostile parameters; offscreen wgpu and headless Export-tab preview tests pass
+- [ ] Follow-up: stream full-resolution textures and meshes beyond the current 2048-pixel image and 512-point grid side limits, without decoding whole images and maps
+- [ ] Follow-up: include mesh, stereo and animation derivatives in scientific reproducibility sidecars
+- [ ] Follow-up: review the orbit viewer and stereo depth by hand on real stacks on Windows, macOS and Linux
 
 ### 6.4 MCP server, control channel and Python
 

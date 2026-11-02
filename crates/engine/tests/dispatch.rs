@@ -180,6 +180,18 @@ fn every_command_dispatches_from_json() {
     let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
     assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
     assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth", "depth-frames"]));
+    let preview = calls.run("parallax.preview", &json!({"output":depth["output"],"settings":{"confidence":0.0,"maxSide":64}}).to_string());
+    assert!(Path::new(preview["path"].as_str().unwrap()).is_file());
+    for (command, extra) in [
+        ("parallax.mesh", json!({"format":"obj"})),
+        ("parallax.stereo", json!({"mode":"parallel"})),
+        ("parallax.animate", json!({"frames":4,"fps":8})),
+    ] {
+        let mut params = json!({"output":depth["output"],"folder":dir.path().join("parallax"),"settings":{"confidence":0.0,"maxSide":64}});
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let exported = calls.run(command, &params.to_string());
+        assert!(exported["files"].as_array().unwrap().iter().all(|v| Path::new(v.as_str().unwrap()).is_file()));
+    }
     // Exporting the depth map's output: its settings, an estimate of what it writes, then the files, with the maps
     // and the aligned frames alongside.
     assert_eq!(calls.run("export.get", "{}")["settings"]["format"], "tiff");

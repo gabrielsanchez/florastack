@@ -54,6 +54,7 @@ pub mod filmstrip;
 pub mod frames;
 pub mod job;
 pub mod output;
+pub mod parallax;
 pub mod preset;
 pub mod project;
 pub mod reproduce;
@@ -92,6 +93,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(slab::specs());
     all.extend(preset::specs());
     all.extend(output::specs());
+    all.extend(parallax::specs());
     all.extend(edit::specs());
     all.extend(job::specs());
     all.extend(compute::specs());

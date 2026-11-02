@@ -71,6 +71,7 @@ pub struct Shell {
     pub threshold: Option<Value>,
     /// What an `export.run` job just wrote, for the app to tell.
     pub exported: Option<Value>,
+    pub relief: Option<Value>,
     /// What the latest `compute.test` found, until the Preferences dialog opens again.
     pub tested: Option<Value>,
     /// The stacking settings (`stack.get`), the alignment settings (`align.get`) and the alignment (`align.info`), read
@@ -114,6 +115,7 @@ impl Shell {
             stacks_found: None,
             threshold: None,
             exported: None,
+            relief: None,
             tested: None,
             retouch: None,
             stack_settings: Value::Null,
@@ -220,6 +222,7 @@ impl Shell {
                     if matches!(state, ProjectEvent::Opened | ProjectEvent::Closed) {
                         self.preview = None;
                         self.threshold = None;
+                        self.relief = None;
                     }
                     self.changes += 1;
                     self.stale = true;
@@ -265,6 +268,8 @@ impl Shell {
                 JobState::Done if job.command == "project.findStacks" => self.stacks_found.clone_from(&job.result),
                 JobState::Done if job.command == "stack.threshold" => self.threshold.clone_from(&job.result),
                 JobState::Done if job.command == "export.run" => self.exported.clone_from(&job.result),
+                JobState::Done if job.command == "parallax.preview" => self.relief.clone_from(&job.result),
+                JobState::Done if job.command.starts_with("parallax.") => self.notify(crate::i18n::tr("parallax-exported"), false),
                 JobState::Done if job.command == "compute.test" => {
                     self.tested.clone_from(&job.result);
                     self.compute = None;

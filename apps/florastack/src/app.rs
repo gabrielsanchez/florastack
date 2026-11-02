@@ -161,6 +161,7 @@ pub struct FloraStackApp {
     /// The Export tab's estimate and template being typed.
     pub export: crate::export_tab::ExportUi,
     pub capture: crate::capture_tab::CaptureUi,
+    pub parallax: crate::parallax_ui::ParallaxUi,
     /// The built-in presets (`preset.list`), once asked.
     pub(crate) built_in: Option<Vec<Value>>,
     /// When to save on its own; `None` when autosave is off.
@@ -187,8 +188,11 @@ impl FloraStackApp {
     pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> FloraStackApp {
         let ctx = cc.egui_ctx.clone();
         let gpu = cc.wgpu_render_state.as_ref().and_then(GpuViewer::install);
+        let relief_gpu = cc.wgpu_render_state.as_ref().is_some_and(crate::relief_viewer::Renderer::install);
         let prefs = Prefs::load(cc.storage);
-        FloraStackApp::with_context(&ctx, options, prefs, gpu)
+        let mut app = FloraStackApp::with_context(&ctx, options, prefs, gpu);
+        app.parallax.gpu = relief_gpu;
+        app
     }
 
     /// The app on `ctx`, with `prefs`, and the GPU viewer's largest side when it has one: what tests build.
@@ -221,6 +225,7 @@ impl FloraStackApp {
             retouch: crate::retouch_tab::RetouchUi::default(),
             export: crate::export_tab::ExportUi::default(),
             capture: crate::capture_tab::CaptureUi::default(),
+            parallax: crate::parallax_ui::ParallaxUi::default(),
             built_in: None,
             autosave: None,
             checked: None,
@@ -603,6 +608,7 @@ impl FloraStackApp {
         let project = self.shell.engine().project_path().map(std::path::Path::to_path_buf);
         if project != self.last_project {
             self.last_project.clone_from(&project);
+            self.parallax = crate::parallax_ui::ParallaxUi { gpu: self.parallax.gpu, ..Default::default() };
             self.select(Selection::Nothing);
             self.banners.retain(|b| !matches!(b, Banner::Frames { .. }));
         }

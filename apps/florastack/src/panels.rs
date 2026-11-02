@@ -56,6 +56,11 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             if app.shell.retouch.is_some() {
                 ui.ctx().request_repaint();
             }
+        } else if app.prefs.tab == Tab::Export
+            && app.parallax.active
+            && matches!(app.selection, Selection::Output(id) if Some(id) == app.parallax.output)
+        {
+            app.parallax.viewer.ui(ui, app.parallax.gpu);
         } else if app.film.is_some() {
             film_view(app, ui);
         } else if app.viewer.is_empty() {

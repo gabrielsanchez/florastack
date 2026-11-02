@@ -29,6 +29,7 @@ pub mod events;
 pub mod frames;
 pub mod history;
 pub mod jobs;
+pub mod parallax;
 pub mod project;
 pub mod registry;
 pub mod retouch;

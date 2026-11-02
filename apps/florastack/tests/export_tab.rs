@@ -112,6 +112,23 @@ fn scientific_controls_use_the_registry_and_save_annotation_layers() {
 }
 
 #[test]
+fn the_export_tab_builds_a_3d_preview_through_the_engine() {
+    let (dir, mut harness) = stacked("3d-export-tab");
+    harness.state_mut().shell.run("stack.depthMap", json!({"threshold":"level","level":0}));
+    until(&mut harness, "depth-map output", |app| app.shell.outputs.len() == 2 && !app.shell.busy());
+    harness.get_by_label("3D model and stereo").click_accesskit();
+    harness.run_steps(2);
+    harness.state_mut().parallax.settings.confidence = 0.0;
+    harness.get_by_label("Build 3D preview").click_accesskit();
+    until(&mut harness, "textured relief", |app| app.parallax.viewer.loaded() && !app.shell.busy());
+    assert!(harness.state().parallax.active);
+    harness.get_by_label("Show 3D relief").click_accesskit();
+    harness.run_steps(2);
+    assert!(!harness.state().parallax.active);
+    done(dir, harness);
+}
+
+#[test]
 fn presets_are_applied_from_the_menu_saved_and_picked_for_a_batch() {
     let (dir, mut harness) = stacked("presets");
     // A built-in preset, from the Presets menu: its dialog lists the settings it holds, all picked.

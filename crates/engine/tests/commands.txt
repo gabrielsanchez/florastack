@@ -45,6 +45,10 @@ output.list
 output.remove
 output.rename
 output.save
+parallax.animate
+parallax.mesh
+parallax.preview
+parallax.stereo
 preset.apply
 preset.list
 preset.read

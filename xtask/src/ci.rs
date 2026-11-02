@@ -44,6 +44,7 @@ pub const STEPS: &[Step] = &[
     Step { name: "clippy", args: &["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"], tool: None },
     Step { name: "check-layers", args: &["xtask", "check-layers"], tool: None },
     Step { name: "fixtures", args: &["xtask", "corpus", "--fixtures"], tool: None },
+    Step { name: "gltf-validator", args: &["xtask", "gltf-validator"], tool: None },
     Step { name: TEST_STEP, args: &["test", "--workspace", "--locked"], tool: None },
     Step {
         name: "gphoto-clippy",
@@ -390,7 +391,7 @@ mod tests {
         list.push(skip("gpu", "the adapter failed the self-test", "main"));
         let text = summary(&steps, &Skips { list, unreadable: 0 }, Duration::from_secs(125), "target/ci/skips.jsonl");
         assert!(text.contains(&format!("CI summary: all {} steps passed in 2m 05s", STEPS.len())), "{text}");
-        assert!(text.contains("  ok       clippy           1.2 s  cargo clippy --workspace --all-targets --locked -- -D warnings\n"), "{text}");
+        assert!(text.contains("  ok       clippy            1.2 s  cargo clippy --workspace --all-targets --locked -- -D warnings\n"), "{text}");
         assert!(text.contains("Skipped tests: 9, which passed without running their checks (records in target/ci/skips.jsonl):"), "{text}");
         let gpu = text.find("  gpu (8): needs a GPU adapter that passes the self-test\n").expect("the gpu group");
         let corpus =
