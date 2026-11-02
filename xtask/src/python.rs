@@ -64,6 +64,33 @@ mod tests {
         .unwrap();
     }
 
+    fn checked_environment_entry(entry: &Path, environment: &Path) -> PathBuf {
+        // macOS temp paths can name the same directory through /var and /private/var. Resolve both paths before
+        // checking containment so we only remove pip files inside the disposable venv.
+        let entry = entry.canonicalize().unwrap();
+        let environment = environment.canonicalize().unwrap();
+        assert!(entry.starts_with(&environment), "{} is outside {}", entry.display(), environment.display());
+        entry
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn environment_entries_resolve_symlinked_paths() {
+        let root = std::env::temp_dir().join(format!("florastack-python-paths-{}", std::process::id()));
+        let environment = root.join("environment");
+        std::fs::create_dir_all(&environment).unwrap();
+        let entry = environment.join("__main__.py");
+        std::fs::write(&entry, "").unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&environment, &alias).unwrap();
+
+        // Python can report the real path while Rust retains the alias, or vice versa.
+        let canonical_entry = entry.canonicalize().unwrap();
+        assert_eq!(checked_environment_entry(&entry, &alias), canonical_entry);
+        assert_eq!(checked_environment_entry(&alias.join("__main__.py"), &environment), canonical_entry);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn partial_cached_environments_are_recreated() {
         let environment = std::env::temp_dir().join(format!("florastack-python-tests-{}", std::process::id()));
@@ -80,7 +107,7 @@ mod tests {
         let output = Command::new(&python).args(["-I", "-c", "import pip.__main__; print(pip.__main__.__file__)"]).output().unwrap();
         assert!(output.status.success());
         let entry = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
-        assert!(entry.starts_with(&environment));
+        let entry = checked_environment_entry(&entry, &environment);
         std::fs::remove_file(entry).unwrap();
         assert!(!Command::new(&python).args(["-m", "pip", "--version"]).output().unwrap().status.success());
         let python = prepare_environment(&environment).unwrap();
