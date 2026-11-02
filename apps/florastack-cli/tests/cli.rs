@@ -358,6 +358,7 @@ fn every_help_page_has_examples_and_exit_codes() {
         vec!["run"],
         vec!["reproduce"],
         vec!["commands"],
+        vec!["mcp"],
         vec!["project"],
         vec!["project", "new"],
         vec!["project", "info"],

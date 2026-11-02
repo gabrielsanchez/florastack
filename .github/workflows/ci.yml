@@ -100,6 +100,10 @@ jobs:
           FLORASTACK_REQUIRE_GPU: ${{ matrix.require_gpu }}
         run: cargo test --workspace --locked
 
+      # Runners provide Python; xtask creates a venv, installs maturin/NumPy/pytest and builds the extension.
+      - name: Python bindings
+        run: cargo xtask python
+
       - name: Clippy with dynamic camera control
         if: runner.os != 'Windows'
         run: cargo clippy --workspace --all-targets --features gphoto --locked -- -D warnings

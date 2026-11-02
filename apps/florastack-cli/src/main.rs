@@ -2,6 +2,7 @@
 
 mod args;
 mod client;
+mod mcp;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,6 +44,9 @@ fn execute(cli: Cli) -> Result<(), Failure> {
     let root = std::path::absolute(cli.temporary_projects.unwrap_or_else(|| std::env::temp_dir().join(branding::APP_ID).join("projects")))?;
     path_text(&root)?;
     let mut client = Client::new(root, cli.json_progress, cli.device.device());
+    if let Command::Mcp { connect, token_file } = &cli.command {
+        return mcp::serve(client.into_engine(), connect.as_deref(), token_file.as_deref());
+    }
     let result = match cli.command {
         Command::Stack(args) => stack(&mut client, &args),
         Command::Batch(args) => queue(&mut client, "batch.run", &args.input, &args.out, &args.processing, json!({})),
@@ -69,7 +73,7 @@ fn execute(cli: Cli) -> Result<(), Failure> {
             print_json(&result)
         }
         Command::Project { command } => project(&mut client, command),
-        Command::Commands => Ok(()),
+        Command::Commands | Command::Mcp { .. } => Ok(()),
     };
     client.reporter.clear_bar()?;
     result

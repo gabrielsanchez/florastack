@@ -7,6 +7,7 @@ mod ci;
 mod corpus;
 mod gltf_validator;
 mod layers;
+mod python;
 mod quality;
 mod sha256;
 
@@ -27,6 +28,7 @@ commands:
   corpus        download the sample focus stacks pinned in corpus/manifest.toml (sha256-verified) and check
                 the local stacks in corpus/local/ (`cargo xtask corpus --help` for the options)
   gltf-validator install the pinned Khronos glTF validator test fixture outside the repository (needs Node.js/npm)
+  python        build the Python extension with maturin in target/python-tests and run pytest (Python 3.9+)
   bench         run the criterion benchmarks and write target/bench-summary.json, with the quality metrics
                 that benches record (`cargo xtask bench --help` for the options)
   quality       stack every synthetic and corpus stack by every method and slab combination, score and time
@@ -44,6 +46,7 @@ fn main() -> ExitCode {
         ["ci"] => cargo_metadata().and_then(|meta| ci::run(&meta)),
         ["ci", ..] => Err("ci takes no arguments".to_owned()),
         ["gltf-validator"] => gltf_validator::run(),
+        ["python"] => workspace_root().and_then(|root| python::run(&root)),
         ["corpus", rest @ ..] => workspace_root().and_then(|root| corpus::run(&root, rest)),
         ["bench", rest @ ..] => cargo_metadata().and_then(|meta| bench::run(&meta, rest)),
         ["quality", rest @ ..] => cargo_metadata().and_then(|meta| quality::run(&meta, rest)),

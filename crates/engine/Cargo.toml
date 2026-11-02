@@ -14,6 +14,7 @@ default = []
 gphoto = ["florastack-capture/gphoto"]
 
 [dependencies]
+base64.workspace = true
 florastack-core.workspace = true
 florastack-codecs.workspace = true
 florastack-raw.workspace = true
@@ -37,6 +38,7 @@ half.workspace = true
 gif.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
 notify.workspace = true
 tempfile.workspace = true
 # The installed memory, for the suggested memory budget (`compute.info`).

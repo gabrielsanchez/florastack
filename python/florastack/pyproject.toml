@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "florastack"
+version = "0.1.0"
+description = "Focus stacking through the FloraStack Rust engine"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.23,<3"]
+license = "MIT OR Apache-2.0"
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.maturin]
+features = ["extension-module"]
+module-name = "florastack._native"
+python-source = "python"

@@ -15,6 +15,11 @@ It runs everything CI runs (`.github/workflows/ci.yml`), in the same order: `car
 Before the tests it also runs `cargo xtask gltf-validator`, which uses Node.js/npm to install Khronos' pinned
 official glTF validator as a test fixture outside the repository. No JavaScript tool is needed at runtime.
 
+The workspace's separate Python extension requires Python 3.9+ and its development library (select an interpreter
+with `PYO3_PYTHON`). `cargo xtask python`, also run by CI, creates a virtual environment in `target/python-tests`,
+builds the extension with maturin and runs its pytest acceptance tests. Building the desktop app or CLI alone
+does not require Python.
+
 The dev profile, which the tests use, optimizes `florastack-core`, `florastack-align`, `florastack-stack`, `florastack-retouch`, `florastack-gpu` and `florastack-metrics`, and the crates that read, write and hash image files (`florastack-codecs`, `florastack-project`, LightCraft's tiff, codecs and color crates, and the Deflate, PNG, TIFF, JPEG, color and SHA-256 crates under them) (`[profile.dev.package]` in the root `Cargo.toml`): unoptimized, their pixel loops would make the tests on synthetic stacks 10 to 50 times slower, and file I/O took two thirds of the engine's time on them. Debug assertions and overflow checks stay on.
 
 ## Crate map
@@ -35,7 +40,8 @@ The dev profile, which the tests use, optimizes `florastack-core`, `florastack-a
 | `florastack-testkit` | `crates/testkit` | Test tooling: `skip!`, which records a test that can't run here | nothing; other crates use it as a dev-dependency only |
 | `florastack` | `apps/florastack` | The egui desktop app: a library (`florastack_app`) that the binary starts and its tests drive, with the app's state and actions (`FloraStackApp`), the engine on the UI thread (`Shell`), the panels, the GPU viewer (`viewer.rs` and its WGSL, an egui-wgpu paint callback, comparing two images split or side by side), the Stack tab (`stack_tab.rs`, whose settings' "?" open `docs/stack-tab.md`), the Retouch tab (`retouch_tab.rs`: source and output side by side), the Export tab (`export_tab.rs`, with `parallax_ui.rs` for 3D/stereo exports and `relief_viewer.rs`/WGSL for the depth-tested orbit view), the Capture tab (`capture_tab.rs`: watch-folder workflow, camera/rail commands and the diffraction calculator), the Presets menu and its dialogs (`presets.rs`), the Preferences dialog (`preferences.rs`), the filmstrip, the command palette, the strings (`locales/<language>/florastack.ftl`, through Fluent) and the remembered preferences (`prefs.rs`); `tests/smoke.rs` drives it headless with egui_kittest | engine only |
 | `florastack-cli` | `apps/florastack-cli` | The command-line tool | engine only |
-| `xtask` | `xtask` | Developer tooling: `cargo xtask check-layers`, `ci`, `corpus`, `bench` and `quality` | no FloraStack crate |
+| `florastack-python` | `python/florastack` | PyO3/maturin extension and Python `Project` facade: registry dispatch, loading/alignment/stacking, owned linear float32 NumPy outputs; native work releases the GIL | engine only |
+| `xtask` | `xtask` | Developer tooling: `cargo xtask check-layers`, `ci`, `corpus`, `bench`, `quality` and `python` | no FloraStack crate |
 
 ### Layering rules
 
@@ -43,6 +49,7 @@ The dev profile, which the tests use, optimizes `florastack-core`, `florastack-a
 
 - A crate depends only on the workspace crates in its row, in every dependency table, plus the two test-only crates below as dev-dependencies. `florastack-core` depends on none, so that every crate can depend on it.
 - The apps depend on `florastack-engine` alone. When an app needs a type from another crate, the engine re-exports it.
+- The Python extension follows the same engine-only rule. Automation resources and the loopback control transport live in the headless engine; MCP's official SDK adapter lives in the CLI, and pure view controls and screenshot rendering live in the desktop app.
 - `florastack-metrics` and `florastack-testkit` appear only in `[dev-dependencies]`, and so does `florastack-core`'s `testutil` feature (which no `default` feature may include), so none of their code ships.
 - Only `apps/florastack` may use a UI toolkit (`egui*`, `eframe`, `winit`, `rfd`). The engine and the libraries stay headless.
 - Every crate inherits the workspace lints with `[lints] workspace = true`, and the binaries named in `branding.toml` must exist.

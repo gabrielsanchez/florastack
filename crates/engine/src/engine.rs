@@ -212,6 +212,16 @@ impl Engine {
         self.session.project().ok()
     }
 
+    /// Reads a stacked output as full-precision linear samples in its recorded color space. The returned image
+    /// owns its samples; changing it cannot change the project. Retouching is available through export commands.
+    pub fn read_output(&self, id: florastack_project::OutputId) -> Result<florastack_core::Image<f32>, CommandError> {
+        let output = self.session.project()?.output(id).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?;
+        let image = crate::project::read_image(self.session.folder()?, &output.image)?;
+        image
+            .into_image::<f32>()
+            .map_err(|_| CommandError::Unavailable { command: "read_output".into(), reason: "the output is not a linear float image".into() })
+    }
+
     /// The output open for retouching, as an app draws it (`retouch.open`).
     pub fn retouch(&self) -> Option<crate::retouch::RetouchView<'_>> {
         self.session.retouch.as_ref().map(|session| crate::retouch::RetouchView { session })

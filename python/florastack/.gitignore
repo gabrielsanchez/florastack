@@ -1,0 +1,8 @@
+# maturin develop installs the editable extension beside the Python sources.
+*.pyd
+*.so
+*.dylib
+*.pdb
+__pycache__/
+.pytest_cache/
+*.egg-info/
