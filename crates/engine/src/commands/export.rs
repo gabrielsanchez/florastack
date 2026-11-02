@@ -3,22 +3,18 @@
 //! and the export (`export.run`, a job): the output under a file name made from a template, with its metadata copied
 //! from one of its frames, and, alongside, its depth and confidence maps and its frames aligned onto its canvas.
 
-use std::path::{Path, PathBuf};
-
 use florastack_codecs::{
-    BitDepth, ChromaSubsampling, DngCompression, DngLook, ExrCompression, OutputFormat, OutputMetadata, OutputProfile, OutputSpec, TiffCompression,
+    BitDepth, ChromaSubsampling, DngCompression, DngLook, ExrCompression, OutputFormat, OutputProfile, OutputSpec, TiffCompression,
 };
-use florastack_core::{AnyImage, Monitor};
 use florastack_project::{Edit, FrameId, Group, OutputId, Preferences, Project, Table};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::output::{Pixels, frame_metadata, write_atomically};
-use super::{check_path, display};
+use super::check_path;
 use crate::error::{CommandError, Invalid};
-use crate::jobs::{JobPlan, Lane, commit};
+use crate::jobs::Lane;
 use crate::registry::{CommandSpec, Effects, Meta, NoParams, Params, Requires};
-use crate::retouch::{SourceLoader, output_frames};
+use crate::retouch::output_frames;
 use crate::session::Session;
 
 /// The tokens a file name template may hold.
@@ -44,10 +40,16 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                      output's frame, from 1 in the filmstrip's order, whose EXIF, IPTC and XMP the file gets); \
                      `extended_range` (32-bit float files keep values beyond [0, 1]); `template`, the file name without \
                      its extension, with the tokens {project}, {name}, {method}, {frames}, {first}, {last}, {date} and \
-                     {id}; and `depth_map`, `confidence_map` and `aligned_frames`, written alongside. The keys are the preset files' `[output]` keys.",
+                     {id}; and `depth_map`, `confidence_map` and `aligned_frames`, written alongside. Scientific \
+                     options: `calibrated_depth` with signed `z_step_micrometers` and `z_origin_micrometers`, \
+                     `contribution_maps`, `alignment_csv`, `annotations`, and `pixels_per_micrometer` with \
+                     `calibration_name`. Null clears an optional step or lateral calibration. The keys are the preset files' `[output]` keys.",
                 )
                 .undoable()
-                .examples(&[r#"{ "format": "jpeg", "depth": "u8", "jpeg_quality": 92, "profile": "srgb" }"#, r#"{ "template": "{project}-{method}-{date}", "depth_map": true }"#]),
+                .examples(&[
+                    r#"{ "format": "jpeg", "depth": "u8", "jpeg_quality": 92, "profile": "srgb" }"#,
+                    r#"{ "template": "{project}-{method}-{date}", "depth_map": true }"#,
+                ]),
             set,
         ),
         CommandSpec::instant(Meta::new("export.reset", "Reset export settings", "Puts every output setting back at its default.").undoable(), reset),
@@ -69,11 +71,17 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                      `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in \
                      a folder ending in ` aligned`. Settings given apply to this export only, on top of the project's. \
                      Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a \
-                     failure leaves no partial file. Runs as a job.",
+                     failure leaves no partial file. Scientific extras include a float TIFF in micrometers, \
+                     per-frame contribution maps and alignment CSV; visible annotation layers are rendered only \
+                     onto the output copy. Every export includes a settings/version/input-hash JSON sidecar, \
+                     published last; `export.reproduce` replays it. Runs as a job.",
                 )
                 .requires(Requires::Project)
                 .effects(Effects::Files)
-                .examples(&[r#"{ "output": 3, "folder": "C:/Stacks/Exports" }"#, r#"{ "output": 3, "folder": "C:/Stacks", "settings": { "aligned_frames": true }, "overwrite": true }"#]),
+                .examples(&[
+                    r#"{ "output": 3, "folder": "C:/Stacks/Exports" }"#,
+                    r#"{ "output": 3, "folder": "C:/Stacks", "settings": { "aligned_frames": true }, "overwrite": true }"#,
+                ]),
             Lane::Heavy,
             run,
         ),
@@ -149,6 +157,24 @@ pub struct OutputSettings {
     pub confidence_map: bool,
     /// Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder.
     pub aligned_frames: bool,
+    /// Write full-precision calibrated depth as float TIFF values in micrometers.
+    pub calibrated_depth: bool,
+    /// Signed capture step in micrometers, in the recorded capture order; unset when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z_step_micrometers: Option<f64>,
+    /// Z of the first captured frame, in micrometers.
+    pub z_origin_micrometers: f64,
+    /// Write a normalized 16-bit contribution TIFF per input of a depth-map output.
+    pub contribution_maps: bool,
+    /// Write master-to-input shift, scale, rotation, brightness gain and score as CSV.
+    pub alignment_csv: bool,
+    /// Render visible annotation layers on the output copy.
+    pub annotations: bool,
+    /// Lateral calibration in master-image pixels per micrometer; copied from a profile or measured directly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixels_per_micrometer: Option<f64>,
+    /// Name of the selected objective or magnification, retained with its measured value.
+    pub calibration_name: String,
 }
 
 impl Default for OutputSettings {
@@ -171,6 +197,14 @@ impl Default for OutputSettings {
             depth_map: false,
             confidence_map: false,
             aligned_frames: false,
+            calibrated_depth: false,
+            z_step_micrometers: None,
+            z_origin_micrometers: 0.0,
+            contribution_maps: false,
+            alignment_csv: false,
+            annotations: true,
+            pixels_per_micrometer: None,
+            calibration_name: String::new(),
         }
     }
 }
@@ -197,6 +231,18 @@ impl OutputSettings {
         }
         if self.metadata_frame == 0 {
             return Err("metadata_frame counts from 1".to_owned());
+        }
+        if self.z_step_micrometers.is_some_and(|v| !v.is_finite() || v == 0.0 || v.abs() > 1e12) {
+            return Err("z_step_micrometers must be finite, nonzero and at most 1e12 in magnitude".into());
+        }
+        if !self.z_origin_micrometers.is_finite() || self.z_origin_micrometers.abs() > 1e12 {
+            return Err("z_origin_micrometers must be finite and at most 1e12 in magnitude".into());
+        }
+        if self.pixels_per_micrometer.is_some_and(|v| !v.is_finite() || !(1e-9..=1e9).contains(&v)) {
+            return Err("pixels_per_micrometer must be finite and from 1e-9 to 1e9".into());
+        }
+        if self.calibration_name.chars().count() > 200 || self.calibration_name.chars().any(char::is_control) {
+            return Err("calibration_name must have at most 200 characters and no control characters".into());
         }
         check_template(&self.template)
     }
@@ -240,6 +286,7 @@ pub fn output_settings(project: &Project) -> Result<OutputSettings, CommandError
 fn merged(session: &Session, overrides: Option<&Table>) -> Result<OutputSettings, CommandError> {
     let mut preferences = session.project()?.preferences.only(&[Group::Output]);
     if let Some(table) = overrides {
+        clear_optional(&mut preferences, table)?;
         let mut top = Preferences::new();
         top.set(Group::Output, table)?;
         preferences.layer(&top);
@@ -299,8 +346,21 @@ fn set(session: &mut Session, patch: SettingsPatch) -> Result<Settings, CommandE
     let mut top = Preferences::new();
     top.set(Group::Output, &patch.0)?;
     let mut merged = session.project()?.preferences.only(&[Group::Output]);
+    clear_optional(&mut merged, &patch.0)?;
     merged.layer(&top);
     set_table(session, merged.group(Group::Output).clone())
+}
+
+/// Null clears optional calibrations instead of inheriting a previously measured value.
+fn clear_optional(preferences: &mut Preferences, patch: &Table) -> Result<(), CommandError> {
+    let mut table = preferences.group(Group::Output).clone();
+    for key in ["pixels_per_micrometer", "z_step_micrometers"] {
+        if patch.get(key).is_some_and(serde_json::Value::is_null) {
+            table.remove(key);
+        }
+    }
+    preferences.set(Group::Output, &table)?;
+    Ok(())
 }
 
 fn reset(session: &mut Session, _: NoParams) -> Result<Settings, CommandError> {
@@ -342,7 +402,8 @@ fn output_shape(session: &Session, id: OutputId) -> Result<(u64, u64, u64), Comm
     let output = project.output(id).ok_or(CommandError::NotFound { what: id.to_string() })?;
     let framing = crate::retouch::output_framing(output);
     let channels = if framing == florastack_align::Framing::Wide { 4 } else { 3 };
-    if let Ok(Some(stored)) = crate::project::stored_alignment(project)
+    let source = super::scientific::source(project, output)?;
+    if let Ok(Some(stored)) = crate::project::stored_alignment(&source)
         && let Ok(canvas) = stored.canvas(framing)
     {
         return Ok((canvas.width as u64, canvas.height as u64, channels));
@@ -451,6 +512,26 @@ fn estimate(session: &Session, p: EstimateParams) -> Result<Estimate, CommandErr
         files += usize::try_from(n).unwrap_or(usize::MAX);
         exact = false;
     }
+    if settings.calibrated_depth && map("depth-frames") {
+        let spec = OutputSpec { depth: BitDepth::F32, extended_range: true, ..extra_spec(OutputProfile::Untagged) };
+        bytes = bytes.saturating_add(file_bytes(pixels, 1, spec).0);
+        files += 1;
+        exact = false;
+    }
+    if settings.contribution_maps && map("depth-frames") {
+        let n = output.inputs.len();
+        bytes = bytes.saturating_add(file_bytes(pixels, 1, extra_spec(OutputProfile::Untagged)).0.saturating_mul(n as u64));
+        files += n;
+        exact = false;
+    }
+    if settings.alignment_csv {
+        bytes = bytes.saturating_add((output_frames(project, output).len() as u64).saturating_mul(256).saturating_add(128));
+        files += 1;
+        exact = false;
+    }
+    let sidecar = super::reproduce::Sidecar::new(session, p.output, super::reproduce::Export::Run { settings: settings.clone() })?;
+    bytes = bytes.saturating_add(sidecar.estimated_bytes()?).saturating_add((files as u64).saturating_mul(300));
+    files += 1;
     let name = format!("{}.{}", file_name(&settings.template, &template_values(session, p.output)?), settings.format.extension());
     Ok(Estimate { bytes, files, approximate: !exact, name })
 }
@@ -494,127 +575,8 @@ struct Exported {
     warnings: Vec<String>,
 }
 
-/// A file the export writes: where, what, and from which pixels.
-enum Planned {
-    Image { path: PathBuf, what: &'static str, pixels: Box<Pixels>, spec: OutputSpec, metadata: bool },
-    Aligned { path: PathBuf, frame: FrameId },
-}
-
-fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, CommandError> {
-    let settings = merged(session, p.settings.as_ref().map(|s| &s.0))?;
-    let project = session.project()?;
-    let output = project.output(p.output).ok_or(CommandError::NotFound { what: p.output.to_string() })?;
-    let folder = super::absolute(&p.folder)?;
-    let base = file_name(&settings.template, &template_values(session, p.output)?);
-    let spec = settings.spec();
-    let mut notes = Vec::new();
-    let mut planned = vec![Planned::Image {
-        path: folder.join(format!("{base}.{}", spec_extension(&settings))),
-        what: "output",
-        pixels: Box::new(Pixels::of(session, p.output, None, spec, &mut notes)?),
-        spec,
-        metadata: settings.metadata,
-    }];
-    for (wanted, name) in [(settings.depth_map, "depth"), (settings.confidence_map, "confidence")] {
-        if !wanted {
-            continue;
-        }
-        let has = florastack_project::MapName::new(name).is_ok_and(|n| output.maps.contains_key(&n));
-        if !has {
-            notes.push(format!("{} has no {name} map (only depth-map outputs do), so none is written", output.name));
-            continue;
-        }
-        let spec = extra_spec(OutputProfile::Untagged);
-        planned.push(Planned::Image {
-            path: folder.join(format!("{base}-{name}.tif")),
-            what: if name == "depth" { "depth" } else { "confidence" },
-            pixels: Box::new(Pixels::of(session, p.output, Some(name), spec, &mut notes)?),
-            spec,
-            metadata: false,
-        });
-    }
-    let frames = frames_in_order(project, output);
-    let mut loader = None;
-    if settings.aligned_frames {
-        let dir = folder.join(format!("{base} aligned"));
-        let project_folder = session.folder()?;
-        for (i, &frame) in frames.iter().enumerate() {
-            let stem = project
-                .frame(frame)
-                .and_then(|f| project_folder.frame_path(f).file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .unwrap_or_default();
-            planned.push(Planned::Aligned { path: dir.join(format!("{:03} {stem}.tif", i + 1)), frame });
-        }
-        loader = Some(SourceLoader::new(session, "export.run", p.output)?);
-    }
-    if !p.overwrite
-        && let Some(existing) = planned.iter().map(planned_path).find(|path| path.exists())
-    {
-        return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", existing.display())));
-    }
-    // The metadata's frame, counted from 1 among the output's frames.
-    let source = frames
-        .get(settings.metadata_frame.saturating_sub(1).min(frames.len().saturating_sub(1)))
-        .and_then(|f| project.frame(*f))
-        .map(|f| session.folder().map(|folder| folder.frame_path(f)))
-        .transpose()?;
-    let frame_count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
-    let cache = session.cache_dir()?;
-    let total = planned.len();
-    let job = JobPlan::new(move |ctx| {
-        std::fs::create_dir_all(&folder).map_err(|source| florastack_project::ProjectError::Write { path: folder.clone(), source })?;
-        let mut written = Vec::with_capacity(total);
-        let mut warnings = notes;
-        let mut size = None;
-        for (i, file) in planned.into_iter().enumerate() {
-            ctx.step(i as u64, total as u64)?;
-            let (path, what, bytes) = match file {
-                Planned::Image { path, what, pixels, spec, metadata } => {
-                    let pixels = pixels.read(&cache, &mut warnings)?;
-                    size.get_or_insert((pixels.width(), pixels.height()));
-                    let source = if metadata { frame_metadata(source.as_deref(), &mut warnings) } else { None };
-                    let metadata = OutputMetadata { source, frame_count: Some(frame_count), modified: None };
-                    let encoded = florastack_codecs::write(&pixels, &spec, &metadata)?;
-                    warnings.extend(encoded.warnings.iter().map(|w| format!("{}: {w}", display(&path))));
-                    write_file(&path, &encoded.bytes)?;
-                    (path, what, encoded.bytes.len() as u64)
-                }
-                Planned::Aligned { path, frame } => {
-                    let (Some(loader), Some(size)) = (loader.as_mut(), size) else { continue };
-                    let warped = loader.warp(frame, size)?;
-                    let encoded =
-                        florastack_codecs::write(&AnyImage::F32(warped.image), &extra_spec(OutputProfile::Input), &OutputMetadata::default())?;
-                    write_file(&path, &encoded.bytes)?;
-                    (path, "aligned", encoded.bytes.len() as u64)
-                }
-            };
-            written.push(FileWritten { path: display(&path), bytes, what });
-        }
-        let exported = Exported { files: written, warnings };
-        Ok(commit(move |_: &mut Session| Ok(exported)))
-    });
-    Ok(job.stages(&[("Writing files", 1.0)]))
-}
-
-/// A planned file's path.
-fn planned_path(file: &Planned) -> &Path {
-    match file {
-        Planned::Image { path, .. } | Planned::Aligned { path, .. } => path,
-    }
-}
-
-/// The main file's extension.
-fn spec_extension(settings: &OutputSettings) -> &'static str {
-    settings.format.extension()
-}
-
-/// Writes `bytes` to `path` whole, its folder made first.
-fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| florastack_project::ProjectError::Write { path: parent.to_path_buf(), source })?;
-    }
-    write_atomically(path, bytes)
-}
+mod files;
+use files::run;
 
 #[cfg(test)]
 mod tests {

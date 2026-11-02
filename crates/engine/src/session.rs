@@ -46,6 +46,8 @@ struct Current {
 /// What a command sees of the engine. See the module documentation.
 pub struct Session {
     host: Host,
+    /// User settings stay at the startup location even when the scratch cache is moved.
+    pub(crate) calibration_path: Option<PathBuf>,
     open: Option<Open>,
     pub(crate) jobs: Jobs,
     current: Option<Current>,
@@ -78,8 +80,10 @@ const STOP_POLL: Duration = Duration::from_millis(20);
 
 impl Session {
     pub(crate) fn new(host: Host, jobs: Jobs) -> Session {
+        let calibration_path = host.temporary_projects.as_ref().and_then(|p| p.parent()).map(|p| p.join("calibrations.json"));
         Session {
             host,
+            calibration_path,
             open: None,
             jobs,
             current: None,

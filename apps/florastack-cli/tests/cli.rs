@@ -128,6 +128,118 @@ fn both() {
 }
 
 #[test]
+fn scientific_sidecar_reproduces_all_artifacts_without_the_original_project_or_cache() {
+    let dir = TempDir::new().unwrap();
+    let files = frames(dir.path());
+    let mask_path = dir.path().join("defects.png");
+    let mut mask = vec![255; 96 * 72];
+    mask[12 * 96 + 12] = 0;
+    png_file(&mask_path, 96, 72, png::ColorType::Grayscale, &mask);
+    let stacked = cli(dir.path())
+        .args(["--device", "cpu", "stack"])
+        .arg(files[0].parent().unwrap())
+        .args(["--method", "depthmap", "--out", "stack.tif"])
+        .arg("--dust-mask")
+        .arg(&mask_path)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let result = json_output(&stacked);
+    let project = PathBuf::from(result["project"].as_str().unwrap());
+    let output = result["outputs"][0]["stack"]["output"].clone();
+    let source_frame = result["outputs"][0]["stack"]["frames"][0].clone();
+    let output_settings = json!({"template":"science","metadata":false,"depth_map":true,"confidence_map":true,"aligned_frames":true,"contribution_maps":true,"alignment_csv":true,"calibrated_depth":true,"z_step_micrometers":2.5,"pixels_per_micrometer":2.0,"calibration_name":"10x"});
+    let layers = json!({"output":output,"layers":[
+        {"name":"Scale","visible":true,"white":true,"textSize":8,"annotation":{"kind":"scale-bar","style":"bracket","position":"bottom-right"}},
+        {"name":"Specimen","visible":true,"white":false,"textSize":8,"annotation":{"kind":"text","text":"A","position":[0.05,0.05]}}
+    ]});
+    let exported_dir = dir.path().join("scientific");
+    // Settings changed after stacking must not change the immutable input state used by replay.
+    let exported = cli(dir.path())
+        .arg("run")
+        .arg(&project)
+        .args(["--cmd", "develop.set", "--params", &json!({"exposure":1.0}).to_string()])
+        .args(["--cmd", "export.set", "--params", &output_settings.to_string()])
+        .args(["--cmd", "annotation.set", "--params", &layers.to_string()])
+        .args(["--cmd", "retouch.open", "--params", &json!({"output":output}).to_string()])
+        .args(["--cmd", "retouch.setSource", "--params", &json!({"frame":source_frame}).to_string()])
+        .args([
+            "--cmd",
+            "retouch.stroke",
+            "--params",
+            &json!({"stroke":{"brush":"pixels","source":{"frame":source_frame},"size":12,"hardness":0.5,"opacity":0.8,"samples":[[20,20,1]]}})
+                .to_string(),
+        ])
+        .args(["--cmd", "export.run", "--params", &json!({"output":output,"folder":exported_dir}).to_string()])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let events = lines(&exported.stdout);
+    let artifacts = events.last().unwrap()["result"]["files"].as_array().unwrap();
+    let sidecar = artifacts.iter().find(|f| f["what"] == "sidecar").unwrap()["path"].as_str().unwrap();
+    let manifest: Value = serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+    assert!(manifest["project"]["frames"][0]["hash"].as_str().unwrap().starts_with("sha256:"));
+    std::fs::remove_dir_all(&project).unwrap();
+    std::fs::remove_file(dir.path().join("stack.tif")).unwrap();
+    let reproduced_dir = dir.path().join("reproduced");
+    cli(dir.path()).arg("reproduce").arg(sidecar).arg("--out").arg(&reproduced_dir).assert().success();
+    for file in artifacts {
+        let source = Path::new(file["path"].as_str().unwrap());
+        let reproduced = reproduced_dir.join(source.strip_prefix(&exported_dir).unwrap());
+        assert!(reproduced.is_file(), "{}", reproduced.display());
+        match file["what"].as_str().unwrap() {
+            "sidecar" => {}
+            "alignment" => assert_eq!(std::fs::read(source).unwrap(), std::fs::read(&reproduced).unwrap()),
+            _ => {
+                let read = |path: &Path| {
+                    let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+                    decoder.read_image().unwrap()
+                };
+                match (read(source), read(&reproduced)) {
+                    (tiff::decoder::DecodingResult::U16(a), tiff::decoder::DecodingResult::U16(b)) => assert_eq!(a, b, "{}", source.display()),
+                    (tiff::decoder::DecodingResult::F32(a), tiff::decoder::DecodingResult::F32(b)) => assert_eq!(a, b, "{}", source.display()),
+                    _ => panic!("replay changed the sample format"),
+                }
+            }
+        }
+    }
+    // The sidecar is no authority to accept changed inputs or to publish incomplete results.
+    let mut changed = std::fs::read(&files[0]).unwrap();
+    changed.push(0);
+    std::fs::write(&files[0], changed).unwrap();
+    let refused = dir.path().join("refused");
+    cli(dir.path()).arg("reproduce").arg(sidecar).arg("--out").arg(&refused).assert().failure();
+    assert!(!refused.exists());
+}
+
+#[test]
+fn plain_exports_replay_every_stacking_method_and_slab_dependencies() {
+    let dir = TempDir::new().unwrap();
+    let files = frames(dir.path());
+    for (index, method, slab) in [(0, "average", false), (1, "pyramid", false), (2, "pyramid", true)] {
+        let path = dir.path().join(format!("result-{index}.tif"));
+        let mut command = cli(dir.path());
+        command.args(["--device", "cpu", "stack"]).arg(files[0].parent().unwrap()).arg("--method").arg(method).arg("--out").arg(&path);
+        if slab {
+            command.args(["--slab", "2:1"]);
+        }
+        let original = command.assert().success().get_output().clone();
+        let original = json_output(&original);
+        let sidecar = original["outputs"][0]["file"]["sidecar"].as_str().unwrap();
+        let target = dir.path().join(format!("replay-{index}"));
+        cli(dir.path()).arg("reproduce").arg(sidecar).arg("--out").arg(&target).assert().success();
+        let read = |p: &Path| {
+            let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(p).unwrap()).unwrap();
+            let tiff::decoder::DecodingResult::U16(samples) = decoder.read_image().unwrap() else { panic!("16-bit TIFF") };
+            samples
+        };
+        assert_eq!(read(&path), read(&target.join(path.file_name().unwrap())), "{method}, slab={slab}");
+    }
+}
+
+#[test]
 fn a_built_in_preset_is_named_by_its_id() {
     let dir = TempDir::new().unwrap();
     let files = frames(dir.path());
@@ -244,6 +356,7 @@ fn every_help_page_has_examples_and_exit_codes() {
         vec!["batch"],
         vec!["watch"],
         vec!["run"],
+        vec!["reproduce"],
         vec!["commands"],
         vec!["project"],
         vec!["project", "new"],

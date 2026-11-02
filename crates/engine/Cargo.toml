@@ -27,6 +27,7 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+font8x8.workspace = true
 # The JSON schemas of the commands' parameters and results.
 schemars.workspace = true
 # The preview lane's thread pool (jobs::executor).

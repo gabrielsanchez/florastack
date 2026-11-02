@@ -259,7 +259,14 @@ impl SourceLoader {
     pub fn new(session: &Session, command: &'static str, output: OutputId) -> Result<SourceLoader, CommandError> {
         let project = session.project()?;
         let target = project.output(output).ok_or_else(|| CommandError::NotFound { what: output.to_string() })?;
+        let mut source = crate::commands::scientific::source(project, target)?;
+        // Snapshots omit disposable aligned caches. Reuse a current reference only when its original input still
+        // matches; load() also checks the full development/transform/canvas key before using the pixels.
+        for frame in &mut source.frames {
+            frame.aligned = project.frame(frame.id()).filter(|f| f.hash == frame.hash).and_then(|f| f.aligned.clone());
+        }
         let frames = (|| {
+            let project = &source;
             let stored = stored_alignment(project).map_err(|e| e.to_string())?.ok_or("the stack isn't aligned")?;
             let canvas = stored.canvas(output_framing(target)).map_err(|e| e.to_string())?;
             let aligned: Vec<AlignedSource> = stored
@@ -276,7 +283,7 @@ impl SourceLoader {
                 })
                 .collect();
             let ids: Vec<FrameId> = aligned.iter().map(|a| a.0).collect();
-            let plan = Plan::with_frames(session, command, &ids).map_err(|e| e.info().message)?.with_quality(florastack_raw::Quality::Output);
+            let plan = Plan::with_state(session, command, project, &ids).map_err(|e| e.info().message)?.with_quality(florastack_raw::Quality::Output);
             Ok((plan, canvas, aligned))
         })();
         let outputs = project.outputs.iter().map(|o| (o.id(), o.image.clone())).collect();

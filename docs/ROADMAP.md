@@ -386,11 +386,14 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 6.2 Scientific exports and annotations
 
-- [ ] Exports: depth map (16-bit, and calibrated in micrometers when the step is known), confidence map, aligned and corrected frames, contribution maps and an alignment CSV
-- [ ] Calibration profiles: pixels per micrometer for each objective or magnification
-- [ ] Non-destructive annotations: scale bar and text labels
-- [ ] A reproducibility sidecar (settings, version, input hashes) with every export
-- [ ] Tests: a calibrated depth export matches the synthetic depths; the sidecar reproduces the output through the CLI
+- [x] Exports (`export.run`, Export-tab scientific options): normalized 16-bit depth and confidence TIFFs, full-precision float depth in micrometers from signed capture spacing and an origin, developed/defect-corrected/aligned/brightness-corrected frames, per-frame normalized contribution TIFFs (including feathered coverage and nearest-frame fallback), and an alignment CSV with indices, shifts, scale, rotation, gain and score. Outputs retain their input state and full-precision frame-coordinate depth; later project edits leave their scientific data unchanged
+- [x] Calibration profiles (`calibration.get`, `calibration.set`): objective/magnification names and pixels per micrometer in a user settings library. Selecting one copies its measured value into project output settings; scale bars account for the output canvas's scale
+- [x] Non-destructive annotations (`annotation.get`, `annotation.set`): named, visible/hidden scale-bar and text layers, saved in project format 4, with migration from older projects and inverse edits for undo. Automatic 1/2/5 lengths, fixed lengths, solid/bracket styles, four corners, black/white ink and positioned labels; rendered only on the exported copy
+- [x] A mandatory `<image>.json` reproducibility sidecar for `export.run` and `output.save` (including CLI, batch and watch exports): processing/export settings, version, original SHA-256 input hashes, recorded development/alignment, output dependencies, layers, artifact hashes and embedded non-regenerable masks. Input hashes are checked against the bytes actually decoded. `export.reproduce` and CLI `reproduce SIDECAR --out FOLDER` recompute from original inputs without the original project/cache; publication is staged and the sidecar is written last
+- [x] Tests: `engine/tests/scientific.rs` checks calibrated synthetic depths with reversed compositing order, an omitted capture and signed travel, profile persistence, annotation save/undo/hide/copy rendering and changed-input rejection. `stack/tests/contributions.rs` reconstructs the compositor from normalized contributions, including coverage and fallback. CLI tests remove the original project/cache and reproduce every scientific artifact with a mask, retouch stroke, scale bar and label; replay also covers average, pyramid and slabbed outputs. Registry/schema/hostile/undo tests and the headless Export-tab controls pass
+- [ ] Follow-up: preview annotation layers in the viewer before export, and offer a scalable font with broader Unicode coverage (the deterministic bitmap font currently supports Latin and Greek)
+- [ ] Follow-up: allow input-path relocation during replay; current manifests require originals at their recorded absolute paths
+- [ ] Follow-up: deduplicate input-state JSON in large slabbed project files and sidecars; snapshots are shared in memory but serialized with each output, within the existing 64 MiB document limit
 
 ### 6.3 3D model and stereo
 

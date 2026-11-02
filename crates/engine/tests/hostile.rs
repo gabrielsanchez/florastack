@@ -43,6 +43,20 @@ fn hostile_values_are_refused_with_what_is_wrong() {
     let many: Vec<u64> = (0..100_001).collect();
     let long = "x".repeat(40 * 1024);
     let cases = [
+        ("calibration.set", json!({"profiles":[{"name":"10x","pixelsPerMicrometer":0}]})),
+        ("calibration.set", json!({"profiles":[{"name":"10x","pixelsPerMicrometer":1},{"name":"10x","pixelsPerMicrometer":2}]})),
+        ("export.set", json!({"pixels_per_micrometer":1e300})),
+        ("export.set", json!({"z_step_micrometers":0})),
+        ("export.set", json!({"z_origin_micrometers":1e300})),
+        ("export.reproduce", json!({"sidecar":"x\u{0}","folder":"out"})),
+        (
+            "annotation.set",
+            json!({"output":fixture.output,"layers":[{"name":"A","visible":true,"white":true,"textSize":0,"annotation":{"kind":"text","text":"A","position":[0,0]}}]}),
+        ),
+        (
+            "annotation.set",
+            json!({"output":fixture.output,"layers":[{"name":"A","visible":true,"white":true,"textSize":8,"annotation":{"kind":"text","text":"A","position":[1e300,0]}}]}),
+        ),
         ("capture.calculate", json!({"magnification":0,"aperture":4,"pixelPitch":4})),
         ("capture.calculate", json!({"magnification":1,"aperture":1e300,"pixelPitch":4})),
         ("capture.calculate", json!({"magnification":1,"aperture":4,"pixelPitch":-1})),

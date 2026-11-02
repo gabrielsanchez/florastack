@@ -69,3 +69,8 @@ need a mention here:
   contributors.
 - jpeg-encoder (https://github.com/vstroebel/jpeg-encoder), the JPEG encoder inside
   lightcraft-codecs: this software is based in part on the work of the Independent JPEG Group.
+- font8x8 (https://github.com/saibatizoku/font8x8-rs), version 0.3.1:
+  Copyright (c) 2017 Joaquin Rosales <globojorro@gmail.com>.
+  Licensed under the MIT License; the license text is the same as LICENSE-MIT.
+  The glyphs derive from public-domain VGA fonts by Marcel Sondaar and IBM, via
+  Daniel Hepper's public-domain font8x8 C headers.

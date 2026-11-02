@@ -4,10 +4,14 @@ align.reset
 align.run
 align.set
 align.sortByScale
+annotation.get
+annotation.set
 batch.run
 cache.info
 cache.removeAbandoned
 cache.setFolder
+calibration.get
+calibration.set
 capture.calculate
 capture.camera
 capture.info
@@ -29,6 +33,7 @@ edit.redo
 edit.undo
 export.estimate
 export.get
+export.reproduce
 export.reset
 export.run
 export.set

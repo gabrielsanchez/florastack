@@ -986,7 +986,7 @@ impl StackPlan {
     /// Stacks every frame with the plan's method, at full size or, `reduced`, at a quarter of it, each frame read,
     /// folded in and dropped: stage 0 reads the frames for a one-pass method, stages 0 and 1 read them twice for the
     /// depth-map method, and the last stage is the end. The stack and, for the depth-map method, its depth map.
-    fn stack_any(&mut self, ctx: &JobContext, reduced: bool) -> Result<(Stacked, Option<DepthMap>), CommandError> {
+    pub(super) fn stack_any(&mut self, ctx: &JobContext, reduced: bool) -> Result<(Stacked, Option<DepthMap>), CommandError> {
         let settings = if reduced { self.settings.reduced() } else { self.settings.clone() };
         self.reader.load_mask()?;
         let n = self.frames.len();
@@ -1476,6 +1476,11 @@ pub(super) fn store(
             maps.insert(depth_map().ok_or_else(internal)?, stored);
             let stored = write_image(cache, &format!("{stem}-confidence"), &AnyImage::U16(map.confidence_u16()?), None)?;
             maps.insert(confidence_map().ok_or_else(internal)?, stored);
+            // The compositor is finished: normally this is the only owner, so retaining scientific precision needs
+            // no extra whole-canvas allocation while the TIFF is encoded.
+            let depth = std::sync::Arc::try_unwrap(map.depth).unwrap_or_else(|shared| (*shared).clone());
+            let stored = write_image(cache, &format!("{stem}-depth-frames"), &AnyImage::F32(depth), None)?;
+            maps.insert(crate::retouch::map_name("depth-frames")?, stored);
             Some(DepthSummary { level: map.level, filled: map.filled })
         }
         None => None,
@@ -1517,6 +1522,7 @@ fn depth(session: &Session, p: DepthParams) -> Result<JobPlan<StackSummary>, Com
 /// A full stack with `settings` into a new output named `name`.
 fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: String) -> Result<JobPlan<StackSummary>, CommandError> {
     let mut plan = StackPlan::new(session, command, settings, Quality::Output)?;
+    let mut source = super::scientific::snapshot(session)?;
     let passes = plan.settings.passes();
     let job = JobPlan::new(move |ctx| {
         let (stacked, depth) = plan.stack_any(ctx, false)?;
@@ -1530,6 +1536,10 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
         };
         let ids = plan.ids();
         let parameters = plan.settings.parameters(plan.framing, width, height);
+        if let Some(develop) = &develop {
+            source.develop = Some(develop.clone());
+        }
+        let source_state = Some(std::sync::Arc::new(source));
         let levels = plan.settings.levels(width, height);
         let (skipped, settings, framing) = (plan.skipped.clone(), plan.settings.used(), plan.framing);
         Ok(commit(move |session: &mut Session| {
@@ -1541,6 +1551,7 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
                 name,
                 method: method.to_owned(),
                 parameters,
+                source_state,
                 inputs: ids.iter().copied().map(Input::Frame).collect(),
                 image,
                 preview: Some(preview),

@@ -239,6 +239,26 @@ impl Plan {
 
     fn of_frames(session: &Session, command: &'static str, frames: &[&Frame]) -> Result<Plan, CommandError> {
         let (project, folder) = (session.project()?, session.folder()?);
+        Self::of_state(session, command, project, folder, frames)
+    }
+
+    pub(crate) fn with_state(
+        session: &Session,
+        command: &'static str,
+        project: &florastack_project::Project,
+        ids: &[FrameId],
+    ) -> Result<Plan, CommandError> {
+        let frames: Vec<&Frame> = project.frames.iter().filter(|f| ids.contains(&f.id())).collect();
+        Self::of_state(session, command, project, session.folder()?, &frames)
+    }
+
+    fn of_state(
+        session: &Session,
+        command: &'static str,
+        project: &florastack_project::Project,
+        folder: &florastack_project::ProjectFolder,
+        frames: &[&Frame],
+    ) -> Result<Plan, CommandError> {
         let settings = align_settings(project).map_err(|e| session.invalid("align", e.to_string()))?;
         let develop_settings = crate::project::develop_settings(project)?;
         let options = ReadOptions::default();
@@ -331,6 +351,13 @@ impl Plan {
         let (Some(&id), Some(path)) = (self.ids.get(i), self.paths.get(i)) else { return Err(self.internal()) };
         let bytes =
             std::fs::read(path).map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: path.clone(), source }))?;
+        let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
+        if florastack_project::ContentHash::of(&bytes) != frame.hash {
+            return Err(CommandError::Unavailable {
+                command: self.command.to_owned(),
+                reason: format!("{} changed since it was added: remove and add the frame again before processing", path.display()),
+            });
+        }
         let had = self.reader.develop().is_some();
         let frame = self.reader.read(&bytes, self.quality).map_err(|source| ProjectDataError::ReadFrame { path: path.clone(), source })?;
         if !had && self.reader.develop().is_some() {

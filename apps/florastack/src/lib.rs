@@ -19,6 +19,7 @@ pub mod preferences;
 pub mod prefs;
 pub mod presets;
 pub mod retouch_tab;
+mod scientific_export;
 pub mod shell;
 pub mod stack_tab;
 pub mod viewer;

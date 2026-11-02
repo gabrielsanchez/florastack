@@ -83,6 +83,11 @@ pub enum Edit {
         output: OutputId,
         name: String,
     },
+    /// Replaces an output's non-destructive annotation layers; the engine validates their records.
+    SetAnnotations {
+        output: OutputId,
+        layers: Vec<Value>,
+    },
     /// Adds an empty, visible retouch layer on top of an output's, with a new id.
     AddLayer {
         output: OutputId,
@@ -293,7 +298,7 @@ impl Edit {
             // An output's layers go with it.
             Edit::AddOutput(_) | Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
             // An output's maps (its retouched result cached) are part of it.
-            Edit::RenameOutput { .. } | Edit::SetOutputMap { .. } => Aspects::OUTPUTS,
+            Edit::RenameOutput { .. } | Edit::SetOutputMap { .. } | Edit::SetAnnotations { .. } => Aspects::OUTPUTS,
             Edit::AddLayer { .. }
             | Edit::InsertLayer { .. }
             | Edit::RemoveLayer { .. }
@@ -316,7 +321,8 @@ impl Edit {
             (Edit::SetFrameEnabled { frame: a, .. }, Edit::SetFrameEnabled { frame: b, .. })
             | (Edit::SetPreviews { frame: a, .. }, Edit::SetPreviews { frame: b, .. })
             | (Edit::SetAlignedImage { frame: a, .. }, Edit::SetAlignedImage { frame: b, .. }) => a == b,
-            (Edit::RenameOutput { output: a, .. }, Edit::RenameOutput { output: b, .. }) => a == b,
+            (Edit::RenameOutput { output: a, .. }, Edit::RenameOutput { output: b, .. })
+            | (Edit::SetAnnotations { output: a, .. }, Edit::SetAnnotations { output: b, .. }) => a == b,
             (Edit::SetProjectMap { name: a, .. }, Edit::SetProjectMap { name: b, .. }) => a == b,
             (Edit::SetLayerVisible { output: a, layer: l, .. }, Edit::SetLayerVisible { output: b, layer: m, .. }) => a == b && l == m,
             (Edit::SetOutputMap { output: a, name: n, .. }, Edit::SetOutputMap { output: b, name: m, .. }) => a == b && n == m,
@@ -386,6 +392,10 @@ impl Project {
                 check_name("output name", &name)?;
                 let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
                 Ok(Edit::RenameOutput { output, name: std::mem::replace(&mut o.name, name) })
+            }
+            Edit::SetAnnotations { output, layers } => {
+                let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
+                Ok(Edit::SetAnnotations { output, layers: std::mem::replace(&mut o.annotations, layers) })
             }
             Edit::AddLayer { output, name } => {
                 check_name("retouch layer name", &name)?;
@@ -589,6 +599,7 @@ mod tests {
                 name: "Average".into(),
                 method: "average".into(),
                 parameters: serde_json::json!({ "radius": 1.0 }),
+                source_state: None,
                 inputs: vec![crate::model::Input::Frame(a), crate::model::Input::Frame(b)],
                 image: cache_ref(4),
                 preview: Some(cache_ref(5)),
@@ -627,6 +638,7 @@ mod tests {
             name: "Pyramid".into(),
             method: "pyramid".into(),
             parameters: serde_json::json!({}),
+            source_state: None,
             inputs: vec![crate::model::Input::Frame(a)],
             image: cache_ref(1),
             preview: None,
@@ -636,6 +648,7 @@ mod tests {
         let before = p.clone();
         let retouched = MapName::new("retouched").unwrap();
         for edit in [
+            Edit::SetAnnotations { output, layers: vec![serde_json::json!({"name":"Scale","visible":true})] },
             Edit::SetLayerVisible { output, layer, visible: false },
             Edit::SetOutputMap { output, name: retouched.clone(), map: Some(cache_ref(2)) },
             Edit::SetAlignedImage { frame: a, aligned: Some(cache_ref(3)) },
@@ -676,6 +689,7 @@ mod tests {
                     name: "Average".into(),
                     method: "Weighted Average".into(),
                     parameters: serde_json::json!({}),
+                    source_state: None,
                     inputs: Vec::new(),
                     image: cache_ref(4),
                     preview: None,

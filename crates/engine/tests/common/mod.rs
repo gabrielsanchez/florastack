@@ -160,6 +160,7 @@ pub fn fixture_project(dir: &Path) -> Fixture {
         name: "Pyramid".into(),
         method: "pyramid".into(),
         parameters: serde_json::json!({}),
+        source_state: None,
         inputs: frames.iter().map(|&f| Input::Frame(f)).collect(),
         image: reference,
         preview: None,

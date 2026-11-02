@@ -63,6 +63,11 @@ fn execute(cli: Cli) -> Result<(), Failure> {
             )
         }
         Command::Run(args) => run(&mut client, &args),
+        Command::Reproduce { sidecar, out, overwrite } => {
+            let result =
+                client.run("export.reproduce", json!({"sidecar": path_text(&sidecar)?, "folder": path_text(&out)?, "overwrite": overwrite}))?;
+            print_json(&result)
+        }
         Command::Project { command } => project(&mut client, command),
         Command::Commands => Ok(()),
     };

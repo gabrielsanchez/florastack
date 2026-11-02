@@ -93,7 +93,8 @@ fn exported_files_reopen_with_their_depth_profile_and_metadata() {
         let mut settings = settings;
         settings["template"] = json!(format!("case {i}"));
         let files = export(&mut engine, &pyramid, &folder, &settings);
-        assert_eq!(files.len(), 1, "{settings}: {files:?}");
+        assert_eq!(files.len(), 2, "{settings}: image and mandatory sidecar: {files:?}");
+        assert_eq!(files[1].1, "sidecar");
         let (path, what) = &files[0];
         assert_eq!(what, "output");
         let format = settings["format"].as_str().unwrap();
@@ -148,10 +149,13 @@ fn maps_and_aligned_frames_are_exported_alongside() {
     let estimate = run(&mut engine, "export.estimate", &json!({ "output": depth, "settings": settings }).to_string());
     let files = export(&mut engine, &depth, &folder, &settings);
     let kinds: Vec<&str> = files.iter().map(|(_, what)| what.as_str()).collect();
-    assert_eq!(kinds, ["output", "depth", "confidence", "aligned", "aligned", "aligned", "aligned"]);
-    assert_eq!(estimate["files"], 7, "{estimate}");
+    assert_eq!(kinds, ["output", "depth", "confidence", "aligned", "aligned", "aligned", "aligned", "sidecar"]);
+    assert_eq!(estimate["files"], 8, "{estimate}");
     assert_eq!(estimate["name"], files[0].0.file_name().unwrap().to_string_lossy().as_ref(), "{estimate}");
     for (path, what) in &files {
+        if what == "sidecar" {
+            continue;
+        }
         let decoded = florastack_codecs::read_file(path, &ReadOptions::default()).unwrap();
         assert_eq!((decoded.info.width, decoded.info.height), (96, 72), "{}", path.display());
         let (bits, channels) = match what.as_str() {
@@ -177,7 +181,8 @@ fn maps_and_aligned_frames_are_exported_alongside() {
     let plain = json!({ "tiff_compression": "none", "template": "plain" });
     let estimate = run(&mut engine, "export.estimate", &json!({ "output": pyramid, "settings": plain }).to_string());
     let files = export(&mut engine, &pyramid, &folder, &plain);
-    let (written, estimated) = (std::fs::metadata(&files[0].0).unwrap().len(), estimate["bytes"].as_u64().unwrap());
+    let (written, estimated) =
+        (files.iter().map(|(path, _)| std::fs::metadata(path).unwrap().len()).sum::<u64>(), estimate["bytes"].as_u64().unwrap());
     assert_eq!(estimate["approximate"], false);
     assert!(written.abs_diff(estimated) < 8192, "estimated {estimated} bytes, wrote {written}: only the headers differ");
     // Without the files there, an export refuses to replace them unless asked.
@@ -190,7 +195,7 @@ fn maps_and_aligned_frames_are_exported_alongside() {
         "export.run",
         &json!({ "output": pyramid, "folder": folder.display().to_string(), "settings": { "depth_map": true } }).to_string(),
     );
-    assert_eq!(exported["files"].as_array().unwrap().len(), 1, "{exported}");
+    assert_eq!(exported["files"].as_array().unwrap().len(), 2, "{exported}");
     assert!(exported["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("depth")), "{exported}");
 }
 

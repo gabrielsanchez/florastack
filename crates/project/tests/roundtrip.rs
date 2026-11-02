@@ -89,6 +89,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         name: "Pyramid".into(),
         method: "pyramid".into(),
         parameters: json!({ "grit": 0.5, "levels": 7 }),
+        source_state: None,
         inputs: vec![Input::Frame(a), Input::Frame(c)],
         image,
         preview: Some(preview),
@@ -105,6 +106,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         name: "Slabbed depth map".into(),
         method: "depth-map".into(),
         parameters: json!({ "threshold": { "percentile": 12.5 } }),
+        source_state: None,
         inputs: vec![Input::Output(pyramid)],
         image: final_image,
         preview: None,
@@ -133,7 +135,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
 
     // The file is readable JSON that starts with its format and version.
     let text = std::fs::read_to_string(folder.project_file()).unwrap();
-    assert!(text.starts_with("{\n  \"format\": \"florastack-project\",\n  \"version\": 3,\n"), "{}", &text[..80]);
+    assert!(text.starts_with(&format!("{{\n  \"format\": \"florastack-project\",\n  \"version\": {},\n", schema::VERSION)), "{}", &text[..80]);
     assert_eq!(schema::parse(text.as_bytes()).unwrap(), reopened);
 }
 
@@ -211,6 +213,7 @@ fn unreferenced_cache_files_are_listed_and_removed() {
         name: "Output".into(),
         method: "pyramid".into(),
         parameters: Value::Null,
+        source_state: None,
         inputs: Vec::new(),
         image,
         preview: None,

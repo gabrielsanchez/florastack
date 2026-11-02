@@ -77,6 +77,18 @@ pub enum Command {
         "run Bee{project} --cmd project.info"
     ]))]
     Run(RunArgs),
+    /// Recompute an export from its sidecar, verifying the original input hashes.
+    #[command(after_help = examples(&["reproduce result.tif.json --out reproduced"]))]
+    Reproduce {
+        /// The JSON sidecar next to an exported image.
+        sidecar: PathBuf,
+        /// New destination folder.
+        #[arg(long)]
+        out: PathBuf,
+        /// Replace destination files if they exist.
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Print every registered command, help text and JSON parameter/result schema as JSON.
     #[command(after_help = examples(&["commands > commands.json"]))]
     Commands,

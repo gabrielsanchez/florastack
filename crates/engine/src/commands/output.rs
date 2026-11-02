@@ -221,6 +221,8 @@ impl Params for SaveParams {
 #[derive(Debug, Serialize, JsonSchema)]
 struct Written {
     path: String,
+    /// Reproducibility manifest written beside this image.
+    sidecar: String,
     /// Its size.
     bytes: u64,
     /// What the file couldn't hold or carry, such as metadata the format has no place for.
@@ -243,6 +245,50 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandE
         let _ = std::fs::remove_file(&temp);
         write(e)
     })
+}
+
+/// Files staged beside their destinations, then published only after the job's final cancellation checkpoint.
+#[derive(Default)]
+pub(super) struct Publication {
+    #[cfg(not(target_arch = "wasm32"))]
+    files: Vec<(PathBuf, tempfile::NamedTempFile)>,
+    #[cfg(target_arch = "wasm32")]
+    files: Vec<(PathBuf, Vec<u8>)>,
+}
+
+impl Publication {
+    pub(super) fn stage(&mut self, path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
+        let parent = path.parent().ok_or_else(|| super::scientific::unavailable("an export needs a parent folder"))?;
+        let error = |source| florastack_project::ProjectError::Write { path: path.to_path_buf(), source };
+        std::fs::create_dir_all(parent).map_err(error)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut file = tempfile::Builder::new().prefix(".export-").suffix(".part").tempfile_in(parent).map_err(error)?;
+            file.write_all(bytes).map_err(error)?;
+            file.as_file().sync_all().map_err(error)?;
+            self.files.push((path.to_path_buf(), file));
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.files.push((path.to_path_buf(), bytes.to_vec()));
+        Ok(())
+    }
+
+    pub(super) fn publish(self, ctx: &crate::jobs::JobContext, overwrite: bool) -> Result<(), CommandError> {
+        if !overwrite && let Some((path, _)) = self.files.iter().find(|(p, _)| p.exists()) {
+            return Err(florastack_project::ProjectError::Exists { path: path.clone() }.into());
+        }
+        ctx.finalize()?;
+        for (path, file) in self.files {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let result = if overwrite { file.persist(&path) } else { file.persist_noclobber(&path) };
+                result.map_err(|e| florastack_project::ProjectError::Write { path, source: e.error })?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            write_atomically(&path, &file)?;
+        }
+        Ok(())
+    }
 }
 
 /// Where a retouched output's pixels come from.
@@ -350,20 +396,33 @@ fn yes() -> bool {
 }
 
 fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandError> {
-    let (project, folder) = (session.project()?, session.folder()?);
+    let project = session.project()?;
+    let folder = session.folder()?;
     let output = find(session, p.output)?;
+    let source_state = super::scientific::source(project, output)?;
+    let settings = super::export::output_settings(project)?;
+    settings.validate().map_err(|e| session.invalid("settings", e))?;
+    let layers = if p.map.is_none() && settings.annotations { super::annotation::layers(output)? } else { Vec::new() };
+    let calibration = super::scientific::canvas_calibration(&source_state, output, settings.pixels_per_micrometer)?;
+    let mut sidecar = super::reproduce::Sidecar::new(
+        session,
+        p.output,
+        super::reproduce::Export::Save { spec: p.spec, map: p.map.clone(), metadata: p.metadata, metadata_from: p.metadata_from, settings },
+    )?;
     let mut early = Vec::new();
     let pixels = Pixels::of(session, p.output, p.map.as_deref(), p.spec, &mut early)?;
-    let frames: Vec<FrameId> = output.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect();
+    let frames = crate::retouch::output_frames(project, output);
     let source = match p.metadata_from {
-        Some(id) => Some(project.frame(id).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?),
-        None => frames.iter().find_map(|id| project.frame(*id)),
+        Some(id) => Some(source_state.frame(id).or_else(|| project.frame(id)).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?),
+        None => frames.iter().find_map(|id| source_state.frame(*id)),
     };
     let source: Option<PathBuf> = source.map(|f| folder.frame_path(f));
     let frame_count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
     let path = absolute(&p.path)?;
-    if !p.overwrite && path.exists() {
-        return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", path.display())));
+    let sidecar_path = super::reproduce::path(&path);
+    if !p.overwrite && (path.exists() || sidecar_path.exists()) {
+        let existing = if path.exists() { &path } else { &sidecar_path };
+        return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", existing.display())));
     }
     let cache = session.cache_dir()?;
     let spec = p.spec;
@@ -371,7 +430,8 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
     let plan = JobPlan::new(move |ctx| {
         ctx.stage(0);
         let mut warnings = early;
-        let pixels = pixels.read(&cache, &mut warnings)?;
+        sidecar.prepare(&cache)?;
+        let pixels = super::annotation::render(pixels.read(&cache, &mut warnings)?, &layers, calibration)?;
         ctx.checkpoint()?;
         let metadata = if with_metadata { frame_metadata(source.as_deref(), &mut warnings) } else { None };
         let metadata = OutputMetadata { source: metadata, frame_count: Some(frame_count), modified: None };
@@ -379,12 +439,14 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
         ctx.stage(1);
         let encoded = florastack_codecs::write(&pixels, &spec, &metadata)?;
         drop(pixels);
-        // From here the file is written: the job can no longer be cancelled.
-        ctx.finalize()?;
         ctx.stage(2);
-        write_atomically(&path, &encoded.bytes)?;
+        let mut publication = Publication::default();
+        publication.stage(&path, &encoded.bytes)?;
+        sidecar.artifact(&path, &path, if p.map.is_some() { "map" } else { "output" }, &encoded.bytes);
+        publication.stage(&sidecar_path, &sidecar.bytes()?)?;
+        publication.publish(ctx, p.overwrite)?;
         warnings.extend(encoded.warnings.iter().map(ToString::to_string));
-        let written = Written { path: display(&path), bytes: encoded.bytes.len() as u64, warnings };
+        let written = Written { path: display(&path), sidecar: display(&sidecar_path), bytes: encoded.bytes.len() as u64, warnings };
         Ok(commit(move |_: &mut Session| Ok(written)))
     });
     Ok(plan.stages(&[("Reading", 0.2), ("Encoding", 0.7), ("Writing", 0.1)]))

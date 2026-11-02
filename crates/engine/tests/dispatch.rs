@@ -179,7 +179,7 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("output.list", "{}")["outputs"][1]["method"], "pyramid");
     let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
     assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
-    assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth"]));
+    assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth", "depth-frames"]));
     // Exporting the depth map's output: its settings, an estimate of what it writes, then the files, with the maps
     // and the aligned frames alongside.
     assert_eq!(calls.run("export.get", "{}")["settings"]["format"], "tiff");
@@ -189,10 +189,16 @@ fn every_command_dispatches_from_json() {
     );
     assert_eq!((&set["settings"]["depth"], &set["settings"]["metadata"]), (&json!("u8"), &json!(true)), "{set}");
     let estimate = calls.run("export.estimate", &format!(r#"{{ "output": {} }}"#, depth["output"]));
-    assert_eq!((&estimate["files"], &estimate["name"]), (&json!(9), &json!("Depth map depth-map.tif")), "{estimate}");
+    assert_eq!((&estimate["files"], &estimate["name"]), (&json!(10), &json!("Depth map depth-map.tif")), "{estimate}");
     let exported = calls.run("export.run", &format!(r#"{{ "output": {}, "folder": {} }}"#, depth["output"], quoted(&dir.path().join("exported"))));
     let files = exported["files"].as_array().unwrap();
-    assert_eq!(files.len(), 9, "{exported}");
+    assert_eq!(files.len(), 10, "{exported}");
+    let sidecar = files.iter().find(|f| f["what"] == "sidecar").unwrap()["path"].clone();
+    calls.run("calibration.set", r#"{"profiles":[{"name":"10x","pixelsPerMicrometer":2.5}]}"#);
+    assert_eq!(calls.run("calibration.get", "{}")["profiles"][0]["name"], "10x");
+    calls.run("annotation.set", &json!({"output":depth["output"],"layers":[{"name":"Label","visible":false,"white":true,"textSize":8,"annotation":{"kind":"text","text":"A","position":[0,0]}}]}).to_string());
+    assert_eq!(calls.run("annotation.get", &json!({"output":depth["output"]}).to_string())["layers"][0]["name"], "Label");
+    calls.run("export.reproduce", &json!({"sidecar":sidecar,"folder":dir.path().join("reproduced")}).to_string());
     let written: u64 = files.iter().map(|f| f["bytes"].as_u64().unwrap()).sum();
     let estimated = estimate["bytes"].as_u64().unwrap();
     assert!(written.abs_diff(estimated) * 5 < written, "estimated {estimated} bytes, wrote {written}");

@@ -74,7 +74,7 @@ fn an_output_is_exported_as_the_tab_sets_it() {
     let written: Vec<PathBuf> = std::fs::read_dir(&folder).unwrap().map(|e| e.unwrap().path()).collect();
     assert!(written.iter().any(|p| p.extension().is_some_and(|e| e == "png")), "{written:?}");
     let aligned = written.iter().find(|p| p.is_dir()).unwrap();
-    assert_eq!(std::fs::read_dir(aligned).unwrap().count() as u64, files - 1);
+    assert_eq!(std::fs::read_dir(aligned).unwrap().count() as u64, files - 2);
     // Again, the files are there: the export says so, unless told to replace them.
     harness.state_mut().export_to(output, &folder);
     until(&mut harness, "the refusal", |app| !app.shell.busy() && app.shell.notices.last().is_some_and(|n| n.error));
@@ -84,6 +84,30 @@ fn an_output_is_exported_as_the_tab_sets_it() {
     harness.step();
     harness.state_mut().export_to(output, &folder);
     until(&mut harness, "the export again", |app| !app.shell.busy() && app.shell.notices.iter().any(|n| n.text.starts_with("Exported")));
+    done(dir, harness);
+}
+
+#[test]
+fn scientific_controls_use_the_registry_and_save_annotation_layers() {
+    let (dir, mut harness) = stacked("scientific-export-tab");
+    harness.state_mut().shell.run("calibration.set", json!({"profiles":[{"name":"10x","pixelsPerMicrometer":2.5}]}));
+    harness.get_by_label("Scientific outputs and annotations").click();
+    harness.run_steps(2);
+    harness.get_by_label("Alignment parameters CSV").click_accesskit();
+    until(&mut harness, "alignment CSV", |app| app.shell.export_settings["alignment_csv"] == true);
+    harness.get_by_label("Capture step is known").click_accesskit();
+    until(&mut harness, "known step", |app| app.shell.export_settings["z_step_micrometers"] == 1.0);
+    harness.get_by_label("Add scale bar").click_accesskit();
+    until(&mut harness, "annotation layer", |app| !app.shell.engine().project().unwrap().outputs[0].annotations.is_empty());
+    let output = harness.state().shell.outputs[0].id;
+    let layers = harness.state_mut().shell.run("annotation.get", json!({"output":output})).unwrap();
+    assert_eq!(layers["layers"][0]["annotation"]["kind"], "scale-bar");
+    assert!(layers["layers"][0]["annotation"]["length"].is_null());
+    harness.get_by_label("Scale bar").click_accesskit();
+    until(&mut harness, "hidden layer", |app| app.shell.engine().project().unwrap().outputs[0].annotations[0]["visible"] == false);
+    harness.state_mut().shell.run("edit.undo", json!({}));
+    harness.step();
+    assert_eq!(harness.state().shell.engine().project().unwrap().outputs[0].annotations[0]["visible"], true);
     done(dir, harness);
 }
 

@@ -31,15 +31,18 @@ const HASH: &str = "sha256:00000000000000000000000000000000000000000000000000000
 
 fn with(field: &str) -> String {
     format!(
-        r#"{{"format": "florastack-project", "version": 3, "name": null, "created": "2026-10-21T00:00:00Z",
-            "modified": "2026-10-21T00:00:00Z", "next_id": 5, {field}}}"#
+        r#"{{"format": "florastack-project", "version": {version}, "name": null, "created": "2026-10-21T00:00:00Z",
+            "modified": "2026-10-21T00:00:00Z", "next_id": 5, {field}}}"#,
+        version = schema::VERSION
     )
 }
 
 #[test]
 fn a_newer_project_file_asks_for_an_update() {
-    let e = open(br#"{"format": "florastack-project", "version": 4, "name": "Future", "frames": {"in": "a new shape"}}"#);
-    assert!(matches!(e, ProjectError::Newer { found: 4, supported: 3, .. }), "{e:?}");
+    let future = u64::from(schema::VERSION) + 1;
+    let e =
+        open(format!(r#"{{"format": "florastack-project", "version": {future}, "name": "Future", "frames": {{"in": "a new shape"}}}}"#).as_bytes());
+    assert!(matches!(e, ProjectError::Newer { found, supported, .. } if found == future && supported == schema::VERSION), "{e:?}");
     assert!(e.to_string().contains("update FloraStack"), "{e}");
     let e = open(br#"{"format": "florastack-project", "version": 18446744073709551615}"#);
     assert!(matches!(e, ProjectError::Newer { .. }), "{e:?}");
