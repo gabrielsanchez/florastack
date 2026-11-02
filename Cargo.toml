@@ -142,6 +142,8 @@ tiff = "0.11"
 zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
 zune-core = { version = "0.5", default-features = false, features = ["std"] }
 image-webp = "0.2"
+# Animated parallax exports; pure Rust, MIT OR Apache-2.0.
+gif = "0.14.2"
 # The BMP decoder only; LightCraft's codecs enable image's other formats for themselves.
 image = { version = "0.25", default-features = false, features = ["bmp"] }
 # Exactly 1.74.0: 1.74.1 added lossy DWA compression through `pulp`, which pulls in the unmaintained `paste`

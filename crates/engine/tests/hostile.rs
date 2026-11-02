@@ -43,6 +43,14 @@ fn hostile_values_are_refused_with_what_is_wrong() {
     let many: Vec<u64> = (0..100_001).collect();
     let long = "x".repeat(40 * 1024);
     let cases = [
+        ("parallax.mesh", json!({"output":1,"folder":"x\u{0}"})),
+        ("parallax.mesh", json!({"output":1,"folder":"x","settings":{"meshSide":usize::MAX}})),
+        ("parallax.stereo", json!({"output":1,"folder":"x","settings":{"baseline":1e300}})),
+        ("parallax.stereo", json!({"output":1,"folder":"x","settings":{"confidence":-1}})),
+        ("parallax.preview", json!({"output":1,"settings":{"maxSide":0}})),
+        ("parallax.preview", json!({"output":1,"settings":{"smoothing":1000}})),
+        ("parallax.animate", json!({"output":1,"folder":"x","frames":65535})),
+        ("parallax.animate", json!({"output":1,"folder":"x","fps":0})),
         ("calibration.set", json!({"profiles":[{"name":"10x","pixelsPerMicrometer":0}]})),
         ("calibration.set", json!({"profiles":[{"name":"10x","pixelsPerMicrometer":1},{"name":"10x","pixelsPerMicrometer":2}]})),
         ("export.set", json!({"pixels_per_micrometer":1e300})),

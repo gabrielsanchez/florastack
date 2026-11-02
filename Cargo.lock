@@ -1616,6 +1616,7 @@ dependencies = [
  "florastack-stack",
  "florastack-testkit",
  "font8x8",
+ "gif",
  "half",
  "notify",
  "peak_alloc",

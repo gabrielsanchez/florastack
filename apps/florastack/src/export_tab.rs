@@ -125,6 +125,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         return;
     };
     crate::scientific_export::show(app, ui, output.id);
+    crate::parallax_ui::show(app, ui, output.id);
     estimate(app, ui, output.id);
     ui.checkbox(&mut app.export.overwrite, tr("export-overwrite")).on_hover_text(tr("tip-export-overwrite"));
     ui.horizontal(|ui| {

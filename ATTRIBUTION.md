@@ -1,5 +1,11 @@
 # Attribution
 
+The original 3D exporter follows the [Khronos glTF 2.0 specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html).
+It contains no adapted reference code. The acceptance test downloads Khronos' Apache-2.0 licensed
+[glTF Validator](https://github.com/KhronosGroup/glTF-Validator) as an external test tool (not shipped).
+Rocking animation uses the pure-Rust [gif](https://github.com/image-rs/image-gif) crate (MIT OR Apache-2.0),
+with color_quant (MIT) for its per-frame palette and weezl (MIT OR Apache-2.0) for LZW encoding.
+
 Capture uses the following dependencies and public specifications (no proprietary or GPL/LGPL implementation code was read or adapted):
 
 | Component | Source | License | Use |
