@@ -416,10 +416,11 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 6.5 Photo-editor integrations
 
-- [ ] Lightroom Classic export plugin in `packaging/lightroom/`
-- [ ] darktable Lua script
-- [ ] "Open with FloraStack" desktop entry and a CLI recipe for LightCraft, digiKam and other editors
-- [ ] Scripts lint; manual checklist in `docs/integrations.md`
+- [x] Lightroom Classic export plugin in `packaging/lightroom/`: full-size 16-bit TIFF renditions, a chosen preset/method through the CLI, and catalog import beside the first original with embedded metadata
+- [x] darktable Lua export storage: full-size 16-bit TIFF, deterministic focus order by original filename, CLI preset/method, import and grouping; an original Windows batch launcher handles the process API's quoting restriction
+- [x] "Open with FloraStack" desktop entry and a CLI recipe for LightCraft, digiKam and other editors; LightCraft's documented external-editor and MCP workflows in `docs/integrations.md`. `scripts/package_integrations.py` builds installable packages from `branding.toml`
+- [x] Scripts lint with Luacheck (Lua 5.1); seven mocked checks cover quoting, collisions, ordering, TIFF settings, import, cancellation and failures. A real Windows CLI run through Lua's shell API writes a 16-bit TIFF and sidecar from two synthetic TIFFs. Manual checklist and install instructions in `docs/integrations.md`
+- [ ] Follow-up: run the integration guide's manual checklist in Lightroom Classic on Windows/macOS, darktable's Lua builds on Linux/macOS/Windows, and LightCraft/digiKam; the automated checks use host mocks and do not claim real-editor round trips
 
 ## Phase 7 — Release
 

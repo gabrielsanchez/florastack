@@ -101,6 +101,14 @@ Depth-map outputs also support [3D relief, synthetic stereo and rocking GIF expo
 in-app wgpu orbit viewer. The GLB acceptance test uses Khronos' official validator: install Node.js/npm and run
 `cargo xtask gltf-validator` to prepare that test fixture. `cargo xtask ci` fetches it automatically.
 
+## Photo-editor integrations
+
+Stack developed frames from Lightroom Classic or darktable, or open a selection from
+LightCraft, digiKam and other editors. The [integration guide](docs/integrations.md)
+covers plugin installation, the Open With desktop entry, CLI recipes and LightCraft's
+MCP workflow. Build the installable integrations with `python scripts/package_integrations.py`
+(Python 3.11+); their names come from `branding.toml`.
+
 ## Automation and Python
 
 `florastack-cli mcp` exposes every registry command as a tool over stdio, using the official Rust MCP SDK, with
