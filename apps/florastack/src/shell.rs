@@ -135,6 +135,16 @@ impl Shell {
         &self.engine
     }
 
+    /// Automation uses the same engine on this thread; its normal events refresh the UI on the next poll.
+    pub fn automation(&mut self, method: &str, params: Value) -> Result<Value, CommandError> {
+        let compute_changed = method == "command.dispatch" && params.get("command").and_then(Value::as_str) == Some("compute.set");
+        let result = florastack_engine::automation::request(&mut self.engine, method, params);
+        if result.is_ok() && compute_changed {
+            self.forget_compute();
+        }
+        result
+    }
+
     /// Tells the user something.
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         self.notices.push(Notice { text: text.into(), error, at: Instant::now() });

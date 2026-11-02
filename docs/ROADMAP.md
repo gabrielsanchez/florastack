@@ -407,10 +407,12 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 6.4 MCP server, control channel and Python
 
-- [ ] `florastack-cli mcp`: an MCP server (stdio) with one tool per registered command, and resources for project state and thumbnails
-- [ ] `florastack --control`: an authenticated, loopback-only JSON control channel with offscreen screenshots
-- [ ] Python bindings (PyO3 and maturin) in `python/florastack`, with numpy arrays out
-- [ ] Tests: MCP lists the tools and runs a stack; pytest checks the shape of a stacked output
+- [x] `florastack-cli mcp`: the official Rust MCP SDK over stdio, with one tool per registry command, its original schemas/help and final structured results; cancellable jobs with progress, project-state and cached JPEG-thumbnail resources, and `--connect` / `--token-file` to use a running desktop app's engine
+- [x] `florastack --control`: authenticated JSON lines on IPv4 loopback, bounded connections/frames/deadlines and UI-thread dispatch; pure view controls and staged PNG screenshots. `--headless` renders the same UI and GPU viewer into an offscreen texture without a window. `scripts/readme_screenshots.py` generates the README's Stack and Export images through control; [protocol and usage](automation.md)
+- [x] Python bindings (PyO3, rust-numpy and maturin) in `python/florastack`: `Project.load_frames`, `align`, `stack`, `output` and generic registry `run`; owned, contiguous linear float32 NumPy outputs, GIL release during native work and keyboard cancellation. Wheels remain in Phase 7
+- [x] Tests: real stdio MCP clients list every tool/schema and run a synthetic stack headless and bridged, then read state/thumbnails; control tests cover authentication, loopback validation, malformed JSON, UI state and offscreen PNG capture. Four pytest cases check all three stacking methods' exact output shape/dtype, array lifetime and errors. `cargo xtask python` builds with maturin in an isolated venv and runs pytest in CI; full Windows `cargo xtask ci` passed all 10 steps with no recorded skips
+- [ ] Follow-up: review windowed screenshots and desktop bridging by hand on Windows, macOS and Linux; automated checks cover sockets, the MCP bridge and windowless rendering
+- [ ] Follow-up: MCP resource subscriptions/change notifications; clients currently re-read state and list resources after commands
 
 ### 6.5 Photo-editor integrations
 

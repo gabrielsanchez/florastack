@@ -21,8 +21,12 @@
 //!   florastack-project stores as data, and the cache's images (lossless TIFF: the defect mask, outputs) and previews
 //!   (JPEG: the filmstrip's, as shot and aligned), which it stores as bytes.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod automation;
 pub mod commands;
 pub mod compute;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod control;
 pub mod engine;
 pub mod error;
 pub mod events;

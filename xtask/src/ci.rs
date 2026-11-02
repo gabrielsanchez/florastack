@@ -46,6 +46,7 @@ pub const STEPS: &[Step] = &[
     Step { name: "fixtures", args: &["xtask", "corpus", "--fixtures"], tool: None },
     Step { name: "gltf-validator", args: &["xtask", "gltf-validator"], tool: None },
     Step { name: TEST_STEP, args: &["test", "--workspace", "--locked"], tool: None },
+    Step { name: "python", args: &["xtask", "python"], tool: None },
     Step {
         name: "gphoto-clippy",
         args: &["clippy", "--workspace", "--all-targets", "--features", "gphoto", "--locked", "--", "-D", "warnings"],

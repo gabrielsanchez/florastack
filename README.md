@@ -6,6 +6,9 @@ FloraStack is a free, open-source focus-stacking application written in pure Rus
 
 Install [rustup](https://rustup.rs). The toolchain is pinned in `rust-toolchain.toml`, and rustup installs it on first use (or run `rustup toolchain install` in this folder). On Windows you also need the Visual Studio C++ build tools ("Desktop development with C++"). The first build downloads LightCraft's image crates from GitHub, where they are pinned to one commit ([`docs/lightcraft.md`](docs/lightcraft.md)), so it needs network access; later builds use Cargo's copy.
 
+Workspace builds and checks also need Python 3.9+ and its development library for the separate Python extension;
+`PYO3_PYTHON` selects the interpreter. Building only the desktop app or CLI with `-p` does not require Python.
+
 ```sh
 cargo build --workspace                                 # build everything
 cargo run -p florastack                                 # the desktop app
@@ -35,6 +38,12 @@ The GPU tests compare every kernel and every method with its CPU reference. With
 ## Desktop app
 
 Build with `cargo build -p florastack --release` and run `target/release/florastack` (`.exe` on Windows), or `cargo run -p florastack --release`. Drop photos or a folder of them on the window (or pass them on the command line) to start a temporary project, align and stack them from the Stack tab ([`docs/stack-tab.md`](docs/stack-tab.md) explains its settings), retouch the result from its frames in the Retouch tab ([`docs/retouching.md`](docs/retouching.md)), and export it from the Export tab, whose settings (format, bit depth, profile, metadata, file name and what goes with the output) are the project's; File > Save as names the project and moves it out of the temporary projects' folder. The Presets menu applies the built-in presets (Insect macro, Product shot, Landscape, Microscope) or a preset file, all of it or some of its settings, and saves the project's settings as one; File > Preferences sets the memory stacking may use, the GPU, the cache folder, autosave, the theme and the language. Ctrl+K (Cmd+K on macOS) opens the command palette, which runs any engine command, and Help > Keyboard shortcuts lists the shortcuts.
+
+The Stack and Export tabs below show an original synthetic flower stack. These images are rendered offscreen
+through the authenticated control channel; [the script](scripts/readme_screenshots.py) regenerates them.
+
+![Stack tab with a synthetic flower focus stack](docs/images/stack.png)
+![Export tab with the stacked output](docs/images/export.png)
 
 On Linux the app runs through XWayland when an X server is available, since file drag-and-drop doesn't work in native Wayland windows yet; set `FLORASTACK_WAYLAND=1` to use Wayland itself. `FLORASTACK_LOG=info` (or `debug`) shows the log on standard error. Temporary projects live in the app's local data folder (on Windows under `%LOCALAPPDATA%`, in the folder named after the app ID in `branding.toml`); after 30 days unused, the app offers to move them to the trash.
 
@@ -91,6 +100,27 @@ without the original project cache with `florastack-cli reproduce result.tif.jso
 Depth-map outputs also support [3D relief, synthetic stereo and rocking GIF exports](docs/3d-stereo.md), with an
 in-app wgpu orbit viewer. The GLB acceptance test uses Khronos' official validator: install Node.js/npm and run
 `cargo xtask gltf-validator` to prepare that test fixture. `cargo xtask ci` fetches it automatically.
+
+## Automation and Python
+
+`florastack-cli mcp` exposes every registry command as a tool over stdio, using the official Rust MCP SDK, with
+project-state and output-thumbnail resources. It can also bridge to `florastack --control`, an authenticated
+loopback JSON channel. Add `--headless` to render the desktop UI offscreen and capture it with `ui.screenshot`.
+The [automation guide](docs/automation.md) covers tokens, bridging, the control protocol and screenshot generation.
+
+The separate PyO3/maturin package in `python/florastack` loads frames, aligns and stacks through the engine and
+returns owned NumPy arrays. Build it from source with maturin; wheels arrive in Phase 7. Workspace checks need
+Python 3.9+ and its development library (`PYO3_PYTHON` selects an interpreter). `cargo xtask python` runs the
+NumPy/pytest acceptance tests in an isolated environment, and `cargo xtask ci` includes them.
+
+```python
+from florastack import Project
+
+with Project() as project:
+    project.load_frames(["near.tif", "middle.tif", "far.tif"])
+    project.align()
+    image = project.stack("pyramid")  # (height, width, channels), linear float32
+```
 
 ## Contributing
 

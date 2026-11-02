@@ -23,6 +23,9 @@ name = "florastack"
 path = "src/main.rs"
 
 [dependencies]
+tempfile.workspace = true
+clap.workspace = true
+png.workspace = true
 florastack-engine.workspace = true
 eframe.workspace = true
 egui.workspace = true
@@ -43,7 +46,7 @@ pollster.workspace = true
 winit.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 egui_kittest.workspace = true
 florastack-testkit.workspace = true
 # Frame files for the smoke test, as the CLI's tests write them.
-png.workspace = true

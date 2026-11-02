@@ -9,10 +9,12 @@
 pub mod actions;
 pub mod app;
 pub mod capture_tab;
+pub mod control;
 pub mod export_tab;
 pub mod files;
 pub mod i18n;
 pub mod loader;
+pub mod offscreen;
 pub mod palette;
 pub mod panels;
 pub mod parallax_ui;

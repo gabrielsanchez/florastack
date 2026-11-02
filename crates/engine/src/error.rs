@@ -200,7 +200,7 @@ impl CommandError {
 }
 
 /// An error as the JSON transports (the CLI's `--json` output, the control channel, MCP) report it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorInfo {
     /// [`CommandError::code`].

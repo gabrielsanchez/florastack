@@ -64,6 +64,7 @@ pub const RULES: Rules = Rules {
         ("florastack-testkit", &[]),
         ("florastack", &[ENGINE]),
         ("florastack-cli", &[ENGINE]),
+        ("florastack-python", &[ENGINE]),
         ("xtask", &[]),
     ],
     // The CPU references that the GPU kernels' agreement tests compare against (AGENTS.md, CPU oracle).

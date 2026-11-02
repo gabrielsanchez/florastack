@@ -73,6 +73,12 @@ pub struct Client {
 }
 
 impl Client {
+    /// Transfer ownership to a protocol host, dropping the terminal reporter's receiver first. Otherwise a long
+    /// MCP session would keep buffering events that no terminal reporter ever drains.
+    pub fn into_engine(self) -> Engine {
+        self.engine
+    }
+
     pub fn new(temporary_projects: std::path::PathBuf, json_progress: bool, device: Device) -> Self {
         let (tx, wake) = sync_channel(1);
         let config = EngineConfig {

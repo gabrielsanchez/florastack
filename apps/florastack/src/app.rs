@@ -128,6 +128,7 @@ pub enum Banner {
 
 /// See the module documentation.
 pub struct FloraStackApp {
+    pub(crate) control: Option<florastack_engine::control::Server>,
     pub shell: Shell,
     pub prefs: Prefs,
     pub selection: Selection,
@@ -203,6 +204,7 @@ impl FloraStackApp {
         let waker_ctx = ctx.clone();
         let waker: florastack_engine::Waker = Arc::new(move || waker_ctx.request_repaint());
         let mut app = FloraStackApp {
+            control: None,
             shell: Shell::new(options.engine, Some(waker)),
             prefs,
             selection: Selection::Nothing,
@@ -595,7 +597,12 @@ impl FloraStackApp {
     }
 
     /// The engine's news, loaded images, autosave, and what follows a project's opening.
-    fn tick(&mut self, ctx: &egui::Context) {
+    pub(crate) fn tick(&mut self, ctx: &egui::Context) {
+        self.update_state(ctx);
+        self.poll_control(ctx);
+    }
+
+    pub(crate) fn update_state(&mut self, ctx: &egui::Context) {
         if self.shell.poll() {
             ctx.request_repaint();
         }
@@ -832,6 +839,24 @@ impl eframe::App for FloraStackApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw_ui(ui);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.prefs.save(storage);
+    }
+}
+
+impl FloraStackApp {
+    pub(crate) fn is_quitting(&self) -> bool {
+        self.quitting
+    }
+
+    pub(crate) fn close_from_control(&mut self) {
+        self.quitting = true;
+    }
+
+    pub(crate) fn draw_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.input(&ctx);
         crate::panels::show(self, ui);
@@ -839,9 +864,5 @@ impl eframe::App for FloraStackApp {
         if let Some(picked) = self.palette.ui(&ctx, registry) {
             self.picked(&ctx, picked);
         }
-    }
-
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.prefs.save(storage);
     }
 }

@@ -14,12 +14,16 @@ default = []
 gphoto = ["florastack-engine/gphoto"]
 
 [dependencies]
+rmcp.workspace = true
+tokio.workspace = true
 florastack-engine.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+tokio = { workspace = true, features = ["process"] }
 assert_cmd.workspace = true
 tempfile.workspace = true
 png.workspace = true

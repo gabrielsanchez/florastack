@@ -58,6 +58,16 @@ impl DeviceArg {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Serve every registry command as an MCP tool over stdio (stdout is protocol-only).
+    #[command(after_help = examples(&["mcp", "mcp --connect 127.0.0.1:49152 --token-file control-token"]))]
+    Mcp {
+        /// Bridge to a desktop control listener, e.g. 127.0.0.1:49152. Otherwise run headless.
+        #[arg(long, requires = "token_file")]
+        connect: Option<String>,
+        /// File containing the desktop's control token.
+        #[arg(long, requires = "connect")]
+        token_file: Option<PathBuf>,
+    },
     /// Align, stack and export files or the image files directly in a folder.
     #[command(after_help = examples(&[
         "stack photos --method pyramid --out result.tif",
