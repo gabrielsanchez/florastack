@@ -119,7 +119,8 @@ The [automation guide](docs/automation.md) covers tokens, bridging, the control 
 The separate PyO3/maturin package in `python/florastack` loads frames, aligns and stacks through the engine and
 returns owned NumPy arrays. Build it from source with maturin; wheels arrive in Phase 7. Workspace checks need
 Python 3.9+ and its development library (`PYO3_PYTHON` selects an interpreter). `cargo xtask python` runs the
-NumPy/pytest acceptance tests in an isolated environment, and `cargo xtask ci` includes them.
+NumPy/pytest acceptance tests in `target/python-tests`, recreating that isolated environment on each run so a
+partial build-cache restore cannot leave a broken venv. `cargo xtask ci` includes them.
 
 ```python
 from florastack import Project
