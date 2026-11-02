@@ -101,6 +101,14 @@ Depth-map outputs also support [3D relief, synthetic stereo and rocking GIF expo
 in-app wgpu orbit viewer. The GLB acceptance test uses Khronos' official validator: install Node.js/npm and run
 `cargo xtask gltf-validator` to prepare that test fixture. `cargo xtask ci` fetches it automatically.
 
+## Photo-editor integrations
+
+Stack developed frames from Lightroom Classic or darktable, or open a selection from
+LightCraft, digiKam and other editors. The [integration guide](docs/integrations.md)
+covers plugin installation, the Open With desktop entry, CLI recipes and LightCraft's
+MCP workflow. Build the installable integrations with `python scripts/package_integrations.py`
+(Python 3.11+); their names come from `branding.toml`.
+
 ## Automation and Python
 
 `florastack-cli mcp` exposes every registry command as a tool over stdio, using the official Rust MCP SDK, with
@@ -111,7 +119,8 @@ The [automation guide](docs/automation.md) covers tokens, bridging, the control 
 The separate PyO3/maturin package in `python/florastack` loads frames, aligns and stacks through the engine and
 returns owned NumPy arrays. Build it from source with maturin; wheels arrive in Phase 7. Workspace checks need
 Python 3.9+ and its development library (`PYO3_PYTHON` selects an interpreter). `cargo xtask python` runs the
-NumPy/pytest acceptance tests in an isolated environment, and `cargo xtask ci` includes them.
+NumPy/pytest acceptance tests in `target/python-tests`, recreating that isolated environment on each run so a
+partial build-cache restore cannot leave a broken venv. `cargo xtask ci` includes them.
 
 ```python
 from florastack import Project
