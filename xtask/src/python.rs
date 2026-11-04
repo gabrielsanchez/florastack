@@ -3,11 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The maturin that builds the extension, for the tests and the release wheels (`cargo xtask dist`).
+pub const MATURIN: &str = "maturin>=1.12,<2";
+
 pub fn run(root: &Path) -> Result<(), String> {
     let environment = root.join("target/python-tests");
     let python = prepare_environment(&environment)?;
     checked(
-        Command::new(&python).args(["-m", "pip", "--disable-pip-version-check", "install", "maturin>=1.12,<2", "pytest>=8,<10", "numpy>=1.23,<3"]),
+        Command::new(&python).args(["-m", "pip", "--disable-pip-version-check", "install", MATURIN, "pytest>=8,<10", "numpy>=1.23,<3"]),
         "install Python test tools",
     )?;
     checked(
@@ -30,7 +33,7 @@ pub fn run(root: &Path) -> Result<(), String> {
 /// Recreate the disposable environment: CI's Rust cache can restore an interpreter while omitting `pyvenv.cfg` or
 /// pip's Python files. An executable alone does not establish a usable venv, and venvs also contain machine-specific
 /// paths. `--clear` removes partial packages before venv bootstraps pip again, without touching the base interpreter.
-fn prepare_environment(environment: &Path) -> Result<PathBuf, String> {
+pub fn prepare_environment(environment: &Path) -> Result<PathBuf, String> {
     let interpreter = std::env::var_os("PYO3_PYTHON").unwrap_or_else(|| if cfg!(windows) { "python".into() } else { "python3".into() });
     checked(
         Command::new(interpreter).args(["-m", "venv", "--clear"]).arg(environment),
@@ -39,7 +42,7 @@ fn prepare_environment(environment: &Path) -> Result<PathBuf, String> {
     Ok(environment.join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" }))
 }
 
-fn checked(command: &mut Command, what: &str) -> Result<(), String> {
+pub fn checked(command: &mut Command, what: &str) -> Result<(), String> {
     let status = command.status().map_err(|e| format!("cannot {what}: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("cannot {what}: {status}")) }
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The hardened runtime's entitlements of the macOS app and its CLI (xtask/src/dist/macos.rs).
+
+  Library validation stays off, so that the app loads a libgphoto2 that its user built or installed in place of the
+  bundled one (FLORASTACK_GPHOTO_LIBRARY), as the LGPL requires: with validation on, a signed app loads only libraries
+  signed by Apple or by its own team. Nothing else is relaxed: no JIT, no unsigned executable memory, no DYLD_*
+  variables.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

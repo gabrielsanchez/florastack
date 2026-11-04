@@ -1,0 +1,16 @@
+@DISPLAY_NAME@ @VERSION@ for Linux
+==============================
+
+Run bin/@GUI_BINARY@ for the desktop app, or bin/@CLI_BINARY@ for the command-line tool.
+
+To install it for yourself, with a menu entry and an icon, copy both folders into ~/.local:
+
+    cp -r bin share ~/.local/
+
+(~/.local/bin must be on your PATH.) To install it for everyone, copy them into /usr/local with sudo.
+
+Camera control loads your distribution's libgphoto2 (libgphoto2.so.6), which this archive doesn't include: install
+the package (libgphoto2-6t64 or libgphoto2-6 on Debian and Ubuntu, libgphoto2 on Fedora). Without it, everything
+else works, and the Capture tab watches a folder instead.
+
+The license texts are in share/doc/@GUI_BINARY@/. More: @REPOSITORY@

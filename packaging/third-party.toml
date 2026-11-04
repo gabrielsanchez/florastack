@@ -1,0 +1,57 @@
+# Third-party files that `cargo xtask dist` downloads, each pinned to one file by its SHA-256 (xtask/src/dist/pins.rs).
+#
+# [library.*] are the camera-control libraries (all LGPL-2.1-or-later), built from these source archives into the
+# macOS app (packaging/macos/build-libgphoto2.sh) and the Flatpak (the manifest that xtask writes). Both packages ship
+# the libraries as separate, replaceable shared libraries, and the release workflow attaches these exact archives to
+# each release, as the LGPL requires of a binary distribution (docs/packaging.md). [tool.*] are packaging tools; none
+# of them ends up in a package except the AppImage runtime, which starts every AppImage.
+#
+# To move a pin, change version, url and sha256 together; `cargo xtask corpus --hash FILE` prints a file's SHA-256.
+
+[library.libtool]
+# libltdl, which libgphoto2 loads its drivers with. Only libltdl is shipped, not the libtool scripts.
+version = "2.6.2"
+url = "https://ftp.gnu.org/gnu/libtool/libtool-2.6.2.tar.xz"
+sha256 = "2ef1067c16c97db930fd740cc9bc3d3ba9a583804ae5ac42cc3e8719e49e191e"
+license_file = "libltdl/COPYING.LIB"
+
+[library.libusb]
+version = "1.0.30"
+url = "https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2"
+sha256 = "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
+license_file = "COPYING"
+
+[library.libgphoto2]
+# 2.5.34 fixes CVE-2026-40333 to -40341 in the PTP driver, the one driver the packages build.
+version = "2.5.34"
+url = "https://github.com/gphoto/libgphoto2/releases/download/v2.5.34/libgphoto2-2.5.34.tar.xz"
+sha256 = "51993f5d9bfb6b4e5925cbbe5883085791bff6f81bcacb8ffe1b783ce76d586a"
+license_file = "COPYING"
+
+[tool.wix]
+# WiX Toolset 3, which cargo-wix drives (candle and light), for the .msi.
+version = "3.14.1"
+url = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"
+sha256 = "6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31"
+
+[tool.appimagetool-x86_64]
+version = "1.9.1"
+url = "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+sha256 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+
+[tool.appimagetool-aarch64]
+version = "1.9.1"
+url = "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage"
+sha256 = "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"
+
+# The runtime at the start of every AppImage. appimagetool would download the newest one at build time; a pinned
+# file keeps releases reproducible.
+[tool.appimage-runtime-x86_64]
+version = "20251108"
+url = "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
+sha256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+
+[tool.appimage-runtime-aarch64]
+version = "20251108"
+url = "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-aarch64"
+sha256 = "00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444"

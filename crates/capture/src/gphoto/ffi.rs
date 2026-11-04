@@ -73,20 +73,24 @@ fn check(code: c_int) -> Result<(), Error> {
 
 impl Api {
     fn load() -> Result<Arc<Self>, Error> {
-        let names: Vec<std::ffi::OsString> = if let Some(path) = std::env::var_os("FLORASTACK_GPHOTO_LIBRARY") {
+        let names: Vec<std::ffi::OsString> = if let Some(path) = std::env::var_os(super::LIBRARY_VARIABLE) {
             if !std::path::Path::new(&path).is_absolute() {
                 return Err(Error::Invalid("FLORASTACK_GPHOTO_LIBRARY must be an absolute shared-library path".into()));
             }
             vec![path]
         } else if cfg!(target_os = "macos") {
-            vec!["/opt/homebrew/lib/libgphoto2.6.dylib".into(), "/usr/local/lib/libgphoto2.6.dylib".into(), "libgphoto2.6.dylib".into()]
+            // The app bundle's own copy first, then Homebrew's (the CLI archive and source builds carry none).
+            let bundled = super::Bundled::current().map(|bundled| bundled.library.into_os_string());
+            let installed = ["/opt/homebrew/lib/libgphoto2.6.dylib", "/usr/local/lib/libgphoto2.6.dylib", "libgphoto2.6.dylib"];
+            bundled.into_iter().chain(installed.into_iter().map(Into::into)).collect()
         } else {
             vec!["libgphoto2.so.6".into()]
         };
         let mut failures = Vec::new();
         let mut last_error = None;
         for name in names {
-            // SAFETY: loads an explicitly chosen system/user library. Its constructors obey the platform loader contract.
+            // SAFETY: loads the app bundle's, the system's or an explicitly chosen user library. Its constructors obey the
+            // platform loader contract.
             // No symbols are called until every signature in Api is resolved; the user may replace this LGPL library.
             match unsafe { Library::new(&name) } {
                 Ok(library) => return Self::from_library(library),

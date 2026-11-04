@@ -1,0 +1,24 @@
+@DISPLAY_NAME@ @VERSION@: camera control and its libraries
+==========================================================
+
+@DISPLAY_NAME@ controls cameras through libgphoto2 @LIBGPHOTO2_VERSION@, which this package includes, with
+libusb @LIBUSB_VERSION@ and libltdl from GNU Libtool @LIBTOOL_VERSION@. They are free software, licensed under the
+GNU Lesser General Public License, version 2.1 or later; their license texts are next to this file:
+@LICENSE_FILES@.
+
+These libraries are separate shared libraries, which @DISPLAY_NAME@ loads when it starts camera control; it is not
+linked with them. You may replace them with your own build of the same interfaces (libgphoto2's ABI 6):
+
+  - set FLORASTACK_GPHOTO_LIBRARY to the absolute path of your libgphoto2 shared library before you start
+    @DISPLAY_NAME@, and, if its drivers aren't in the folders it was built for, CAMLIBS and IOLIBS to its camera
+    and port driver folders; or
+  - @REPLACE@.
+
+Source code: the source archives these libraries were built from are attached to the @DISPLAY_NAME@ @VERSION@
+release, next to this package (@REPOSITORY@/releases), and the steps that built them are in @DISPLAY_NAME@'s
+repository: packaging/macos/build-libgphoto2.sh for macOS, and the Flatpak manifest that xtask/src/dist/linux.rs
+writes. You may also ask for the source by opening an issue at @REPOSITORY@/issues.
+
+@DISPLAY_NAME@ itself is licensed under the MIT license or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE, NOTICE); you may modify it, and reverse-engineer it to debug your changes to these
+libraries.

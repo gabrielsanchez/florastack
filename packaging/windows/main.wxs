@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer (WiX Toolset 3), built by `cargo xtask dist` through cargo-wix (xtask/src/dist/windows.rs).
+
+  Nothing of the product's identity is written here: xtask passes it from branding.toml, with the input files, as
+  preprocessor variables: DisplayName, AppId, GuiBinary, CliBinary, ProductVersion (numeric), Repository, BinDir (the
+  binaries and license files), Summary, IconFile and LicenseRtf.
+
+  The UpgradeCode identifies the product across versions, so that each release replaces the one before: never change
+  it, nor the two fixed component GUIDs.
+-->
+<?if $(sys.BUILDARCH) != x64 and $(sys.BUILDARCH) != arm64 ?>
+<?error The installer is for 64-bit Windows: build it for x64 or arm64 ?>
+<?endif ?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="$(var.DisplayName)"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="$(var.DisplayName) contributors"
+           UpgradeCode="D5C82B4C-F17A-4362-96BD-21B9CAFF42BD">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="$(var.DisplayName) $(var.ProductVersion)" Comments="$(var.Summary)" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of $(var.DisplayName) is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="ProductIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="$(var.Repository)" />
+    <Property Id="ARPHELPLINK" Value="$(var.Repository)/issues" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="APPLICATIONFOLDER" Name="$(var.DisplayName)" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+    </Directory>
+
+    <ComponentGroup Id="Files" Directory="APPLICATIONFOLDER">
+      <Component Id="Gui" Guid="*">
+        <File Id="Gui" Source="$(var.BinDir)\$(var.GuiBinary).exe" KeyPath="yes" />
+      </Component>
+      <Component Id="Cli" Guid="*">
+        <File Id="Cli" Source="$(var.BinDir)\$(var.CliBinary).exe" KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseMit" Guid="*">
+        <File Id="LicenseMit" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseApache" Guid="*">
+        <File Id="LicenseApache" Source="$(var.BinDir)\LICENSE-APACHE" KeyPath="yes" />
+      </Component>
+      <Component Id="Notice" Guid="*">
+        <File Id="Notice" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- A shortcut's component needs a per-user registry value as its key path. -->
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="695A58FB-BC40-4CC0-B614-3EC783225B6A">
+      <Shortcut Id="GuiShortcut" Name="$(var.DisplayName)" Description="$(var.Summary)"
+                Target="[APPLICATIONFOLDER]$(var.GuiBinary).exe" WorkingDirectory="APPLICATIONFOLDER" Icon="ProductIcon" />
+      <RegistryValue Root="HKCU" Key="Software\$(var.AppId)" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- The install folder at the end of the system PATH, so that the command-line tool runs from any terminal. -->
+    <Component Id="PathEntry" Directory="APPLICATIONFOLDER" Guid="B72D953D-0753-4014-947F-CD330572ED5C">
+      <Environment Id="PathEntry" Name="PATH" Value="[APPLICATIONFOLDER]" Action="set" Part="last" System="yes" Permanent="no" />
+      <RegistryValue Root="HKLM" Key="Software\$(var.AppId)" Name="PathEntry" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Application" Title="$(var.DisplayName)" Description="The desktop app and the command-line tool."
+             Level="1" Absent="disallow" AllowAdvertise="no" ConfigurableDirectory="APPLICATIONFOLDER" Display="expand">
+      <ComponentGroupRef Id="Files" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <Feature Id="Path" Title="Add to PATH" Level="1" AllowAdvertise="no"
+               Description="Add the install folder to the system PATH, so that $(var.CliBinary) runs from any terminal.">
+        <ComponentRef Id="PathEntry" />
+      </Feature>
+    </Feature>
+
+    <UIRef Id="WixUI_FeatureTree" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Product>
+</Wix>

@@ -15,7 +15,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 florastack-engine.workspace = true
-pyo3.workspace = true
+# The stable ABI from Python 3.9 (abi3): one wheel per platform for every Python since. maturin generates the
+# Windows import library itself, so that the arm64 wheel builds on x64 without an arm64 Python.
+pyo3 = { workspace = true, features = ["abi3-py39"] }
 numpy.workspace = true
 tempfile.workspace = true
 

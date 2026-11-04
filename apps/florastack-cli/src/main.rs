@@ -14,6 +14,11 @@ use args::{AlignTerm, Cli, Command, Depth, Method, ProjectCommand, RunArgs, Stac
 use client::{Client, Failure, path_text, print_json, report_error};
 
 fn main() -> ExitCode {
+    // Inside the macOS app, before any thread starts: may start again with the bundled camera drivers' folders.
+    #[cfg(all(feature = "gphoto", target_os = "macos"))]
+    if let Err(e) = florastack_engine::capture::gphoto::prepare_bundled_drivers() {
+        eprintln!("{}: camera control can't find its drivers: {e}", branding::DISPLAY_NAME);
+    }
     let arguments = args::normalize_drop(std::env::args_os().collect());
     let json_progress = arguments.iter().take_while(|arg| *arg != "--").any(|arg| arg == "--json-progress");
     let cli = match Cli::try_parse_from(arguments) {
