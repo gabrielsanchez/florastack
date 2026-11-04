@@ -2,7 +2,7 @@
 # fork) builds every platform's packages with `cargo xtask dist`, which names them from branding.toml, refuses an app
 # ID that still contains the OWNER placeholder, and checks the tag against the workspace version. One job then checks
 # every run's SHA256SUMS.txt, writes the release's, and creates a draft GitHub release with all the files, to be
-# reviewed and published by hand. docs/packaging.md explains the process and the signing secrets.
+# reviewed and published by hand. book/src/dev/packaging.md explains the process and the signing secrets.
 #
 # The toolchain comes from rust-toolchain.toml. Third-party actions are pinned to a full commit SHA, with the
 # release in a comment. Nothing is cached: release builds start clean.

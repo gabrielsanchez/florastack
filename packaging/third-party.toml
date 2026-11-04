@@ -3,7 +3,7 @@
 # [library.*] are the camera-control libraries (all LGPL-2.1-or-later), built from these source archives into the
 # macOS app (packaging/macos/build-libgphoto2.sh) and the Flatpak (the manifest that xtask writes). Both packages ship
 # the libraries as separate, replaceable shared libraries, and the release workflow attaches these exact archives to
-# each release, as the LGPL requires of a binary distribution (docs/packaging.md). [tool.*] are packaging tools; none
+# each release, as the LGPL requires of a binary distribution (book/src/dev/packaging.md). [tool.*] are packaging tools; none
 # of them ends up in a package except the AppImage runtime, which starts every AppImage.
 #
 # To move a pin, change version, url and sha256 together; `cargo xtask corpus --hash FILE` prints a file's SHA-256.

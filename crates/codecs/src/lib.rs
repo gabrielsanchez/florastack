@@ -13,7 +13,7 @@
 //!   outputs are always written upright.
 //!
 //! The work is done by LightCraft's low-level crates (lightcraft-tiff, -codecs, -meta, -color and -raw, pinned in
-//! the workspace manifest; see `docs/lightcraft.md`) and by the image-rs and exr crates, behind this crate's own
+//! the workspace manifest; see `book/src/dev/lightcraft.md`) and by the image-rs and exr crates, behind this crate's own
 //! types and traits ([`ImageDecoder`], [`ImageEncoder`], [`ColorEngine`]): none of their types is part of its API,
 //! so any of them can be replaced without touching the rest of FloraStack. `ATTRIBUTION.md` says which crate does
 //! what.

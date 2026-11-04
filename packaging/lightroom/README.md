@@ -23,6 +23,6 @@ Cancellation suppresses subsequent import. Failed runs retain diagnostics and
 never import a partial result. A successful TIFF whose catalog import fails can
 be imported manually.
 
-See [the integration guide](../../docs/integrations.md) for platform notes,
+See [the integration guide](../../book/src/user/integrations.md) for platform notes,
 metadata behavior and the manual acceptance checklist. Lightroom Classic is
 required; the cloud Lightroom application does not load Lua export plugins.

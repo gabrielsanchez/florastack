@@ -30,7 +30,7 @@ pub trait RawDecoder: Send + Sync {
     fn decode(&self, bytes: &[u8], max_pixels: u64) -> Result<RawFrame, RawError>;
 }
 
-/// The decoder built on LightCraft's `lightcraft-raw` (pinned in the workspace manifest; `docs/lightcraft.md`).
+/// The decoder built on LightCraft's `lightcraft-raw` (pinned in the workspace manifest; `book/src/dev/lightcraft.md`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LightCraftRaw;
 

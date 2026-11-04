@@ -1,5 +1,6 @@
 # FloraStack CI: formatting, Clippy, the crate layering check, the test fixtures, the tests and the quality gate on
-# Linux, macOS and Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit). `cargo xtask ci` runs the same
+# Linux, macOS and Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit) and the book (its build
+# and every link in it and in the repository's Markdown, with mdBook and lychee). `cargo xtask ci` runs the same
 # cargo commands locally; a test in xtask/src/ci.rs keeps its list and this file's `run:` lines the same, so keep
 # every cargo command on a single `run:` line.
 #
@@ -145,3 +146,32 @@ jobs:
       - name: Security advisories
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
         run: cargo audit
+
+  docs:
+    name: book and links
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+
+      # mdBook's and lychee's release builds for Linux, at the versions `cargo xtask book` names, each checked against
+      # its SHA-256 before it is installed.
+      - name: Install mdBook and lychee
+        run: |
+          get() { curl --fail --location --silent --show-error --user-agent florastack-ci --output "$RUNNER_TEMP/$1" "$2"; echo "$3  $RUNNER_TEMP/$1" | sha256sum --check; }
+          get mdbook.tar.gz https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+          get lychee.tar.gz https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+          tar -xzf "$RUNNER_TEMP/mdbook.tar.gz" -C "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/lychee.tar.gz" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/mdbook" "$RUNNER_TEMP/lychee-x86_64-unknown-linux-gnu/lychee" "$HOME/.cargo/bin/"
+
+      # Builds the book into target/book and checks every link in it and in the repository's Markdown: pages,
+      # headings and the repository's own files, offline. The engine-command reference is checked against the
+      # registry by the tests (crates/engine/tests/reference.rs).
+      - name: Book
+        run: cargo xtask book

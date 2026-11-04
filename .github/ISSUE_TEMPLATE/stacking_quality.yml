@@ -1,0 +1,65 @@
+name: Stacking result looks wrong
+description: The stack finishes, but the result has halos, smears, banding, dust trails, a color shift or another artifact.
+labels: ["quality"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Stacking quality is checked against synthetic stacks with exact ground truth and against real ones; yours can show what they miss. The [troubleshooting chapter](https://github.com/gabrielsanchez/florastack/blob/main/book/src/user/troubleshooting.md) lists common artifacts with their causes and fixes: please say which you tried.
+  - type: textarea
+    id: what
+    attributes:
+      label: What looks wrong
+      description: Describe the artifact and where it is. Attach 100% crops (Ctrl+1) of the result and, if you can, of the sharpest frame at that place.
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Method and settings
+      description: The method, the preset if any, and the settings you changed (an output's tooltip in the outputs list gives its parameters). Say what you tried from the troubleshooting chapter.
+      placeholder: Depth map, radius 2, smoothing 8, automatic threshold; tried Pyramid, which...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: FloraStack version and operating system
+      placeholder: 0.1.0 on Windows 11
+    validations:
+      required: true
+  - type: input
+    id: image-size
+    attributes:
+      label: Image size
+      placeholder: 5184 x 3888 (20 MP)
+    validations:
+      required: true
+  - type: input
+    id: frames
+    attributes:
+      label: Frame count
+      placeholder: "35"
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera model, lens and file format
+      placeholder: Canon EOS R5, MP-E 65mm at 3x, CR3
+    validations:
+      required: true
+  - type: input
+    id: shooting
+    attributes:
+      label: How it was shot
+      description: Focus bracketing, rail or by hand; tripod or handheld; aperture, step and lighting, if you know them.
+      placeholder: In-camera focus bracketing, step 3, f/5.6, flash with diffuser, tripod
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample stack
+      description: |
+        A link to the frames, on any file host, with the license you share them under (CC BY 4.0, for example, lets them become a test case). Whatever you share here is public. If you can't share them, say why.
+    validations:
+      required: true

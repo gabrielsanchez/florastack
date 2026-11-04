@@ -1,0 +1,29 @@
+{
+  "stack": "mosquito-jpg",
+  "regions": [
+    {
+      "region": 1,
+      "x": 1840,
+      "y": 2080,
+      "side": 320,
+      "frame": 5,
+      "frames": 8
+    },
+    {
+      "region": 2,
+      "x": 2000,
+      "y": 2400,
+      "side": 320,
+      "frame": 3,
+      "frames": 8
+    },
+    {
+      "region": 3,
+      "x": 2720,
+      "y": 1360,
+      "side": 320,
+      "frame": 3,
+      "frames": 8
+    }
+  ]
+}

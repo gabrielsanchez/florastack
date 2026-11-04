@@ -1,0 +1,113 @@
+name: Bug report
+description: Something doesn't work, crashes or shows an error.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. What happens often depends on the photos and the system, so the more of the details below you give, the faster it can be reproduced. For a stack that stacks but looks wrong (halos, smears, banding), use the "Stacking result looks wrong" form instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Include any error message as it appeared.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Drop the folder of frames on the window
+        2. Align, then Stack frames with the depth-map method
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: FloraStack version
+      description: Help > About, `florastack-cli --version`, or the commit if you built it.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options:
+        - Windows installer (.msi)
+        - Windows portable (.zip)
+        - macOS (.dmg)
+        - Linux AppImage
+        - Linux .deb
+        - Linux .rpm
+        - Flatpak
+        - Linux tarball
+        - Command-line tool archive
+        - Python wheel
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: front-end
+    attributes:
+      label: Where it happened
+      multiple: true
+      options:
+        - Desktop app
+        - Command-line tool
+        - Python package
+        - MCP or the control channel
+        - Photo-editor integration
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2, macOS 15.5, Ubuntu 24.04...
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: The graphics card and driver, or "CPU" if FloraStack stacks on the CPU (the status line, or `compute.info`, says which).
+      placeholder: NVIDIA RTX 3060 Laptop, driver 555.97
+  - type: input
+    id: image-size
+    attributes:
+      label: Image size
+      description: The frames' width and height in pixels, or megapixels.
+      placeholder: 5184 x 3888 (20 MP)
+    validations:
+      required: true
+  - type: input
+    id: frames
+    attributes:
+      label: Frame count
+      placeholder: "35"
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera model, lens and file format
+      placeholder: OM System OM-1 Mark II, M.Zuiko 60mm f/2.8 Macro, ORF (or JPEG, DNG, 16-bit TIFF...)
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample stack
+      description: |
+        A link to the frames (or a few of them) that show the problem, on any file host, with the license you share them under. Whatever you share here is public. If you can't share any, say why, and describe the subject and how it was shot.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Run with the environment variable `FLORASTACK_LOG=debug` set and paste what it prints on standard error, or the command-line tool's output with `--json-progress`.
+      render: text

@@ -14,7 +14,7 @@ all-features = true
 ignore = [
     # quick-xml 0.38, through lightcraft-meta at the pinned LightCraft commit. Neither advisory reaches it: it reads
     # attributes with `with_checks(false)` only and never uses `NsReader` (checked at the pin). Fixed in quick-xml
-    # 0.41: drop both entries when the pin moves past storytold/lightcraft#1464 (docs/lightcraft.md).
+    # 0.41: drop both entries when the pin moves past storytold/lightcraft#1464 (book/src/dev/lightcraft.md).
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 via lightcraft-meta, which never checks for duplicate attributes (with_checks(false)); fixed upstream in lightcraft#1464" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 via lightcraft-meta, which never uses NsReader; fixed upstream in lightcraft#1464" },
     # zbus 5's companion crates, through AccessKit's Linux backend (accesskit_unix and atspi, under eframe's
@@ -71,7 +71,7 @@ multiple-versions = "warn"
 [sources]
 # Crates come from crates.io, and from the git sources listed here, each added in the same change that adds the
 # dependency. LightCraft's crates aren't published, so they come from its repository, pinned to one commit
-# (docs/lightcraft.md); a git dependency must name a `rev`, never a branch or a tag.
+# (book/src/dev/lightcraft.md); a git dependency must name a `rev`, never a branch or a tag.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

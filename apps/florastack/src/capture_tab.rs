@@ -67,7 +67,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     ui.label(tr("capture-workflow"));
     #[cfg(target_os = "windows")]
     ui.label(tr("capture-windows"));
-    ui.hyperlink_to(tr("capture-help"), "https://github.com/gabrielsanchez/florastack/blob/main/docs/capture.md");
+    ui.hyperlink_to(tr("capture-help"), "https://github.com/gabrielsanchez/florastack/blob/main/book/src/user/capture.md");
     text(ui, "capture-input", &mut app.capture.input);
     text(ui, "capture-output", &mut app.capture.output);
     text(ui, "capture-preset", &mut app.capture.preset);

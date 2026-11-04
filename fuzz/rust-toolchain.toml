@@ -1,0 +1,5 @@
+# cargo-fuzz needs a nightly toolchain (for -Zsanitizer and libFuzzer's instrumentation); this one is pinned so that
+# fuzzing runs are reproducible. Move it with the workspace's own pin from time to time.
+[toolchain]
+channel = "nightly-2026-11-01"
+profile = "minimal"

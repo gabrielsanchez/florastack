@@ -2,7 +2,7 @@
 
 `cargo xtask dist` builds the release packages of one platform, and `.github/workflows/release.yml` runs it for
 every platform when a version tag is pushed, then drafts a GitHub release with everything it made. The packages
-take the product's names from [`branding.toml`](../branding.toml): the display name, the two binary names and the
+take the product's names from [`branding.toml`](https://github.com/gabrielsanchez/florastack/blob/main/branding.toml): the display name, the two binary names and the
 app ID. Release packaging refuses an app ID that still contains the `OWNER` placeholder.
 
 ## What a release contains
@@ -57,7 +57,7 @@ empty folder instead). `cargo xtask dist --help` lists the targets and formats. 
 
 The apps are built with the `dist` profile (the release profile, with symbols stripped) and `--locked`.
 Downloads go into `target/dist/downloads/`, checked against the SHA-256 in
-[`packaging/third-party.toml`](../packaging/third-party.toml), where every downloaded source and tool is pinned.
+[`packaging/third-party.toml`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/third-party.toml), where every downloaded source and tool is pinned.
 
 To check the packages: install the .msi (`msiexec /i <file>.msi`) or unpack the .zip on Windows; open the .dmg and
 drag the app to Applications on macOS; on Linux, `sudo apt install ./<file>.deb`, `sudo dnf install ./<file>.rpm`,
@@ -98,20 +98,20 @@ the certificate and the key. Locally, `cargo xtask dist` signs when `APPLE_SIGNI
 your keychain, and notarizes when `APPLE_NOTARY_KEY_PATH` (the .p8 file), `APPLE_NOTARY_KEY_ID` and
 `APPLE_NOTARY_ISSUER` are set too.
 
-The app's entitlements ([`packaging/macos/entitlements.plist`](../packaging/macos/entitlements.plist)) turn off
+The app's entitlements ([`packaging/macos/entitlements.plist`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/macos/entitlements.plist)) turn off
 library validation and nothing else, so that the signed app can load a libgphoto2 that its user built (below).
 
 Windows packages and the Linux packages aren't signed yet.
 
 ## Camera control and libgphoto2
 
-Built-in camera control uses [libgphoto2](https://www.gphoto.org/proj/libgphoto2/), which is licensed under the
+Built-in camera control uses [libgphoto2](https://gphoto.sourceforge.io/proj/libgphoto2/), which is licensed under the
 LGPL-2.1. FloraStack never links it: florastack-capture loads it at run time, so any copy with the same interface
 (ABI version 6) can take the place of the one a package uses. The Linux and macOS builds enable the `gphoto`
 feature; Windows builds never do, and never include the library.
 
 - **The macOS app** includes libgphoto2 2.5.34, with libusb and libltdl (GNU Libtool) that it needs, both also
-  LGPL-2.1. [`packaging/macos/build-libgphoto2.sh`](../packaging/macos/build-libgphoto2.sh) builds them from the
+  LGPL-2.1. [`packaging/macos/build-libgphoto2.sh`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/macos/build-libgphoto2.sh) builds them from the
   pinned source archives for both architectures, with libgphoto2's PTP driver, which serves the cameras whose focus
   FloraStack drives. They are in `FloraStack.app/Contents/Frameworks/`, with the drivers in
   `Contents/PlugIns/libgphoto2/`; the app sets `CAMLIBS` and `IOLIBS` to those folders when it starts.
@@ -144,12 +144,12 @@ The LGPL asks three things of a package that includes these libraries, and the p
 
 ## The pieces
 
-- [`xtask/src/dist/`](../xtask/src/dist/): `mod.rs` (targets, formats, the build, the checks), `windows.rs`,
+- [`xtask/src/dist/`](https://github.com/gabrielsanchez/florastack/tree/main/xtask/src/dist/): `mod.rs` (targets, formats, the build, the checks), `windows.rs`,
   `macos.rs`, `linux.rs`, `pins.rs` (the pinned downloads) and `icon.rs`.
-- [`packaging/windows/main.wxs`](../packaging/windows/main.wxs): the installer, whose names xtask passes as WiX
+- [`packaging/windows/main.wxs`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/windows/main.wxs): the installer, whose names xtask passes as WiX
   variables. Its `UpgradeCode` must never change.
-- [`packaging/linux/`](../packaging/linux/): the desktop entry, the AppStream metadata and the tarball's README.
-- [`packaging/macos/`](../packaging/macos/): the camera libraries' build and the entitlements.
-- [`packaging/gphoto/LIBGPHOTO2.txt.in`](../packaging/gphoto/LIBGPHOTO2.txt.in): the camera libraries' notice.
+- [`packaging/linux/`](https://github.com/gabrielsanchez/florastack/tree/main/packaging/linux/): the desktop entry, the AppStream metadata and the tarball's README.
+- [`packaging/macos/`](https://github.com/gabrielsanchez/florastack/tree/main/packaging/macos/): the camera libraries' build and the entitlements.
+- [`packaging/gphoto/LIBGPHOTO2.txt.in`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/gphoto/LIBGPHOTO2.txt.in): the camera libraries' notice.
 - The icon is a placeholder drawn by `xtask/src/dist/icon.rs` (SVG for Linux, PNG, ICO and ICNS), until a designed
   one replaces it.

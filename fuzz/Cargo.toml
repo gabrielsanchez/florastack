@@ -1,0 +1,47 @@
+# Fuzz targets for FloraStack's file readers, for cargo-fuzz (https://github.com/rust-fuzz/cargo-fuzz). Not a member of
+# the FloraStack workspace: fuzzing needs a nightly toolchain (rust-toolchain.toml here) and libFuzzer, which
+# libfuzzer-sys compiles from C++, and none of it ships or reaches the workspace's builds and dependency policy.
+# SECURITY.md and book/src/dev/fuzzing.md say how to run them.
+
+[package]
+name = "florastack-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+florastack-codecs = { path = "../crates/codecs" }
+florastack-raw = { path = "../crates/raw" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+# Symbols for readable stack traces of the crashes found.
+debug = 1
+
+[[bin]]
+name = "codecs_probe"
+path = "fuzz_targets/codecs_probe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "codecs_read"
+path = "fuzz_targets/codecs_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_decode"
+path = "fuzz_targets/raw_decode.rs"
+test = false
+doc = false
+bench = false

@@ -24,7 +24,7 @@ Paths below use the current names in `branding.toml`.
 
 ### Lightroom Classic (Windows and macOS)
 
-Follow the [plugin installation instructions](../packaging/lightroom/README.md).
+Follow the [plugin installation instructions](https://github.com/gabrielsanchez/florastack/blob/main/packaging/lightroom/README.md).
 In the Export dialog choose **Export To > FloraStack**, enter the absolute path to
 `florastack-cli.exe` on Windows or `florastack-cli` on macOS, and choose a preset and
 method. GUI applications may have a different `PATH` from your terminal, so use an
@@ -198,56 +198,6 @@ tools and command help on the installed release before automating it. Our own
 [MCP server](automation.md) is also available for clients that prefer engine
 commands to launching `stack`.
 
-## Validation and manual acceptance checklist
 
-With Lua and [Luacheck](https://github.com/lunarmodules/luacheck) installed:
-
-```sh
-python scripts/package_integrations.py
-luacheck packaging
-lua packaging/tests/integrations.lua target/integrations
-desktop-file-validate target/integrations/io.github.gabrielsanchez.FloraStack.desktop
-```
-
-The Lua checks mock each editor's documented API. They cover argument quoting,
-collision handling, frame order, TIFF settings, successful import, failed renders,
-incomplete exports, cancellation, CLI failures and missing output. They cannot
-validate real host rendering, catalog metadata or platform-specific process APIs.
-Run the following before declaring a host/platform tested; record editor version,
-OS, CLI version, preset, frame count and result for each run:
-
-- [ ] **Lightroom, Windows and macOS:** install the generated plugin, select three
-  developed RAW frames in focus order, save/reload the export preset, and export.
-  Check full-size 16-bit TIFF inputs, baked edits and one correctly rendered result.
-  Verify catalog import below the first original and a result beside it on disk.
-- [ ] **darktable, Linux/macOS/Windows Lua builds:** install via `luarc`, set
-  preferences, select TIFF with embedded metadata, and export at least three RAW
-  frames. Check 16-bit/full-size inputs even after selecting 8-bit/reduced export
-  settings, deterministic filename order, import, grouping and the output folder.
-- [ ] **Metadata/color:** give the first frame a caption, keyword, copyright and
-  capture time; verify embedded EXIF/IPTC/XMP, ICC profile, software and frame count
-  after import. Check orientation, colors and pixel dimensions. Confirm private
-  metadata follows the chosen editor export policy.
-- [ ] **Presets/methods:** try a built-in and a custom TOML preset, and pyramid,
-  depth map and average. Check the selected alignment/stack settings in the saved
-  project and distinguish changes from the editor's baked development.
-- [ ] **Paths/collisions:** use spaces, Unicode, apostrophes and `&` in paths;
-  repeat the export and verify earlier output/sidecar/input folders survive.
-  Try identically named originals in different directories. On Windows verify
-  `%`, `!`, `"` and `^` fail with a readable error before process launch.
-- [ ] **Failure/cancellation:** test one photo, an unavailable original, a missing
-  executable, invalid preset/method, read-only destination and full disk. Cancel
-  during rendering and let any running child finish. Verify there is no partial
-  import and originals survive. Inspect `cli.log` after a processing failure, and
-  manually import a successful result after deliberately preventing catalog import.
-- [ ] **Reopen/reproduce:** use the project path in `result.json` to reopen it with
-  retained inputs, and reproduce the TIFF from its JSON sidecar to a fresh folder.
-- [ ] **digiKam/generic:** install/validate the Linux desktop entry, select multiple
-  files, and verify one app project contains every selected frame. Run the CLI
-  recipe on exported TIFFs, import the result and check its metadata.
-- [ ] **LightCraft:** run the TIFF export/CLI/import recipe; then use its installed
-  MCP helpers for the same selection and compare the outputs and metadata. Check
-  the external-editor path separately on the installed release.
-
-Implementation validation is recorded in the roadmap. These host checks remain
-manual; no editor has been claimed tested merely because the mocked checks pass.
+The integrations' automated checks, and what to check by hand in each editor before calling it tested, are in
+[Manual release checks](../dev/manual-checks.md#photo-editor-integrations).

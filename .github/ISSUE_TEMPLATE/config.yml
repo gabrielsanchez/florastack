@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/gabrielsanchez/florastack/security/policy
+    about: Report it privately, as the security policy says, not in a public issue.
+  - name: User guide and troubleshooting
+    url: https://github.com/gabrielsanchez/florastack/blob/main/book/src/user/troubleshooting.md
+    about: Halos, edge streaks, dust trails, washed-out results, color shifts, frames out of order and unsupported RAW files, with their causes and fixes.
