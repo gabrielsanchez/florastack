@@ -376,7 +376,7 @@ impl Dist {
 
     /// A template from `packaging/`, filled with the identity and `extra` (see `fill`).
     pub fn template(&self, path: &str, extra: &[(&str, &str)]) -> Result<String, String> {
-        let text = read_text(&self.root.join("packaging").join(path))?;
+        let text = read_template(&self.root.join("packaging").join(path))?;
         let b = &self.branding;
         let mut values = vec![
             ("DISPLAY_NAME", b.display_name.as_str()),
@@ -671,6 +671,12 @@ pub fn output(command: &mut Command, what: &str) -> Result<String, String> {
 
 pub fn read_text(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+}
+
+/// A template from `packaging/`, with Unix line endings whatever the checkout's: Git for Windows writes text files
+/// with CRLF (`core.autocrlf`), and what the templates make goes into Linux and macOS packages.
+pub fn read_template(path: &Path) -> Result<String, String> {
+    Ok(read_text(path)?.replace("\r\n", "\n"))
 }
 
 pub fn write(path: &Path, contents: &[u8]) -> Result<(), String> {

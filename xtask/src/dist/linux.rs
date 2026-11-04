@@ -88,7 +88,7 @@ fn metainfo(dist: &Dist) -> Result<String, String> {
     ];
     let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let path = dist.root.join("packaging/linux/metainfo.xml.in");
-    super::fill(&super::read_text(&path)?, &values).map_err(|e| format!("{}: {e}", path.display()))
+    super::fill(&super::read_template(&path)?, &values).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The permissions a package records: folders and programs 0755, other files 0644.
@@ -453,21 +453,47 @@ mod tests {
         assert!(!manifest["finish-args"].as_array().unwrap().iter().any(|a| a == "--share=network"), "no network");
     }
 
+    const NOTICE_VALUES: [(&str, &str); 5] =
+        [("LIBGPHOTO2_VERSION", "2"), ("LIBUSB_VERSION", "1"), ("LIBTOOL_VERSION", "3"), ("LICENSE_FILES", "COPYING.x"), ("REPLACE", "replace them")];
+
     #[test]
     fn every_template_is_filled() {
         let dist = dist("1.0.0");
         let readme = dist.template("linux/tarball-README.txt.in", &[]).unwrap();
         assert!(readme.contains(&format!("bin/{}", dist.branding.binaries.gui)));
-        let extra = [
-            ("LIBGPHOTO2_VERSION", "2"),
-            ("LIBUSB_VERSION", "1"),
-            ("LIBTOOL_VERSION", "3"),
-            ("LICENSE_FILES", "COPYING.x"),
-            ("REPLACE", "replace them"),
-        ];
-        let notice = dist.template("gphoto/LIBGPHOTO2.txt.in", &extra).unwrap();
+        let notice = dist.template("gphoto/LIBGPHOTO2.txt.in", &NOTICE_VALUES).unwrap();
         assert!(notice.contains("FLORASTACK_GPHOTO_LIBRARY") && notice.contains("https://example.org/r/releases"));
-        assert!(dist.template("gphoto/LIBGPHOTO2.txt.in", &extra[..4]).unwrap_err().contains("@REPLACE@"));
+        assert!(dist.template("gphoto/LIBGPHOTO2.txt.in", &NOTICE_VALUES[..4]).unwrap_err().contains("@REPLACE@"));
+    }
+
+    /// Git for Windows checks the templates out with CRLF line endings (`core.autocrlf`, as on CI's Windows runner);
+    /// the files made from them have Unix line endings all the same.
+    #[test]
+    fn templates_checked_out_with_crlf_make_the_same_files() {
+        fn made(dist: &Dist) -> Vec<String> {
+            vec![
+                desktop_entry(dist).unwrap(),
+                metainfo(dist).unwrap(),
+                dist.template("linux/tarball-README.txt.in", &[]).unwrap(),
+                dist.template("gphoto/LIBGPHOTO2.txt.in", &NOTICE_VALUES).unwrap(),
+            ]
+        }
+        let mut dist = dist("1.0.0");
+        let expected = made(&dist);
+        let root = std::env::temp_dir().join(format!("florastack-dist-crlf-{}", std::process::id()));
+        for name in ["linux/app.desktop.in", "linux/metainfo.xml.in", "linux/tarball-README.txt.in", "gphoto/LIBGPHOTO2.txt.in"] {
+            let text = std::fs::read_to_string(dist.root.join("packaging").join(name)).unwrap();
+            let crlf = text.replace("\r\n", "\n").replace('\n', "\r\n");
+            super::super::write(&root.join("packaging").join(name), crlf.as_bytes()).unwrap();
+        }
+        dist.root.clone_from(&root);
+        let crlf = made(&dist);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(expected[0].starts_with("[Desktop Entry]\n"));
+        for (made, expected) in crlf.iter().zip(&expected) {
+            assert!(!made.contains('\r') && !expected.contains('\r'));
+            assert_eq!(made, expected);
+        }
     }
 
     #[test]
