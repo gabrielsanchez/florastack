@@ -35,7 +35,10 @@ florastack --control --control-token-file control-token
 ```
 
 Keep that file private. On Windows use a user-private directory/ACL. The app prints `control: 127.0.0.1:PORT` to
-stderr, without the token. `--control-port PORT` chooses a fixed port; zero chooses an available port. Control is
+stderr, without the token. `--control-port PORT` chooses a fixed port; zero chooses an available port. The
+packaged Windows app is a GUI program with no console, so in a terminal that line shows only when stderr is
+redirected (`florastack.exe --control ... 2> control.txt`, or a pipe as `scripts/readme_screenshots.py` reads it);
+or fix the port with `--control-port`. Control is
 disabled unless `--control` is supplied. It always binds to IPv4 loopback; clients accept only numeric loopback
 addresses. There is no HTTP listener. Authentication is required on every request, before it reaches the UI thread.
 The token grants the same local file, project and device capabilities as engine commands.

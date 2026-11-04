@@ -31,7 +31,41 @@ pub fn portable(dist: &Dist) -> Result<PathBuf, String> {
     zip(&dir, &dist.out.join(format!("{stem}.zip")))
 }
 
+/// The Windows subsystem in a PE executable's header that opens no console: a GUI program.
+const GUI: u16 = 2;
+/// The subsystem that runs in a console, opening one when started from Explorer.
+const CONSOLE: u16 = 3;
+
+/// The subsystem that a PE executable's optional header names, from the file's first bytes.
+fn subsystem(header: &[u8]) -> Option<u16> {
+    let pe = usize::try_from(u32::from_le_bytes(header.get(0x3c..0x40)?.try_into().ok()?)).ok()?;
+    if header.get(pe..pe.checked_add(4)?)? != b"PE\0\0" {
+        return None;
+    }
+    // The optional header follows the 4-byte signature and the 20-byte file header; its Subsystem field is at
+    // offset 68 in both its PE32 and PE32+ forms.
+    let at = pe.checked_add(24 + 68)?;
+    Some(u16::from_le_bytes(header.get(at..at.checked_add(2)?)?.try_into().ok()?))
+}
+
+/// The desktop app must be a GUI program, or Windows opens a console with it that ends the app when it's closed,
+/// and the CLI a console program.
+fn check_subsystems(dist: &Dist) -> Result<(), String> {
+    use std::io::Read as _;
+    for (path, wanted, what) in [(dist.gui(), GUI, "a GUI program"), (dist.cli(), CONSOLE, "a console program")] {
+        let mut header = Vec::new();
+        let file = std::fs::File::open(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        file.take(4096).read_to_end(&mut header).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        match subsystem(&header) {
+            Some(found) if found == wanted => {}
+            found => return Err(format!("{} must be {what} (Windows subsystem {wanted}), but is {found:?}", path.display())),
+        }
+    }
+    Ok(())
+}
+
 fn stage(dist: &Dist, dir: &Path) -> Result<(), String> {
+    check_subsystems(dist)?;
     let b = &dist.branding.binaries;
     super::copy(&dist.gui(), &dir.join(dist.target.exe(&b.gui)))?;
     super::copy(&dist.cli(), &dir.join(dist.target.exe(&b.cli)))?;
@@ -164,6 +198,29 @@ fn wix_toolset(dist: &Dist, pin: &pins::Tool) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_subsystem_is_read_from_the_pe_header() {
+        let mut header = vec![0_u8; 0x200];
+        header[0x3c..0x40].copy_from_slice(&0x80_u32.to_le_bytes());
+        header[0x80..0x84].copy_from_slice(b"PE\0\0");
+        header[0x80 + 92..0x80 + 94].copy_from_slice(&GUI.to_le_bytes());
+        assert_eq!(subsystem(&header), Some(GUI));
+        assert_eq!(subsystem(&header[..0x90]), None, "cut short");
+        header[0x80] = b'X';
+        assert_eq!(subsystem(&header), None, "no PE signature");
+        header[0x3c..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(subsystem(&header), None, "a header offset past the end");
+        assert_eq!(subsystem(b"MZ"), None);
+    }
+
+    /// This test's own executable is a console program.
+    #[cfg(windows)]
+    #[test]
+    fn a_real_executable_has_its_subsystem() {
+        let exe = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        assert_eq!(subsystem(&exe), Some(CONSOLE));
+    }
 
     #[test]
     fn msi_versions_are_numeric() {

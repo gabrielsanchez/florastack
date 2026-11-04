@@ -20,6 +20,10 @@ its metadata). The release also carries the source archives
 of the libraries that the macOS app and the Flatpak include (see below), and `SHA256SUMS.txt`, which
 `sha256sum --check SHA256SUMS.txt` verifies.
 
+On Windows the desktop app is a GUI program, which opens no console, and the CLI a console program; `dist` checks
+both executables' subsystem before packaging them. Started from a terminal, the desktop app returns at once and
+prints nothing (`--help`, `--version`, the log), unless its output is redirected: `florastack.exe --version | more`.
+
 The Linux binaries are built on Ubuntu 22.04, so they need glibc 2.35 or newer. The .deb depends on that `libc6`,
 on `libgphoto2-6t64 | libgphoto2-6`, and recommends the graphics and windowing libraries that the app loads at run
 time; the .rpm requires `libgphoto2.so.6()(64bit)`, which every RPM distribution provides under its own package name.

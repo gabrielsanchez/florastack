@@ -1,5 +1,10 @@
 //! Starts the FloraStack desktop app (`florastack_app`): its log on standard error, at the level `FLORASTACK_LOG`
 //! names (`warn` by default), and the files given on the command line opened (a project) or added as frames.
+//!
+//! Release builds are Windows GUI programs, so that no console window opens with the app (and closing one doesn't
+//! end it). They have no console of their own: their standard output and error reach whatever the launcher
+//! redirects them to, such as a pipe or a file, and nothing otherwise. Debug builds keep the console, for the log.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
