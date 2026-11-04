@@ -478,7 +478,7 @@ fn remove_if_present(path: &Path) -> Result<(), String> {
 
 /// Downloads with curl: following redirects over HTTP(S) only, retrying transient failures, and stopping past
 /// `max_bytes` (checked again afterwards, for servers that send no length).
-fn curl(url: &str, to: &Path, max_bytes: u64) -> Result<(), String> {
+pub fn curl(url: &str, to: &Path, max_bytes: u64) -> Result<(), String> {
     let status = Command::new("curl")
         .args(["--fail", "--silent", "--show-error", "--location", "--retry", "3", "--proto", "=https,http,file", "--proto-redir", "=https,http"])
         .args(["--user-agent", USER_AGENT, "--max-filesize", &max_bytes.to_string(), "--output"])

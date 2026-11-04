@@ -118,7 +118,6 @@ pub fn hex(digest: &[u8; 32]) -> String {
 }
 
 /// Lower-case hex SHA-256 of `data`.
-#[cfg(test)]
 pub fn hex_of(data: &[u8]) -> String {
     let mut hasher = Sha256::default();
     hasher.update(data);

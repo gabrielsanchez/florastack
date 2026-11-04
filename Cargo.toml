@@ -200,6 +200,11 @@ unimplemented = "warn"
 # Every unsafe block needs a `// SAFETY:` comment. unsafe itself is denied above, except in the modules AGENTS.md lists.
 undocumented_unsafe_blocks = "warn"
 
+# The binaries that `cargo xtask dist` packages: the release profile, with their symbols stripped.
+[profile.dist]
+inherits = "release"
+strip = true
+
 # Unoptimized builds run pixel loops 10 to 50 times slower, which would make the alignment accuracy tests on synthetic
 # stacks take minutes. The crates that do the pixel work are optimized in the dev profile, which the test profile
 # inherits; debug assertions and overflow checks stay on, as everywhere in dev and test builds.

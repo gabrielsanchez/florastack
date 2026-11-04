@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=@DISPLAY_NAME@
+GenericName=Focus Stacking
+Comment=@SUMMARY@
+Exec=@GUI_BINARY@ %F
+Icon=@APP_ID@
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=focus;stacking;macro;photography;depth of field;
+MimeType=image/tiff;image/png;image/jpeg;image/x-adobe-dng;image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;image/x-sony-arw;image/x-fuji-raf;image/x-panasonic-rw2;image/x-pentax-pef;image/x-olympus-orf;
+StartupNotify=true
+StartupWMClass=@APP_ID@

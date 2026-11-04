@@ -5,6 +5,7 @@ mod bench;
 mod branding;
 mod ci;
 mod corpus;
+mod dist;
 mod gltf_validator;
 mod layers;
 mod python;
@@ -31,6 +32,8 @@ commands:
   python        build the Python extension with maturin in target/python-tests and run pytest (Python 3.9+)
   bench         run the criterion benchmarks and write target/bench-summary.json, with the quality metrics
                 that benches record (`cargo xtask bench --help` for the options)
+  dist          build the release packages of one target (installers, archives, the Python wheel) with
+                SHA256SUMS.txt, named from branding.toml (`cargo xtask dist --help` for the targets and formats)
   quality       stack every synthetic and corpus stack by every method and slab combination, score and time
                 each run, write an HTML report with 100% crops to target/quality/index.html, and fail when a
                 measure is worse than quality/baseline.json beyond its tolerance (`--gate` in CI; `--help`)
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
         ["corpus", rest @ ..] => workspace_root().and_then(|root| corpus::run(&root, rest)),
         ["bench", rest @ ..] => cargo_metadata().and_then(|meta| bench::run(&meta, rest)),
         ["quality", rest @ ..] => cargo_metadata().and_then(|meta| quality::run(&meta, rest)),
+        ["dist", rest @ ..] => cargo_metadata().and_then(|meta| dist::run(&meta, rest)),
         [] | ["help" | "-h" | "--help"] => {
             print!("{USAGE}");
             Ok(())

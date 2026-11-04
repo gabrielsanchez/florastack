@@ -21,13 +21,14 @@ cargo xtask ci                                          # everything CI runs, wi
 cargo xtask corpus                                      # download the sample stacks and test fixtures pinned in corpus/manifest.toml
 cargo xtask bench                                       # criterion benchmarks and the CPU-against-GPU run, summarized in target/bench-summary.json
 cargo xtask quality                                     # every method on every stack: a report with crops in target/quality/, and the regression gate
+cargo xtask dist                                        # the release packages of this platform, in target/dist/<target>/artifacts/
 ```
 
-`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures` before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks. `cargo xtask quality` stacks the synthetic stacks and every corpus stack by every method, scores and times each output, and fails when one is worse than `quality/baseline.json` beyond its tolerance; `cargo xtask ci` runs its gate on the synthetic stacks, as CI does.
+`cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`) and `cargo audit`; install both tools once with `cargo install --locked cargo-deny cargo-audit`. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures` before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks. `cargo xtask quality` stacks the synthetic stacks and every corpus stack by every method, scores and times each output, and fails when one is worse than `quality/baseline.json` beyond its tolerance; `cargo xtask ci` runs its gate on the synthetic stacks, as CI does. `cargo xtask dist` builds the installers and archives that a release ships (an .msi and a .zip on Windows, a .dmg on macOS, an AppImage, .deb, .rpm, Flatpak and tarball on Linux, the CLI alone, and the Python wheel), and a version tag makes the Release workflow build them for every platform: the [packaging guide](docs/packaging.md) lists what each needs, and how to release and sign.
 
 ## Capture
 
-The [Capture tab and workflow](docs/capture.md) connect in-camera bracketing or tethering apps to the watch folder on all platforms, with serial rails and a diffraction step calculator. Linux/macOS can add built-in camera control with `cargo build -p florastack --features gphoto` and a separately installed libgphoto2 shared library. Windows builds omit that feature and use the camera maker's tethering app.
+The [Capture tab and workflow](docs/capture.md) connect in-camera bracketing or tethering apps to the watch folder on all platforms, with serial rails and a diffraction step calculator. Linux/macOS can add built-in camera control with `cargo build -p florastack --features gphoto` and a separately installed libgphoto2 shared library; the release packages have it, and the macOS app and the Flatpak include the library ([packaging guide](docs/packaging.md#camera-control-and-libgphoto2)). Windows builds omit that feature and use the camera maker's tethering app.
 
 ## GPU
 
@@ -117,7 +118,7 @@ loopback JSON channel. Add `--headless` to render the desktop UI offscreen and c
 The [automation guide](docs/automation.md) covers tokens, bridging, the control protocol and screenshot generation.
 
 The separate PyO3/maturin package in `python/florastack` loads frames, aligns and stacks through the engine and
-returns owned NumPy arrays. Build it from source with maturin; wheels arrive in Phase 7. Workspace checks need
+returns owned NumPy arrays. It uses Python's stable ABI, so one wheel per platform serves every Python from 3.9: releases carry them, `cargo xtask dist --formats wheel` builds one, and maturin builds it from source. Workspace checks need
 Python 3.9+ and its development library (`PYO3_PYTHON` selects an interpreter). `cargo xtask python` runs the
 NumPy/pytest acceptance tests in `target/python-tests`, recreating that isolated environment on each run so a
 partial build-cache restore cannot leave a broken venv. `cargo xtask ci` includes them.

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata, written by cargo xtask dist from packaging/linux/metainfo.xml.in. -->
+<component type="desktop-application">
+  <id>@APP_ID@</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>@DISPLAY_NAME@</name>
+  <summary>@SUMMARY@</summary>
+  <developer id="@DEVELOPER_ID@">
+    <name>@DISPLAY_NAME@ contributors</name>
+  </developer>
+  <description>
+    <p>@DESCRIPTION@</p>
+  </description>
+  <launchable type="desktop-id">@APP_ID@.desktop</launchable>
+  <url type="homepage">@REPOSITORY@</url>
+  <url type="bugtracker">@REPOSITORY@/issues</url>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+  <provides>
+    <binary>@GUI_BINARY@</binary>
+    <binary>@CLI_BINARY@</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

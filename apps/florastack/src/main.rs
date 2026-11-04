@@ -35,6 +35,11 @@ struct Arguments {
 }
 
 fn main() -> ExitCode {
+    // In the macOS app, before any thread starts: may start the app again with the bundled camera drivers' folders.
+    #[cfg(all(feature = "gphoto", target_os = "macos"))]
+    if let Err(e) = florastack_engine::capture::gphoto::prepare_bundled_drivers() {
+        eprintln!("{}: camera control can't find its drivers: {e}", branding::DISPLAY_NAME);
+    }
     let level = std::env::var("FLORASTACK_LOG").ok().and_then(|l| l.parse::<LevelFilter>().ok()).unwrap_or(LevelFilter::WARN);
     tracing_subscriber::fmt().with_max_level(level).with_writer(std::io::stderr).init();
     let args = Arguments::parse();
