@@ -84,14 +84,14 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: brew install pkgconf
 
-      # Flatpak from its own PPA: Ubuntu 22.04's is too old for the current runtimes. desktop-file-utils lets
-      # appimagetool validate the desktop entry.
+      # Flatpak from its own PPA: Ubuntu 22.04's is too old for the current runtimes. elfutils has the eu-strip that
+      # flatpak-builder runs, which it only recommends. desktop-file-utils lets appimagetool validate the desktop entry.
       - name: Install the Linux packaging tools
         if: runner.os == 'Linux'
         run: |
           sudo add-apt-repository --yes ppa:flatpak/stable
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends flatpak flatpak-builder rpm desktop-file-utils
+          sudo apt-get install --yes --no-install-recommends flatpak flatpak-builder elfutils rpm desktop-file-utils
 
       # A temporary keychain with the Developer ID Application certificate (a base64 .p12 and its password).
       - name: Import the signing certificate
