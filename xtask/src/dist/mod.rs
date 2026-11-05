@@ -42,8 +42,8 @@ OWNER placeholder.
   -h, --help       show this message
 
 Each format needs its tools: cargo-wix for msi (xtask downloads the pinned WiX Toolset); Xcode's command-line tools
-and pkg-config for dmg; dpkg-deb for deb, rpmbuild for rpm, flatpak and flatpak-builder for flatpak (xtask
-downloads the pinned appimagetool); Python 3.9+ for wheel (PYO3_PYTHON selects it). macOS signing and notarization
+and pkg-config for dmg; dpkg-deb for deb, rpmbuild for rpm, flatpak, flatpak-builder and elfutils' eu-strip for
+flatpak (xtask downloads the pinned appimagetool); Python 3.9+ for wheel (PYO3_PYTHON selects it). macOS signing and notarization
 run when APPLE_SIGNING_IDENTITY, and APPLE_NOTARY_KEY_PATH, APPLE_NOTARY_KEY_ID and APPLE_NOTARY_ISSUER, are set.
 ";
 
@@ -477,7 +477,12 @@ fn programs(format: Format) -> Vec<(&'static str, &'static str)> {
         Format::Dmg => macos::programs(),
         Format::Deb => vec![("dpkg-deb", "sudo apt-get install dpkg")],
         Format::Rpm => vec![("rpmbuild", "sudo apt-get install rpm, or sudo dnf install rpm-build")],
-        Format::Flatpak => vec![("flatpak", "https://flatpak.org/setup/"), ("flatpak-builder", "sudo apt-get install flatpak-builder")],
+        Format::Flatpak => vec![
+            ("flatpak", "https://flatpak.org/setup/"),
+            ("flatpak-builder", "sudo apt-get install flatpak-builder"),
+            // flatpak-builder strips the modules it builds with it, and only recommends the package.
+            ("eu-strip", "sudo apt-get install elfutils"),
+        ],
         // appimagetool is a pinned download; the wheel's Python is checked when its environment is made.
         Format::AppImage | Format::Wheel => vec![],
     }

@@ -49,8 +49,8 @@ empty folder instead). `cargo xtask dist --help` lists the targets and formats. 
   `rustup target add aarch64-apple-darwin x86_64-apple-darwin`. The first .dmg also builds the camera libraries
   (a few minutes); later ones reuse them.
 - Linux: `dpkg-deb` for the .deb, `rpmbuild` for the .rpm (`sudo apt-get install rpm` on Debian and Ubuntu), and
-  `flatpak` and `flatpak-builder` for the Flatpak, which adds the Flathub remote for your user and installs the
-  freedesktop.org SDK there on its first run. appimagetool and the AppImage runtime are downloaded and checked by
+  `flatpak`, `flatpak-builder` and `eu-strip` (the `elfutils` package) for the Flatpak, which adds the Flathub remote
+  for your user and installs the freedesktop.org SDK there on its first run. appimagetool and the AppImage runtime are downloaded and checked by
   xtask. AppImages and Flatpaks are built for the architecture of the machine that builds them.
 - The wheel: Python 3.9 or newer (`PYO3_PYTHON` selects the interpreter); xtask installs maturin in a virtual
   environment of its own.
