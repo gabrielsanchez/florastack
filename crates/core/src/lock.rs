@@ -5,7 +5,7 @@
 //! The locks are advisory, through the standard library's [`File::try_lock`]: `flock` on Unix, `LockFileEx` on
 //! Windows. Both lock per open file, so a second lock on the same file fails within one process too.
 
-use std::fs::{File, OpenOptions, TryLockError};
+use crate::fs::{File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -62,7 +62,7 @@ impl LockFile {
 
     /// Sets the lock file's modification time to now, to record when its folder was last used.
     pub fn touch(&self) -> std::io::Result<()> {
-        self.file.set_modified(std::time::SystemTime::now())
+        self.file.set_modified(crate::time::SystemTime::now())
     }
 }
 

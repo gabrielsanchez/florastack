@@ -27,6 +27,8 @@ single exposure allows, for macro, microscopy, product and landscape photography
   engine commands.
 - **On the GPU** when one passes a self-test, on the CPU otherwise, in memory that depends on the image size, not the
   number of frames. FloraStack sends nothing anywhere: no telemetry.
+- **In a browser** too: the same app compiled to WebAssembly, stacking on the page's threads or with WebGPU, as a
+  static site you can host yourself, with a Dockerfile to serve it ([In the browser](book/src/user/browser.md)).
 
 FloraStack is in early development. Its release workflow builds packages for Windows, macOS and Linux from each
 version tag.
@@ -44,7 +46,8 @@ florastack-cli stack path/to/photos --out result.tif
 
 The guide is an mdBook in [`book/`](book/src/SUMMARY.md):
 
-- **User guide**: [installing](book/src/user/install.md), [a first stack](book/src/user/first-stack.md),
+- **User guide**: [installing](book/src/user/install.md), [in the browser](book/src/user/browser.md),
+  [a first stack](book/src/user/first-stack.md),
   [choosing a method](book/src/user/methods.md), [retouching](book/src/user/retouching.md),
   [slabbing](book/src/user/slabbing.md), [shooting advice](book/src/user/shooting.md),
   [batch and watch folders](book/src/user/batch-and-watch.md), [capture](book/src/user/capture.md),
@@ -54,8 +57,8 @@ The guide is an mdBook in [`book/`](book/src/SUMMARY.md):
   [engine command](book/src/reference/commands.md).
 - **Developer guide**: [architecture](book/src/dev/architecture.md), [the command registry](book/src/dev/commands.md),
   [the CPU oracle for GPU code](book/src/dev/cpu-oracle.md), [adding a stacking method](book/src/dev/new-method.md),
-  [the quality gate](book/src/dev/quality.md), [the LightCraft dependency](book/src/dev/lightcraft.md) and
-  [releasing](book/src/dev/packaging.md).
+  [the quality gate](book/src/dev/quality.md), [the LightCraft dependency](book/src/dev/lightcraft.md),
+  [releasing](book/src/dev/packaging.md) and [the browser build](book/src/dev/web.md).
 
 `cargo xtask book` builds it into `target/book/` and checks its links.
 
@@ -84,11 +87,14 @@ cargo xtask bench                                       # criterion benchmarks a
 cargo xtask quality                                     # every method on every stack: a report with crops in target/quality/, and the regression gate
 cargo xtask book                                        # the user and developer guide, in target/book/, with every link checked
 cargo xtask dist                                        # the release packages of this platform, in target/dist/<target>/artifacts/
+cargo xtask web --serve                                 # the browser version, in target/web-site/, served on http://127.0.0.1:8080/
 ```
 
 `cargo xtask ci` also runs `cargo deny check` (the license and dependency policy in `deny.toml`), `cargo audit` and
 `cargo xtask book`; install their tools once with `cargo install --locked cargo-deny cargo-audit`, and mdBook and lychee
-as `cargo xtask book --help` says. `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which
+as `cargo xtask book --help` says. It ends with the browser build's headless test, which needs the nightly toolchain
+and the wasm-bindgen CLI that `cargo xtask web --help` names, Node.js and Chrome or Edge
+([The browser build](book/src/dev/web.md)). `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which
 come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures`
 before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it
 camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks.

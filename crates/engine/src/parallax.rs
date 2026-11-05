@@ -118,7 +118,7 @@ impl Scene {
 /// Reads an engine-created preview. Length and geometry are checked before it reaches wgpu.
 pub fn load_scene(path: &std::path::Path) -> Result<Scene, CommandError> {
     let read = |source| florastack_project::ProjectError::Read { path: path.into(), source };
-    let mut file = std::fs::File::open(path).map_err(read)?;
+    let mut file = florastack_core::fs::File::open(path).map_err(read)?;
     let mut bytes = Vec::new();
     file.by_ref().take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(read)?;
     if bytes.len() > 64 * 1024 * 1024 {

@@ -114,7 +114,8 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
         }
     }
     if !p.overwrite {
-        let existing = planned.iter().map(planned_path).chain(std::iter::once(sidecar_path.as_path())).find(|path| path.exists());
+        let existing =
+            planned.iter().map(planned_path).chain(std::iter::once(sidecar_path.as_path())).find(|path| florastack_core::fs::path_exists(path));
         if let Some(path) = existing {
             return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", path.display())));
         }

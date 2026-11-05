@@ -46,7 +46,10 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             Tab::Retouch => crate::retouch_tab::panel(app, ui),
             Tab::Export => crate::export_tab::show(app, ui),
             Tab::Batch => batch_tab(app, ui),
+            #[cfg(not(target_arch = "wasm32"))]
             Tab::Capture => crate::capture_tab::show(app, ui),
+            #[cfg(target_arch = "wasm32")]
+            Tab::Capture => {}
         });
     });
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
@@ -75,6 +78,9 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
 
 /// A menu item that runs `action`, with its shortcut.
 fn item(app: &mut FloraStackApp, ui: &mut egui::Ui, action: Action, enabled: bool) {
+    if !action.available() {
+        return;
+    }
     let shortcut = action.shortcut().map(|s| ui.ctx().format_shortcut(&s)).unwrap_or_default();
     let label = match action {
         Action::Undo => app.shell.engine().undo_label().map(|w| tr_args("action-undo-named", &[("what", w.to_owned().into())])),
@@ -95,16 +101,18 @@ fn top_bar(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         ui.menu_button(tr("menu-file"), |ui| {
             item(app, ui, Action::New, true);
             item(app, ui, Action::Open, true);
-            ui.menu_button(tr("menu-recent"), |ui| {
-                if app.prefs.recent.is_empty() {
-                    ui.weak(tr("menu-recent-none"));
-                }
-                for path in app.prefs.recent.clone() {
-                    if ui.button(path.display().to_string()).clicked() {
-                        app.dropped(vec![path]);
+            if crate::dialogs::NATIVE_FILES {
+                ui.menu_button(tr("menu-recent"), |ui| {
+                    if app.prefs.recent.is_empty() {
+                        ui.weak(tr("menu-recent-none"));
                     }
-                }
-            });
+                    for path in app.prefs.recent.clone() {
+                        if ui.button(path.display().to_string()).clicked() {
+                            app.dropped(vec![path]);
+                        }
+                    }
+                });
+            }
             ui.separator();
             item(app, ui, Action::AddFrames, true);
             item(app, ui, Action::ImportStacks, true);
@@ -159,7 +167,7 @@ fn top_bar(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         });
     });
     ui.horizontal(|ui| {
-        for tab in Tab::ALL {
+        for tab in Tab::shown() {
             if ui.selectable_label(app.prefs.tab == tab, tr(tab.label_key())).clicked() {
                 app.set_tab(tab);
             }
@@ -414,13 +422,15 @@ fn batch_tab(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         ui.label(tr(label));
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(value).desired_width(180.0));
+            #[cfg(not(target_arch = "wasm32"))]
             if ui.button(tr("browse")).clicked() {
-                let dialog = rfd::FileDialog::new();
-                let picked = if file { dialog.add_filter("TOML", &["toml"]).pick_file() } else { dialog.pick_folder() };
+                let picked = if file { crate::dialogs::read_file(("TOML", &["toml"])) } else { crate::dialogs::read_folder(None) };
                 if let Some(path) = picked {
                     *value = path.display().to_string();
                 }
             }
+            #[cfg(target_arch = "wasm32")]
+            let _ = file;
         });
     };
     folder(ui, &mut app.batch.input, "batch-input", false);
@@ -580,8 +590,9 @@ fn dialogs(app: &mut FloraStackApp, ctx: &egui::Context) {
                 ui.label(tr("save-as-folder"));
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0));
+                    #[cfg(not(target_arch = "wasm32"))]
                     if ui.button(tr("browse")).clicked()
-                        && let Some(picked) = rfd::FileDialog::new().pick_folder()
+                        && let Some(picked) = crate::dialogs::read_folder(None)
                     {
                         folder = picked.display().to_string();
                     }
@@ -603,7 +614,7 @@ fn dialogs(app: &mut FloraStackApp, ctx: &egui::Context) {
             Dialog::Shortcuts => {
                 ui.heading(Action::Shortcuts.label());
                 egui::Grid::new("shortcuts").striped(true).show(ui, |ui| {
-                    for action in Action::ALL {
+                    for action in Action::ALL.into_iter().filter(|a| a.available()) {
                         if let Some(shortcut) = action.shortcut() {
                             ui.label(action.label());
                             ui.monospace(ctx.format_shortcut(&shortcut));

@@ -1,6 +1,6 @@
 //! The time that job progress and ETAs are measured with: a [`Clock`], so that tests can drive it by hand
-//! ([`ManualClock`]) and the browser build can supply its own (`std::time::Instant` isn't available on
-//! `wasm32-unknown-unknown`).
+//! ([`ManualClock`]). [`SystemClock`] is florastack-core's monotonic clock, which is the page's `performance.now()` in
+//! a browser (where `std::time::Instant` panics).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -11,27 +11,23 @@ pub trait Clock: Send + Sync {
 }
 
 /// The system's monotonic clock.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub struct SystemClock {
-    start: std::time::Instant,
+    start: florastack_core::time::Instant,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl SystemClock {
     pub fn new() -> SystemClock {
-        SystemClock { start: std::time::Instant::now() }
+        SystemClock { start: florastack_core::time::Instant::now() }
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for SystemClock {
     fn default() -> SystemClock {
         SystemClock::new()
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Clock for SystemClock {
     fn now(&self) -> Duration {
         self.start.elapsed()

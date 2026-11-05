@@ -252,6 +252,7 @@ impl Jobs {
         self.active.iter().any(|a| matches!(a.state, State::Running))
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "for Engine::wait, which a browser doesn't have"))]
     pub(crate) fn is_active(&self, id: JobId) -> bool {
         self.active.iter().any(|a| a.id == id)
     }

@@ -18,6 +18,36 @@ testutil = []
 rayon.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# `florastack_core::time`: the standard library's clocks, or the browser's where those would panic.
+web-time.workspace = true
+
+# The browser build (`thread`, `fs`, `sync`, and `TempFileStore` on the origin-private file system).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rayon = { workspace = true, features = ["web_spin_lock"] }
+wasm_sync.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "DedicatedWorkerGlobalScope",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemGetFileOptions",
+    "FileSystemReadWriteOptions",
+    "FileSystemRemoveOptions",
+    "FileSystemSyncAccessHandle",
+    "Navigator",
+    "StorageManager",
+    "Window",
+    "Worker",
+    "WorkerGlobalScope",
+    "WorkerNavigator",
+    "WorkerOptions",
+    "WorkerType",
+] }
+futures-channel.workspace = true
+futures-core.workspace = true
 
 [build-dependencies]
 # build.rs reads branding.toml into the constants of `florastack_core::branding`.

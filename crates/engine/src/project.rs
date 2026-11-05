@@ -110,7 +110,7 @@ pub fn develop(project: &Project) -> Result<Option<RawDevelop>, ProjectDataError
 
 /// Adds the file at `path` to the project as a frame: reads it once, hashes it and keeps its metadata summary.
 pub fn add_frame(project: &mut Project, path: &Path) -> Result<FrameId, ProjectDataError> {
-    let bytes = std::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+    let bytes = florastack_core::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
     let (file, exif) = frame_file(path, &bytes)?;
     drop(bytes);
     Ok(project.add_frame(file, exif))
@@ -129,7 +129,7 @@ pub struct FrameRead {
 /// Reads the file at `path` once, to add it as a frame: checks that it is a camera RAW or image file FloraStack reads
 /// (from its bytes, not its name), hashes it and takes its metadata summary.
 pub fn read_frame_file(path: &Path) -> Result<FrameRead, ProjectDataError> {
-    let bytes = std::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+    let bytes = florastack_core::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
     let source = crate::frames::source(&bytes)?;
     let (file, exif) = frame_file(path, &bytes)?;
     Ok(FrameRead { file, exif, source })
@@ -467,7 +467,7 @@ pub fn mask_from_image(image: AnyImage) -> Result<DefectMask, ProjectDataError> 
 /// Reads a defect mask from an image file the user made or edited: any format florastack-codecs reads, turned upright
 /// as the frames are.
 pub fn read_mask_file(path: &Path) -> Result<DefectMask, ProjectDataError> {
-    let bytes = std::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+    let bytes = florastack_core::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
     mask_from_image(florastack_codecs::read(&bytes, &ReadOptions::default())?.image)
 }
 

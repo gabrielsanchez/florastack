@@ -1,8 +1,8 @@
 //! A serial queue of independent stack projects. Work stays in a private staging folder until publication.
 
+use florastack_core::time::{Duration, Instant};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use florastack_align::SplitSettings;
 use florastack_core::{LockFile, Monitor, branding};
@@ -198,14 +198,14 @@ pub(super) struct Workspace {
 
 impl Workspace {
     pub(super) fn new(input: &str, output: &str, preset: &str) -> Result<Self, CommandError> {
-        let input = std::fs::canonicalize(absolute(input)?).map_err(|e| io_error(Path::new(input), e))?;
-        if !input.is_dir() {
+        let input = florastack_core::fs::canonicalize(absolute(input)?).map_err(|e| io_error(Path::new(input), e))?;
+        if !florastack_core::fs::path_is_dir(&input) {
             return Err(unavailable("batch.run", "input must be a folder"));
         }
         super::preset::load(preset)?;
         let output = absolute(output)?;
-        std::fs::create_dir_all(&output).map_err(|e| io_error(&output, e))?;
-        let output = std::fs::canonicalize(&output).map_err(|e| io_error(&output, e))?;
+        florastack_core::fs::create_dir_all(&output).map_err(|e| io_error(&output, e))?;
+        let output = florastack_core::fs::canonicalize(&output).map_err(|e| io_error(&output, e))?;
         if output.starts_with(&input) {
             return Err(unavailable("batch.run", "output must be outside the input folder so exports cannot be ingested as frames"));
         }
@@ -213,7 +213,7 @@ impl Workspace {
         let lock = LockFile::try_acquire(&lock_path)
             .map_err(|e| io_error(&lock_path, e))?
             .ok_or_else(|| unavailable("batch.run", "another batch or capture is using this output folder"))?;
-        if output.join("summary.csv").exists() {
+        if florastack_core::fs::path_exists(&output.join("summary.csv")) {
             return Err(ProjectError::Exists { path: output.join("summary.csv") }.into());
         }
         let stage = tempfile::Builder::new().prefix(".queue-").tempdir_in(&output).map_err(|e| io_error(&output, e))?;
@@ -251,21 +251,21 @@ impl Workspace {
             csv.push_str("\r\n");
         }
         let summary = self.stage.path().join("summary.csv");
-        std::fs::write(&summary, csv).map_err(|e| io_error(&summary, e))?;
+        florastack_core::fs::write(&summary, csv).map_err(|e| io_error(&summary, e))?;
         let mut files = children(self.stage.path())?;
         // The CSV is the completion record; publish it after its referenced artifacts.
         files.sort_by_key(|path| path.file_name().is_some_and(|name| name == "summary.csv"));
         for file in &files {
             let target = self.output.join(file.file_name().unwrap_or_default());
-            if target.exists() {
+            if florastack_core::fs::path_exists(&target) {
                 return Err(ProjectError::Exists { path: target }.into());
             }
         }
         ctx.finalize()?;
         for file in files {
             let target = self.output.join(file.file_name().unwrap_or_default());
-            if file.is_dir() {
-                std::fs::rename(&file, &target).map_err(|e| io_error(&target, e))?;
+            if florastack_core::fs::path_is_dir(&file) {
+                florastack_core::fs::rename(&file, &target).map_err(|e| io_error(&target, e))?;
             } else {
                 publish_file(&file, &target)?;
             }
@@ -277,26 +277,26 @@ impl Workspace {
 
 fn publish_file(source: &Path, target: &Path) -> Result<(), CommandError> {
     // Unlike rename on Unix, hard_link fails atomically if the destination appeared meanwhile.
-    match std::fs::hard_link(source, target) {
+    match florastack_core::fs::hard_link(source, target) {
         Ok(()) => return Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(io_error(target, error)),
         Err(_) => {} // FAT and some network filesystems do not support links; reserve a fresh file instead.
     }
-    let mut destination = std::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| io_error(target, e))?;
+    let mut destination = florastack_core::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| io_error(target, e))?;
     let copied = (|| {
-        let mut file = std::fs::File::open(source)?;
+        let mut file = florastack_core::fs::File::open(source)?;
         std::io::copy(&mut file, &mut destination)?;
         destination.sync_all()
     })();
     drop(destination);
     copied.map_err(|error| {
-        let _ = std::fs::remove_file(target);
+        let _ = florastack_core::fs::remove_file(target);
         io_error(target, error)
     })
 }
 
 pub(super) fn children(path: &Path) -> Result<Vec<PathBuf>, CommandError> {
-    let entries = std::fs::read_dir(path).map_err(|e| io_error(path, e))?;
+    let entries = florastack_core::fs::read_dir(path).map_err(|e| io_error(path, e))?;
     let mut out = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| io_error(path, e))?;
@@ -385,7 +385,7 @@ fn with_format(name: &str, format: super::export::FileFormat) -> String {
 
 pub(super) fn new_project(engine: &mut Engine, ctx: &JobContext, workspace: &Workspace, name: &str, preset: &str) -> Result<(), CommandError> {
     let target = workspace.output.join(format!("{name}{}", branding::PROJECT_EXTENSION));
-    if target.exists() {
+    if florastack_core::fs::path_exists(&target) {
         return Err(ProjectError::Exists { path: target }.into());
     }
     call(engine, ctx, "project.new", json!({"name": name, "folder": display(workspace.stage.path())}))?;
@@ -428,7 +428,7 @@ pub(super) fn finish_stack(
         serde_json::from_value(export.get("settings").and_then(|s| s.get("format")).cloned().unwrap_or(Value::Null)).unwrap_or_default();
     let name = with_format(&name, format);
     let target = workspace.output.join(&name);
-    if target.exists() {
+    if florastack_core::fs::path_exists(&target) {
         return Err(ProjectError::Exists { path: target }.into());
     }
     let stacked = call(engine, ctx, method.command(), json!({}))?;
@@ -453,8 +453,9 @@ pub(super) fn entry(name: String, frames: usize, method: Method) -> Entry {
 fn queue(engine: &mut Engine, ctx: &JobContext, input: &str, split: SplitSettings) -> Result<Vec<(String, Vec<PathBuf>)>, CommandError> {
     let root = absolute(input)?;
     let all = children(&root)?;
-    let dirs: Vec<_> = all.iter().filter(|p| p.is_dir() && !p.to_string_lossy().ends_with(branding::PROJECT_EXTENSION)).collect();
-    let frames: Vec<_> = all.iter().filter(|p| p.is_file() && crate::frames::is_frame_name(p)).collect();
+    let dirs: Vec<_> =
+        all.iter().filter(|p| florastack_core::fs::path_is_dir(p) && !p.to_string_lossy().ends_with(branding::PROJECT_EXTENSION)).collect();
+    let frames: Vec<_> = all.iter().filter(|p| florastack_core::fs::path_is_file(p) && crate::frames::is_frame_name(p)).collect();
     if !dirs.is_empty() && !frames.is_empty() {
         return Err(unavailable("batch.run", "input mixes stack folders and loose frames: choose one layout"));
     }
@@ -462,7 +463,8 @@ fn queue(engine: &mut Engine, ctx: &JobContext, input: &str, split: SplitSetting
         let mut queue = Vec::new();
         let mut count = 0usize;
         for dir in dirs {
-            let files: Vec<_> = children(dir)?.into_iter().filter(|p| p.is_file() && crate::frames::is_frame_name(p)).collect();
+            let files: Vec<_> =
+                children(dir)?.into_iter().filter(|p| florastack_core::fs::path_is_file(p) && crate::frames::is_frame_name(p)).collect();
             count = count.saturating_add(files.len());
             if count > MAX_ITEMS {
                 return Err(unavailable("batch.run", "queue has more than 100000 frames"));

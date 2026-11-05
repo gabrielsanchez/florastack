@@ -6,7 +6,7 @@
 //! Linux and macOS only. Each package format is a function of the platform's module; they share the staging helpers
 //! here. Third-party sources and tools come from `packaging/third-party.toml`, pinned by their SHA-256 (`pins`).
 
-mod icon;
+pub(crate) mod icon;
 mod linux;
 mod macos;
 mod pins;

@@ -63,10 +63,13 @@ pub fn menu(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             }
         }
         ui.separator();
-        if ui.add_enabled(project, egui::Button::new(tr("presets-apply-file"))).clicked()
-            && let Some(path) = rfd::FileDialog::new().add_filter("TOML", &["toml"]).pick_file()
-        {
-            app.offer_preset(Source::File(path));
+        if ui.add_enabled(project, egui::Button::new(tr("presets-apply-file"))).clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = crate::dialogs::read_file(("TOML", &["toml"])) {
+                app.offer_preset(Source::File(path));
+            }
+            #[cfg(target_arch = "wasm32")]
+            crate::web::pick(crate::web::Purpose::Preset);
         }
         if ui.add_enabled(project, egui::Button::new(tr("presets-save"))).clicked() {
             app.dialog = Some(Dialog::SavePreset(Saving {
@@ -124,11 +127,7 @@ pub fn save_dialog(app: &mut FloraStackApp, ui: &mut egui::Ui, mut saving: Savin
     ui.horizontal(|ui| {
         if ui.add_enabled(ready, egui::Button::new(tr("preset-save"))).clicked() {
             let file = format!("{}.toml", saving.name.trim());
-            let mut dialog = rfd::FileDialog::new().add_filter("TOML", &["toml"]).set_file_name(file);
-            if let Some(folder) = &app.prefs.last_folder {
-                dialog = dialog.set_directory(folder);
-            }
-            if let Some(path) = dialog.save_file() {
+            if let Some(path) = crate::dialogs::save_file(&file, ("TOML", &["toml"]), app.prefs.last_folder.as_deref()) {
                 close = app.save_preset(&saving, &path);
             }
         }

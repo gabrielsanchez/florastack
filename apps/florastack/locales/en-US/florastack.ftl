@@ -124,6 +124,11 @@ notice-exported = Exported { $count ->
     [one] one file
    *[other] { $count } files
 } to { $folder }
+notice-downloaded = Downloaded { $count ->
+    [one] one file
+   *[other] { $count } files
+}
+web-files-too-large = These files take { $size } GB, and the page already holds { $held } GB: a browser page can hold { $limit } GB of files. Add fewer or smaller frames (JPEG rather than TIFF, say), or stack them in the desktop app.
 device-gpu = GPU: { $name }
 device-cpu = CPU
 

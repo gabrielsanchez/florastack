@@ -98,7 +98,8 @@ impl Palette {
 
     /// The entries matching `query`, best first.
     fn entries(query: &str, registry: &Registry) -> Vec<Entry> {
-        let actions = Action::ALL.iter().map(|&a| Entry { title: a.label(), detail: String::new(), target: Target::Action(a) });
+        let actions =
+            Action::ALL.iter().filter(|a| a.available()).map(|&a| Entry { title: a.label(), detail: String::new(), target: Target::Action(a) });
         let commands = registry.list().into_iter().map(|c| Entry {
             title: command_title(c.name, c.title),
             detail: format!("{} · {}", c.name, command_summary(c.name, c.summary)),

@@ -93,11 +93,14 @@ struct Added {
 pub(super) fn expand(command: &str, paths: &[PathBuf], skipped: &mut Vec<NotDone>) -> Result<Vec<PathBuf>, CommandError> {
     let mut files = Vec::new();
     for path in paths {
-        if path.is_dir() {
-            match std::fs::read_dir(path) {
+        if florastack_core::fs::path_is_dir(path) {
+            match florastack_core::fs::read_dir(path) {
                 Ok(entries) => {
-                    let mut found: Vec<PathBuf> =
-                        entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && crate::frames::is_frame_name(p)).collect();
+                    let mut found: Vec<PathBuf> = entries
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| florastack_core::fs::path_is_file(p) && crate::frames::is_frame_name(p))
+                        .collect();
                     found.sort();
                     files.extend(found);
                 }

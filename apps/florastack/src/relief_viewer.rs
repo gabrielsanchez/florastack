@@ -86,6 +86,13 @@ pub(crate) struct Renderer {
 }
 
 impl Renderer {
+    /// As the viewer's (`viewer.rs`): not in a browser built with threads.
+    #[cfg(target_arch = "wasm32")]
+    pub fn install(_state: &egui_wgpu::RenderState) -> bool {
+        false
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn install(state: &egui_wgpu::RenderState) -> bool {
         if let Some(renderer) = Self::new(&state.device, state.target_format) {
             state.renderer.write().callback_resources.insert(renderer);
@@ -93,6 +100,7 @@ impl Renderer {
         }
         false
     }
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "a browser built with threads has no orbit view (`install`)"))]
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Option<Self> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

@@ -1,6 +1,7 @@
 # FloraStack CI: formatting, Clippy, the crate layering check, the test fixtures, the tests and the quality gate on
-# Linux, macOS and Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit) and the book (its build
-# and every link in it and in the repository's Markdown, with mdBook and lychee). `cargo xtask ci` runs the same
+# Linux, macOS and Windows, plus the dependency policy (cargo deny with deny.toml, and cargo audit), the book (its build
+# and every link in it and in the repository's Markdown, with mdBook and lychee) and the browser build (Clippy for
+# wasm32, the site, its headless browser test in Chrome, and the Docker image's headers). `cargo xtask ci` runs the same
 # cargo commands locally; a test in xtask/src/ci.rs keeps its list and this file's `run:` lines the same, so keep
 # every cargo command on a single `run:` line.
 #
@@ -175,3 +176,48 @@ jobs:
       # registry by the tests (crates/engine/tests/reference.rs).
       - name: Book
         run: cargo xtask book
+
+  web:
+    name: browser build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The workspace's toolchain, and the nightly that rebuilds the standard library with threads for the browser
+      # (`cargo xtask web` names it, as fuzz/rust-toolchain.toml does), with its source and Clippy.
+      - name: Install the Rust toolchains
+        run: |
+          rustup toolchain install
+          rustup toolchain install nightly-2026-11-01 --profile minimal --component rust-src,clippy
+
+      # The wasm-bindgen CLI's release build for Linux, at the version Cargo.lock pins, checked against its SHA-256.
+      - name: Install the wasm-bindgen CLI
+        run: |
+          curl --fail --location --silent --show-error --user-agent florastack-ci --output "$RUNNER_TEMP/wasm-bindgen.tar.gz" https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz
+          echo "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e  $RUNNER_TEMP/wasm-bindgen.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasm-bindgen.tar.gz" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen" "$HOME/.cargo/bin/"
+
+      # Clippy on the crates the browser build compiles, for wasm32 with threads; then the site, and the headless
+      # browser test in the runner's Chrome: a 20-frame synthetic stack stacked in the page and compared with the same
+      # stack stacked natively.
+      - name: Browser build
+        run: cargo xtask web --clippy --test
+
+      # The Docker image's server, on the site just built (the Dockerfile's build stage replaced by it): the headers
+      # that make the page cross-origin isolated, and the module's MIME type.
+      - name: Docker image
+        run: |
+          docker build --build-context site=target/web-site --tag florastack-web .
+          docker run --detach --rm --name florastack-web --publish 8080:8080 florastack-web
+          for _ in $(seq 30); do curl --silent --fail --head http://127.0.0.1:8080/ > "$RUNNER_TEMP/page" && break; sleep 1; done
+          curl --silent --fail --head http://127.0.0.1:8080/florastack_bg.wasm > "$RUNNER_TEMP/module"
+          cat "$RUNNER_TEMP/page" "$RUNNER_TEMP/module"
+          grep -i '^cross-origin-opener-policy: same-origin' "$RUNNER_TEMP/page"
+          grep -i '^cross-origin-embedder-policy: require-corp' "$RUNNER_TEMP/page"
+          grep -i '^cross-origin-embedder-policy: require-corp' "$RUNNER_TEMP/module"
+          grep -i '^content-type: application/wasm' "$RUNNER_TEMP/module"
+          docker stop florastack-web

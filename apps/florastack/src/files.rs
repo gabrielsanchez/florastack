@@ -1,8 +1,8 @@
 //! Files that come to the window: what a drop or a paste holds ([`Dropped`], [`paths_from_text`]), when to autosave
 //! ([`Autosave`]), and which windowing system to run on ([`use_x11`]).
 
+use florastack_engine::time::{Duration, Instant};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use florastack_engine::branding::PROJECT_EXTENSION;
 
@@ -17,7 +17,8 @@ pub enum Dropped {
 
 /// Whether `path` is a project: a `.florastack` folder, or the `project.json` in one.
 fn is_project(path: &Path) -> bool {
-    let folder = path.is_dir() && path.extension().and_then(|e| e.to_str()).is_some_and(|e| PROJECT_EXTENSION.trim_start_matches('.') == e);
+    let folder = florastack_engine::fs::path_is_dir(path)
+        && path.extension().and_then(|e| e.to_str()).is_some_and(|e| PROJECT_EXTENSION.trim_start_matches('.') == e);
     let file = path.file_name().is_some_and(|n| n == "project.json") && path.parent().is_some_and(is_project);
     folder || file
 }
@@ -26,7 +27,7 @@ impl Dropped {
     /// What `paths` are for: the first project among them, or else all of them as frames; `None` for none.
     pub fn of(paths: Vec<PathBuf>) -> Option<Dropped> {
         if let Some(project) = paths.iter().find(|p| is_project(p)) {
-            let folder = if project.is_file() { project.parent().unwrap_or(project) } else { project };
+            let folder = if florastack_engine::fs::path_is_file(project) { project.parent().unwrap_or(project) } else { project };
             return Some(Dropped::Project(folder.to_path_buf()));
         }
         (!paths.is_empty()).then_some(Dropped::Frames(paths))
@@ -66,7 +67,7 @@ pub fn paths_from_text(text: &str) -> Vec<PathBuf> {
             }
             None => PathBuf::from(l),
         })
-        .filter(|p| p.exists())
+        .filter(|p| florastack_engine::fs::path_exists(p))
         .collect()
 }
 

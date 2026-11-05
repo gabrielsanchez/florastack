@@ -60,7 +60,7 @@ pub fn write(image: &AnyImage, spec: &OutputSpec, metadata: &OutputMetadata) -> 
 /// Reads an image file.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &std::path::Path, options: &ReadOptions) -> Result<Decoded, CodecError> {
-    let bytes = std::fs::read(path).map_err(|source| CodecError::Read { path: path.to_path_buf(), source })?;
+    let bytes = florastack_core::fs::read(path).map_err(|source| CodecError::Read { path: path.to_path_buf(), source })?;
     read(&bytes, options)
 }
 
@@ -71,15 +71,15 @@ pub fn write_file(path: &std::path::Path, image: &AnyImage, spec: &OutputSpec, m
     use std::io::Write as _;
     let encoded = write(image, spec, metadata)?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = path.with_file_name(format!(".{name}.{}.part", std::process::id()));
+    let temp = path.with_file_name(format!(".{name}.{}.part", florastack_core::process::id()));
     let failed = |source: std::io::Error| {
-        let _ = std::fs::remove_file(&temp);
+        let _ = florastack_core::fs::remove_file(&temp);
         CodecError::Write { path: path.to_path_buf(), source }
     };
-    let mut file = std::fs::File::create(&temp).map_err(|source| CodecError::Write { path: path.to_path_buf(), source })?;
+    let mut file = florastack_core::fs::File::create(&temp).map_err(|source| CodecError::Write { path: path.to_path_buf(), source })?;
     file.write_all(&encoded.bytes).map_err(failed)?;
     file.sync_all().map_err(failed)?;
     drop(file);
-    std::fs::rename(&temp, path).map_err(failed)?;
+    florastack_core::fs::rename(&temp, path).map_err(failed)?;
     Ok(encoded.warnings)
 }

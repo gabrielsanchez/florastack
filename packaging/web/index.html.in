@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>@DISPLAY_NAME@</title>
+<link rel="icon" href="icon.png">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b1b; color: #d8d8d8; font: 15px/1.5 system-ui, sans-serif; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  #florastack-status { position: absolute; left: 0; right: 0; top: 40%; margin: 0 auto; max-width: 40em; padding: 0 1.5em; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="florastack-canvas"></canvas>
+<p id="florastack-status">Loading @DISPLAY_NAME@ @VERSION@…</p>
+<noscript><p>@DISPLAY_NAME@ needs JavaScript and WebAssembly.</p></noscript>
+<script type="module">
+  // The app (`@GUI_BINARY@.js`, made by wasm-bindgen) starts its threads with `worker.js`, beside it. Every URL is
+  // relative, so that the site works from any path.
+  import init, { start, dispatch, ready } from './@GUI_BINARY@.js';
+  const status = document.getElementById('florastack-status');
+  try {
+    await init();
+    // For scripts, and the headless browser test: an engine command, answered with its result (a job's once it
+    // ends), and whether the app runs yet.
+    window.florastack = { dispatch, ready };
+    await start('florastack-canvas');
+  } catch (e) {
+    console.error(e);
+    if (status.textContent.startsWith('Loading')) {
+      status.textContent = `@DISPLAY_NAME@ couldn't start: ${e}`;
+    }
+  }
+</script>
+</body>
+</html>

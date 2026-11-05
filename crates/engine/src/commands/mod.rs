@@ -164,7 +164,7 @@ pub(crate) fn check_unique<T: Ord>(field: &str, list: &[T]) -> Result<(), Invali
 
 /// A path parameter made absolute (relative to the current folder).
 pub(crate) fn absolute(path: &str) -> Result<PathBuf, CommandError> {
-    std::path::absolute(Path::new(path))
+    florastack_core::fs::absolute(Path::new(path))
         .map_err(|source| CommandError::from(florastack_project::ProjectError::Read { path: PathBuf::from(path), source }))
 }
 

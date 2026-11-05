@@ -38,6 +38,12 @@ pub enum Tab {
 impl Tab {
     pub const ALL: [Tab; 5] = [Tab::Stack, Tab::Retouch, Tab::Export, Tab::Batch, Tab::Capture];
 
+    /// The tabs this build shows: all of them on the desktop; in a browser, not the batch's (which reads and writes
+    /// folders) nor capture's (which needs the user's devices).
+    pub fn shown() -> Vec<Tab> {
+        Tab::ALL.into_iter().filter(|t| crate::dialogs::NATIVE_FILES || !matches!(t, Tab::Batch | Tab::Capture)).collect()
+    }
+
     pub fn label_key(self) -> &'static str {
         match self {
             Tab::Stack => "tab-stack",
@@ -140,7 +146,11 @@ pub const DEFAULT_AUTOSAVE_MINUTES: u32 = 2;
 impl Prefs {
     /// The preferences eframe stored, or the defaults.
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Prefs {
-        storage.and_then(|s| s.get_string(KEY)).and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+        let mut prefs: Prefs = storage.and_then(|s| s.get_string(KEY)).and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        if !Tab::shown().contains(&prefs.tab) {
+            prefs.tab = Tab::default();
+        }
+        prefs
     }
 
     pub fn save(&self, storage: &mut dyn eframe::Storage) {
@@ -158,7 +168,7 @@ impl Prefs {
 
     /// Drops the recent projects whose folder is gone.
     pub fn forget_missing(&mut self) {
-        self.recent.retain(|p| p.is_dir());
+        self.recent.retain(|p| florastack_engine::fs::path_is_dir(p));
     }
 
     /// How long after a project's first unsaved change it is saved; `None` for never.

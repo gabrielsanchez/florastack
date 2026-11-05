@@ -77,11 +77,11 @@ pub enum ViewError {
 /// (thumbnails). See the module documentation.
 pub fn load(path: &Path, max_side: Option<usize>) -> Result<DisplayImage, ViewError> {
     let read = |source| ViewError::Read { path: path.to_path_buf(), source };
-    let bytes = std::fs::metadata(path).map_err(read)?.len();
+    let bytes = florastack_core::fs::metadata(path).map_err(read)?.len();
     if bytes > MAX_FILE_BYTES {
         return Err(ViewError::TooLarge { path: path.to_path_buf(), bytes });
     }
-    let contents = std::fs::read(path).map_err(read)?;
+    let contents = florastack_core::fs::read(path).map_err(read)?;
     let mut reader = FrameReader::new(DevelopSettings::default(), ReadOptions::default());
     let frame = reader.read(&contents, Quality::Preview).map_err(|source| ViewError::Decode { path: path.to_path_buf(), source })?;
     drop(contents);
@@ -240,11 +240,11 @@ mod tests {
     #[test]
     fn files_that_dont_exist_or_dont_decode_are_errors() {
         let dir = std::env::temp_dir().join(format!("florastack-view-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        florastack_core::fs::create_dir_all(&dir).unwrap();
         assert!(matches!(load(&dir.join("missing.tif"), None), Err(ViewError::Read { .. })));
         let junk = dir.join("junk.tif");
-        std::fs::write(&junk, b"not an image").unwrap();
+        florastack_core::fs::write(&junk, b"not an image").unwrap();
         assert!(matches!(load(&junk, None), Err(ViewError::Decode { .. })));
-        std::fs::remove_dir_all(&dir).unwrap();
+        florastack_core::fs::remove_dir_all(&dir).unwrap();
     }
 }

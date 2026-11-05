@@ -40,17 +40,20 @@ pub mod retouch;
 pub mod schema;
 pub mod session;
 pub mod view;
+#[cfg(target_arch = "wasm32")]
+mod webgpu;
 
 pub use compute::{Compute, ComputeInfo, Device};
 pub use engine::{DispatchOptions, Dispatched, Engine, EngineConfig, MAX_PARAMS_BYTES};
 pub use error::{CommandError, ErrorInfo, Invalid};
 pub use events::{Event, ProjectEvent};
 pub use florastack_capture as capture;
+#[cfg(not(target_arch = "wasm32"))]
+pub use jobs::ThreadExecutor;
 pub use jobs::{
     Clock, Executor, InlineExecutor, JobContext, JobId, JobInfo, JobPlan, JobState, Lane, LivePreview, ManualClock, Progress, Waker, commit,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use jobs::{SystemClock, ThreadExecutor};
+pub use jobs::{LaneExecutor, SystemClock};
 pub use registry::{CommandInfo, CommandSpec, Effects, Kind, Meta, NoParams, Params, Registry, RegistryBuilder, RegistryError, Requires};
 pub use session::Session;
 // Retouching's records, which the retouch commands take.
@@ -61,6 +64,12 @@ pub use serde_json::{Value, json};
 
 // The product identity.
 pub use florastack_core::branding;
+// What the browser build needs in place of the standard library's (the standard library's own on native targets):
+// the file system, threads, clocks and locks the page's main thread may take.
+/// Starts the browser build's storage worker, for spilled tiles (florastack-core's `TempFileStore`).
+#[cfg(target_arch = "wasm32")]
+pub use florastack_core::start_storage;
+pub use florastack_core::{fs, sync, thread, time};
 // Images and geometry, for viewers and for whatever builds images to hand to the engine.
 pub use florastack_core::{Affine, AnyImage, Cancelled, ColorSpace, Encoding, Image, Monitor, Orientation, Rect, Sample, SampleFormat};
 // Reading frames and writing outputs.

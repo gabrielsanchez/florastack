@@ -1,19 +1,32 @@
 //! Starts the FloraStack desktop app (`florastack_app`): its log on standard error, at the level `FLORASTACK_LOG`
 //! names (`warn` by default), and the files given on the command line opened (a project) or added as frames.
 //!
+//! In the browser build (`cargo xtask web`) this does nothing: the page calls the module's `start` export
+//! (`florastack_app::web::start`) once the module is loaded, and every worker loads the same module.
+//!
 //! Release builds are Windows GUI programs, so that no console window opens with the app (and closing one doesn't
 //! end it). They have no console of their own: their standard output and error reach whatever the launcher
 //! redirects them to, such as a pipe or a file, and nothing otherwise. Debug builds keep the console, for the log.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::ExitCode;
 
+#[cfg(not(target_arch = "wasm32"))]
 use clap::Parser;
+#[cfg(not(target_arch = "wasm32"))]
 use florastack_app::{Options, run};
+#[cfg(not(target_arch = "wasm32"))]
 use florastack_engine::branding;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing_subscriber::filter::LevelFilter;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser)]
 #[command(name = branding::GUI_BINARY, version)]
 struct Arguments {
@@ -39,6 +52,7 @@ struct Arguments {
     files: Vec<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
     // In the macOS app, before any thread starts: may start the app again with the bundled camera drivers' folders.
     #[cfg(all(feature = "gphoto", target_os = "macos"))]
@@ -66,6 +80,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn control_run(options: Options, port: u16, file: Option<&std::path::Path>, headless: bool, size: [u32; 2]) -> Result<(), String> {
     let file = file.ok_or("--control requires --control-token-file")?;
     let token = florastack_engine::control::read_token(file).map_err(|e| e.to_string())?;

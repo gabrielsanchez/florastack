@@ -1,0 +1,9 @@
+# What `docker build` needn't see (Dockerfile): build output, downloaded test data, tools' folders.
+target/
+corpus/
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+**/node_modules/
+.git/
+.github/

@@ -45,12 +45,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use clock::SystemClock;
-pub use clock::{Clock, ManualClock};
+pub use clock::{Clock, ManualClock, SystemClock};
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::ThreadExecutor;
-pub use executor::{Executor, InlineExecutor, Task};
+pub use executor::{Executor, InlineExecutor, LaneExecutor, Task};
 pub use progress::Progress;
 pub(crate) use progress::Tracker;
 pub(crate) use scheduler::{Finished, Jobs};

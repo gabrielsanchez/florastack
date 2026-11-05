@@ -206,7 +206,7 @@ impl Params for OpenParams {
 }
 
 fn same_folder(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    match (florastack_core::fs::canonicalize(a), florastack_core::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b || a.parent() == Some(b.as_path()),
         _ => false,
     }
@@ -368,7 +368,7 @@ struct SavedAs {
 
 /// `path` with its symbolic links and `..` resolved where it exists, as it is otherwise.
 fn resolved(path: &Path) -> std::path::PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    florastack_core::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn save_as(session: &mut Session, p: SaveAsParams) -> Result<SavedAs, CommandError> {
@@ -383,7 +383,7 @@ fn save_as(session: &mut Session, p: SaveAsParams) -> Result<SavedAs, CommandErr
         let path = session.save()?;
         return Ok(SavedAs { path: display(&path), moved: false });
     }
-    if target.exists() {
+    if florastack_core::fs::path_exists(&target) {
         return Err(florastack_project::ProjectError::Exists { path: target }.into());
     }
     let same_parent = current.parent().is_some_and(|c| resolved(c) == resolved(&parent));
@@ -392,7 +392,7 @@ fn save_as(session: &mut Session, p: SaveAsParams) -> Result<SavedAs, CommandErr
             "some frames are stored relative to the folder that holds the project, so they wouldn't be found from another folder: save it in the same folder, or add those frames again",
         ));
     }
-    std::fs::create_dir_all(&parent).map_err(|source| florastack_project::ProjectError::Write { path: parent.clone(), source })?;
+    florastack_core::fs::create_dir_all(&parent).map_err(|source| florastack_project::ProjectError::Write { path: parent.clone(), source })?;
     let temporary = session.temporary_projects().is_some_and(|root| resolved(&current).starts_with(resolved(root)));
     let (path, moved) = session.relocate(&target, temporary)?;
     Ok(SavedAs { path: display(&path), moved })
@@ -532,7 +532,7 @@ fn trash_orphans(session: &mut Session, p: TrashOrphansParams) -> Result<Trashed
     for path in p.paths {
         let path = absolute(&path)?;
         // Everything about it is checked again from its path.
-        let orphan = Orphan { path: path.clone(), last_used: std::time::SystemTime::now(), bytes: 0 };
+        let orphan = Orphan { path: path.clone(), last_used: florastack_core::time::SystemTime::now(), bytes: 0 };
         match orphans.trash(&orphan, session.trash()) {
             Ok(()) => trashed.push(display(&path)),
             Err(e) => failed.push(NotDone { path: display(&path), reason: reason(&e) }),

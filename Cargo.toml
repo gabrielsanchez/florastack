@@ -142,6 +142,26 @@ lightcraft-pipeline = { git = "https://github.com/storytold/lightcraft", rev = "
 lightcraft-develop = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
 lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
 
+# The browser build (roadmap 7.3, `cargo xtask web`). Clocks that work there too: `std::time`'s own on native targets,
+# the page's `performance.now()` and `Date.now()` in a browser, where the standard library's would panic. MIT OR
+# Apache-2.0, pure Rust; egui already uses it.
+web-time = "1.1.0"
+# Rust and the browser's JavaScript APIs: Web Workers that share the module's memory (florastack-core's `thread`),
+# the origin-private file system for spilled tiles (`TempFileStore` there), the page's files and downloads (the
+# desktop app's web build). The wasm-bindgen CLI that `cargo xtask web` runs must be this exact version. MIT OR
+# Apache-2.0.
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4.79"
+js-sys = "0.3.106"
+web-sys = "0.3.106"
+# Locks that spin rather than wait on a browser's main thread, which may not block (rayon's `web_spin_lock` feature
+# uses it too); the standard library's elsewhere. MIT OR Apache-2.0, pure Rust.
+wasm_sync = "0.1"
+# Channels whose receiver an async task awaits: the browser's file-system and GPU workers, which run an event loop
+# rather than block. MIT OR Apache-2.0, pure Rust, already in the dependency graph.
+futures-channel = "0.3.34"
+futures-core = "0.3"
+
 # Image codecs that florastack-codecs uses directly, at the versions LightCraft already brings in (ATTRIBUTION.md says
 # what each one does).
 png = "0.18"
@@ -204,6 +224,11 @@ undocumented_unsafe_blocks = "warn"
 [profile.dist]
 inherits = "release"
 strip = true
+
+# The browser build (`cargo xtask web`): optimized as release builds are, under a profile of its own so that its
+# artifacts, which a nightly toolchain and a rebuilt standard library make, stay apart from the release build's.
+[profile.web]
+inherits = "release"
 
 # Unoptimized builds run pixel loops 10 to 50 times slower, which would make the alignment accuracy tests on synthetic
 # stacks take minutes. The crates that do the pixel work are optimized in the dev profile, which the test profile

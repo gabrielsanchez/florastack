@@ -233,16 +233,16 @@ struct Written {
 pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
     let write = |source| CommandError::from(ProjectError::Write { path: path.to_path_buf(), source });
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = path.with_file_name(format!(".{name}.{}.part", std::process::id()));
+    let temp = path.with_file_name(format!(".{name}.{}.part", florastack_core::process::id()));
     let result = (|| {
-        let mut file = std::fs::File::create(&temp)?;
+        let mut file = florastack_core::fs::File::create(&temp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temp, path)
+        florastack_core::fs::rename(&temp, path)
     })();
     result.map_err(|e| {
-        let _ = std::fs::remove_file(&temp);
+        let _ = florastack_core::fs::remove_file(&temp);
         write(e)
     })
 }
@@ -260,7 +260,7 @@ impl Publication {
     pub(super) fn stage(&mut self, path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
         let parent = path.parent().ok_or_else(|| super::scientific::unavailable("an export needs a parent folder"))?;
         let error = |source| florastack_project::ProjectError::Write { path: path.to_path_buf(), source };
-        std::fs::create_dir_all(parent).map_err(error)?;
+        florastack_core::fs::create_dir_all(parent).map_err(error)?;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let mut file = tempfile::Builder::new().prefix(".export-").suffix(".part").tempfile_in(parent).map_err(error)?;
@@ -274,7 +274,7 @@ impl Publication {
     }
 
     pub(super) fn publish(self, ctx: &crate::jobs::JobContext, overwrite: bool) -> Result<(), CommandError> {
-        if !overwrite && let Some((path, _)) = self.files.iter().find(|(p, _)| p.exists()) {
+        if !overwrite && let Some((path, _)) = self.files.iter().find(|(p, _)| florastack_core::fs::path_exists(p)) {
             return Err(florastack_project::ProjectError::Exists { path: path.clone() }.into());
         }
         ctx.finalize()?;
@@ -382,7 +382,7 @@ impl Pixels {
 /// The metadata of the frame file at `path`, for a file written from it; what goes wrong goes into `notes`.
 pub(super) fn frame_metadata(path: Option<&Path>, notes: &mut Vec<String>) -> Option<florastack_codecs::Metadata> {
     let frame = path?;
-    match std::fs::read(frame) {
+    match florastack_core::fs::read(frame) {
         Ok(bytes) => Some(florastack_codecs::read_metadata(&bytes)),
         Err(e) => {
             notes.push(format!("the metadata of {} can't be read, so the file has none: {e}", frame.display()));
@@ -420,8 +420,8 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
     let frame_count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
     let path = absolute(&p.path)?;
     let sidecar_path = super::reproduce::path(&path);
-    if !p.overwrite && (path.exists() || sidecar_path.exists()) {
-        let existing = if path.exists() { &path } else { &sidecar_path };
+    if !p.overwrite && (florastack_core::fs::path_exists(&path) || florastack_core::fs::path_exists(&sidecar_path)) {
+        let existing = if florastack_core::fs::path_exists(&path) { &path } else { &sidecar_path };
         return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", existing.display())));
     }
     let cache = session.cache_dir()?;

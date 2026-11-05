@@ -10,10 +10,24 @@
 //! Stacking on the GPU falls back to the CPU when the GPU fails part way (a lost device, a driver error): the stack
 //! starts again on the CPU, frames read again, and the failure is logged. Cancellation and errors reading frames are
 //! never a reason to fall back.
+//!
+//! In a browser the GPU is WebGPU on a worker of its own, probed once per page (`crate::webgpu`): [`GpuDevice`] is the
+//! engine's handle on it there, florastack-gpu's `Gpu` on native targets.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, PoisonError};
 
-use florastack_gpu::{AdapterSummary, Gpu, GpuError, GpuTiling};
+use florastack_gpu::{AdapterSummary, GpuTiling};
+#[cfg(not(target_arch = "wasm32"))]
+use florastack_gpu::{Gpu, GpuError};
+
+use crate::error::CommandError;
+
+/// The device that stacks on the GPU: florastack-gpu's own natively, the browser's GPU worker's in a browser.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type GpuDevice = Gpu;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type GpuDevice = crate::webgpu::WebGpu;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -67,20 +81,21 @@ pub(crate) enum Backend {
         reason: String,
     },
     Gpu {
-        gpu: Gpu,
+        gpu: GpuDevice,
         tiling: GpuTiling,
     },
 }
 
 /// The outcome of probing for a GPU.
 #[derive(Clone, Debug)]
-enum Probe {
-    Ready(Gpu),
+pub(crate) enum Probe {
+    Ready(GpuDevice),
     /// Why no GPU is used.
     Unusable(String),
 }
 
 /// The process's probes: hardware adapters only, and software ones too.
+#[cfg(not(target_arch = "wasm32"))]
 static PROBES: Mutex<[Option<Probe>; 2]> = Mutex::new([None, None]);
 
 /// Makes a device on the best adapter `software` allows, compiles every kernel and runs the self-test.
@@ -113,12 +128,6 @@ fn probe(software: bool) -> Probe {
     }
 }
 
-/// In a browser the jobs can't wait for the GPU yet: they stack on the CPU.
-#[cfg(target_arch = "wasm32")]
-fn probe(_software: bool) -> Probe {
-    Probe::Unusable("the web build stacks on the CPU until its jobs can wait for the GPU".to_owned())
-}
-
 impl Compute {
     /// The device this preference stacks on, probing for a GPU the first time one is needed (see the module
     /// documentation).
@@ -128,17 +137,32 @@ impl Compute {
             Device::Auto => false,
             Device::Gpu => true,
         };
-        let mut probes = PROBES.lock().unwrap_or_else(PoisonError::into_inner);
-        let slot = &mut probes[usize::from(software)];
-        if matches!(slot, Some(Probe::Ready(gpu)) if gpu.is_lost()) {
-            tracing::warn!("the GPU device was lost: probing again");
-            *slot = None;
-        }
-        match slot.get_or_insert_with(|| probe(software)) {
-            Probe::Ready(gpu) => Backend::Gpu { gpu: gpu.clone(), tiling: GpuTiling { budget: self.budget, ..GpuTiling::default() } },
-            Probe::Unusable(reason) => Backend::Cpu { reason: reason.clone() },
+        match probed(software) {
+            Some(Probe::Ready(gpu)) => Backend::Gpu { gpu, tiling: GpuTiling { budget: self.budget, ..GpuTiling::default() } },
+            Some(Probe::Unusable(reason)) => Backend::Cpu { reason },
+            None => Backend::Cpu { reason: "the browser's GPU is still being tested".to_owned() },
         }
     }
+}
+
+/// The probe for `software` adapters or not, probing the first time; `None` while a browser's GPU is being tested,
+/// which the page's main thread doesn't wait for (a job does).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::unnecessary_wraps, reason = "the browser's probe has no outcome while it runs")]
+fn probed(software: bool) -> Option<Probe> {
+    let mut probes = PROBES.lock().unwrap_or_else(PoisonError::into_inner);
+    let slot = &mut probes[usize::from(software)];
+    if matches!(slot, Some(Probe::Ready(gpu)) if gpu.is_lost()) {
+        tracing::warn!("the GPU device was lost: probing again");
+        *slot = None;
+    }
+    Some(slot.get_or_insert_with(|| probe(software)).clone())
+}
+
+/// A browser has one GPU, which it chooses: software or not, the same probe.
+#[cfg(target_arch = "wasm32")]
+fn probed(_software: bool) -> Option<Probe> {
+    crate::webgpu::probe()
 }
 
 /// Probes for a GPU again, now, for `device`: the self-test that `compute.test` runs on demand.
@@ -148,8 +172,64 @@ pub(crate) fn reprobe(device: Device) {
         Device::Auto => false,
         Device::Gpu => true,
     };
-    let mut probes = PROBES.lock().unwrap_or_else(PoisonError::into_inner);
-    probes[usize::from(software)] = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut probes = PROBES.lock().unwrap_or_else(PoisonError::into_inner);
+        probes[usize::from(software)] = None;
+    }
+    // A browser's GPU is tested once per page.
+    #[cfg(target_arch = "wasm32")]
+    let _ = software;
+}
+
+/// The most memory a page may have in the browser build: 4 GiB, WebAssembly's 32-bit limit, which `cargo xtask web`
+/// links for.
+pub const BROWSER_MEMORY: u64 = 4 << 30;
+
+/// What a browser page keeps for itself beyond what a stack takes: the module, the app, its textures.
+const BROWSER_RESERVE: u64 = 384 << 20;
+
+/// The memory a stack of color frames of `frame` pixels (width and height) onto a canvas of `canvas` pixels may take
+/// at its peak, with `budget` bytes for its working tiles: the frame being folded and the next, read beside it, as
+/// linear `f32`; the working tiles; and the result with its alpha, its copy brought into range and its encoded file.
+pub fn stack_memory(frame: (usize, usize), canvas: (usize, usize), budget: usize) -> u64 {
+    const COLOR: u64 = 3 * 4;
+    let pixels = |(w, h): (usize, usize)| (w as u64).saturating_mul(h as u64);
+    let (frame, canvas) = (pixels(frame).saturating_mul(COLOR), pixels(canvas).saturating_mul(COLOR));
+    frame.saturating_mul(2).saturating_add(budget as u64).saturating_add(canvas.saturating_mul(4))
+}
+
+/// Whether `needed` bytes fit in a page beside the `held` bytes of its files, within `limit`.
+fn fits(needed: u64, held: u64, limit: u64) -> bool {
+    needed.saturating_add(held).saturating_add(BROWSER_RESERVE) <= limit
+}
+
+/// In the browser build, an error that says what to do when `command`'s stack, which needs `needed` bytes
+/// ([`stack_memory`]), wouldn't fit in the page's memory beside the files it holds. Native targets have the memory:
+/// what doesn't fit spills to disk.
+#[cfg_attr(not(target_arch = "wasm32"), allow(clippy::unnecessary_wraps, reason = "only a browser runs out"))]
+pub(crate) fn check_memory(command: &str, needed: u64) -> Result<(), CommandError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let held = florastack_core::fs::bytes_in_memory().unwrap_or(0);
+        if !fits(needed, held, BROWSER_MEMORY) {
+            let gb = |b: u64| b as f64 / f64::from(1_u32 << 30);
+            return Err(CommandError::Unavailable {
+                command: command.to_owned(),
+                reason: format!(
+                    "the stack needs about {:.1} GB of memory beside the {:.1} GB of files the page holds, and a browser page can have \
+                     {:.0} GB: stack fewer or smaller frames (the frames' size and the output's count, not their number), or use the \
+                     desktop app",
+                    gb(needed),
+                    gb(held),
+                    gb(BROWSER_MEMORY)
+                ),
+            });
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (command, needed, fits);
+    Ok(())
 }
 
 /// The memory installed, in bytes, when the system says.
@@ -191,7 +271,7 @@ pub struct MemoryInfo {
 impl MemoryInfo {
     pub(crate) fn of(tiling: &florastack_stack::Tiling) -> MemoryInfo {
         let installed = installed_memory();
-        let folder = tiling.spill_dir.clone().unwrap_or_else(std::env::temp_dir);
+        let folder = tiling.spill_dir.clone().unwrap_or_else(florastack_core::fs::temp_dir);
         MemoryInfo {
             budget_mb: tiling.budget >> 20,
             installed_mb: installed.map(|m| m >> 20),
@@ -245,5 +325,23 @@ impl ComputeInfo {
             Backend::Cpu { reason } => ("cpu", None, Some(reason)),
         };
         ComputeInfo { preference: compute.device, device, adapter, reason, budget_mb: compute.budget >> 20, memory: MemoryInfo::of(tiling) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stacks_memory_is_two_frames_the_budget_and_four_canvases() {
+        const MIB: u64 = 1 << 20;
+        // 24 MP color frames onto their own canvas, with a 512 MiB budget: 2 x 288 MB + 512 MiB + 4 x 288 MB.
+        let needed = stack_memory((6000, 4000), (6000, 4000), 512 << 20);
+        assert_eq!(needed, 6 * 288_000_000 + 512 * MIB);
+        assert!(fits(needed, 200 * MIB, BROWSER_MEMORY), "a 24 MP stack fits in a page beside 200 MB of files");
+        let large = stack_memory((11_648, 8_736), (11_648, 8_736), 512 << 20);
+        assert!(!fits(large, 0, BROWSER_MEMORY), "a 100 MP stack doesn't");
+        assert_eq!(stack_memory((usize::MAX, usize::MAX), (1, 1), 0), u64::MAX, "no overflow");
+        assert!(check_memory("stack.pyramid", u64::MAX).is_ok(), "native targets always have the memory");
     }
 }

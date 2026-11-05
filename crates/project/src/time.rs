@@ -4,9 +4,9 @@
 //! The conversions between days and civil dates are Howard Hinnant's algorithms from "chrono-Compatible Low-Level
 //! Date Algorithms" (<https://howardhinnant.github.io/date_algorithms.html>), on the proleptic Gregorian calendar.
 
+use florastack_core::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::fmt;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

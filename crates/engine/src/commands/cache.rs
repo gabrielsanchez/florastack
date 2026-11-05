@@ -60,7 +60,7 @@ struct Removed {
 
 /// The tile folder: the one set, or the system's temporary directory.
 fn tile_folder(session: &Session) -> PathBuf {
-    session.tiling().spill_dir.unwrap_or_else(std::env::temp_dir)
+    session.tiling().spill_dir.unwrap_or_else(florastack_core::fs::temp_dir)
 }
 
 fn remove_abandoned(session: &mut Session, _: NoParams) -> Result<Removed, CommandError> {
@@ -91,7 +91,7 @@ struct CacheInfo {
 
 /// The size of the files under `path`, following no links; 0 for what can't be read.
 fn size_of(path: &Path, only: Option<&str>) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    let Ok(entries) = florastack_core::fs::read_dir(path) else { return 0 };
     let mut total = 0u64;
     for entry in entries.flatten() {
         let name = entry.file_name();
@@ -114,7 +114,7 @@ fn info(session: &Session, _: NoParams) -> Result<CacheInfo, CommandError> {
         FolderSize { bytes: size_of(&folder, None), folder: display(&folder) }
     } else {
         // In the system's temporary directory, only the tile folders, named after the app.
-        let folder = std::env::temp_dir();
+        let folder = florastack_core::fs::temp_dir();
         let prefix = format!("{}-tiles-", florastack_core::branding::GUI_BINARY);
         FolderSize { bytes: size_of(&folder, Some(&prefix)), folder: display(&folder) }
     };
@@ -143,7 +143,7 @@ fn set_folder(session: &mut Session, p: FolderParams) -> Result<CacheInfo, Comma
     let folder = super::absolute(&p.folder)?;
     let (projects, tiles) = (folder.join("projects"), folder.join("tiles"));
     for made in [&projects, &tiles] {
-        std::fs::create_dir_all(made).map_err(|e| session.unavailable(format!("{} can't be made: {e}", made.display())))?;
+        florastack_core::fs::create_dir_all(made).map_err(|e| session.unavailable(format!("{} can't be made: {e}", made.display())))?;
     }
     session.set_temporary_projects(projects);
     let mut tiling = session.tiling();

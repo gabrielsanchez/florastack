@@ -76,6 +76,7 @@ pub(crate) fn guarded<T>(command: &str, f: impl FnOnce() -> Result<T, CommandErr
 }
 
 /// How long [`Session::close_project`] waits at a time for cancelled jobs to stop.
+#[cfg(not(target_arch = "wasm32"))]
 const STOP_POLL: Duration = Duration::from_millis(20);
 
 impl Session {
@@ -347,8 +348,18 @@ impl Session {
             );
         }
         self.jobs.cancel_all();
+        #[cfg(not(target_arch = "wasm32"))]
         while self.jobs.has_running() {
             self.pump(Some(STOP_POLL));
+        }
+        // A browser's main thread may not wait for the jobs to stop: they are asked to, and the project closes once
+        // they have.
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pump(None);
+            if self.jobs.has_running() {
+                return Err(self.unavailable("its jobs are stopping: close it again in a moment"));
+            }
         }
         self.close_retouch();
         let Some(open) = self.open.take() else { return Ok(None) };
@@ -535,6 +546,7 @@ impl Session {
     }
 
     /// Whether job `id` is still queued or running.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "for Engine::wait, which a browser doesn't have"))]
     pub(crate) fn job_active(&self, id: JobId) -> bool {
         self.jobs.is_active(id)
     }

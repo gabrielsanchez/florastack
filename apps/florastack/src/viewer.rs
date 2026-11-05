@@ -382,11 +382,19 @@ impl GpuViewer {
     /// largest image side it takes, or `None` when the viewer's shaders don't compile there (the viewer then draws
     /// through egui). The device then logs its errors instead of panicking, as wgpu does by default: a crash loses
     /// work.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn install(state: &egui_wgpu::RenderState) -> Option<u32> {
         state.device.on_uncaptured_error(Arc::new(|e: wgpu::Error| tracing::error!("the display's GPU reported an error: {e}")));
         let viewer = GpuViewer::new(&state.device, state.target_format)?;
         state.renderer.write().callback_resources.insert(viewer);
         Some(state.device.limits().max_texture_dimension_2d)
+    }
+
+    /// In a browser built with threads, wgpu's objects can't be shared between threads, which egui's renderer asks of
+    /// what it keeps: the viewer draws through egui there.
+    #[cfg(target_arch = "wasm32")]
+    pub fn install(_state: &egui_wgpu::RenderState) -> Option<u32> {
+        None
     }
 
     /// The viewer's resources on `device`, drawing to textures of the format `target`; `None` when its shaders don't

@@ -5,6 +5,7 @@
 # User guide
 
 - [Installing FloraStack](user/install.md)
+- [In the browser](user/browser.md)
 - [Your first stack in five minutes](user/first-stack.md)
 - [Choosing a method](user/methods.md)
 - [The Stack tab](user/stack-tab.md)
@@ -35,6 +36,7 @@
 - [Tests, the corpus and the quality gate](dev/quality.md)
 - [The LightCraft dependency](dev/lightcraft.md)
 - [Packaging and releasing](dev/packaging.md)
+- [The browser build](dev/web.md)
 - [Manual release checks](dev/manual-checks.md)
 - [Fuzzing](dev/fuzzing.md)
 - [Writing the documentation](dev/docs.md)

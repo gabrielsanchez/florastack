@@ -14,8 +14,9 @@ developer tooling. ATTRIBUTION.md records the source of each item and what it is
   Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
   Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
   are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).
-- crates/testkit/src/lib.rs and xtask/src/ci.rs are adapted from LightCraft
-  (https://github.com/storytold/lightcraft), files crates/testkit/src/lib.rs and xtask/src/ci_report.rs.
+- crates/testkit/src/lib.rs, xtask/src/ci.rs and the web server of xtask/src/web.rs are adapted from
+  LightCraft (https://github.com/storytold/lightcraft), files crates/testkit/src/lib.rs,
+  xtask/src/ci_report.rs and xtask/src/web.rs.
   Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
   Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
   are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).

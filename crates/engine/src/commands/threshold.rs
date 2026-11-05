@@ -159,7 +159,7 @@ fn threshold(session: &Session, p: ThresholdParams) -> Result<JobPlan<Shown>, Co
             Shown { path: path.display().to_string(), width: stats.width(), height: stats.height(), level: f64::from(level), below, measured };
         Ok(commit(move |session: &mut Session| {
             if let Some(old) = previous.filter(|old| *old != path)
-                && let Err(e) = std::fs::remove_file(&old)
+                && let Err(e) = florastack_core::fs::remove_file(&old)
             {
                 tracing::debug!("cannot remove the old threshold picture {}: {e}", old.display());
             }

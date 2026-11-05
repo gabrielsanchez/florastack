@@ -12,6 +12,7 @@ mod layers;
 mod python;
 mod quality;
 mod sha256;
+mod web;
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -37,6 +38,9 @@ commands:
                 that benches record (`cargo xtask bench --help` for the options)
   dist          build the release packages of one target (installers, archives, the Python wheel) with
                 SHA256SUMS.txt, named from branding.toml (`cargo xtask dist --help` for the targets and formats)
+  web           build the browser version into target/web-site (a static site), and serve it with --serve or
+                run its headless browser test with --test (`cargo xtask web --help`; needs a nightly toolchain
+                and the wasm-bindgen CLI)
   quality       stack every synthetic and corpus stack by every method and slab combination, score and time
                 each run, write an HTML report with 100% crops to target/quality/index.html, and fail when a
                 measure is worse than quality/baseline.json beyond its tolerance (`--gate` in CI; `--help`)
@@ -58,6 +62,7 @@ fn main() -> ExitCode {
         ["quality", rest @ ..] => cargo_metadata().and_then(|meta| quality::run(&meta, rest)),
         ["dist", rest @ ..] => cargo_metadata().and_then(|meta| dist::run(&meta, rest)),
         ["book", rest @ ..] => cargo_metadata().and_then(|meta| book::run(&meta, rest)),
+        ["web", rest @ ..] => cargo_metadata().and_then(|meta| web::run(&meta, rest)),
         [] | ["help" | "-h" | "--help"] => {
             print!("{USAGE}");
             Ok(())

@@ -19,6 +19,10 @@ tracing.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster.workspace = true
 
+# In a browser, readbacks are awaited: their mapping's callback answers through a channel.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-channel.workspace = true
+
 [dev-dependencies]
 # The CPU references the agreement tests compare every kernel with (AGENTS.md, CPU oracle): the stacking methods and
 # the alignment warp. Dev-dependencies only; `cargo xtask check-layers` allows nothing more.

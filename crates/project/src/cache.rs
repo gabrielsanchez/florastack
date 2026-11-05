@@ -11,8 +11,8 @@
 //! Reading a file back checks its size and hash against its reference. [`CacheDir`] reads and writes them, from any
 //! thread.
 
+use florastack_core::fs::File;
 use std::fmt;
-use std::fs::File;
 use std::io::{BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -281,9 +281,9 @@ impl CacheWriter {
         check_stem(stem)?;
         check_extension(extension)?;
         let dir = root.join(area.dir());
-        std::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir.clone(), source })?;
+        florastack_core::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir.clone(), source })?;
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temp = dir.join(format!(".{stem}.{}.{n}{PART_SUFFIX}", std::process::id()));
+        let temp = dir.join(format!(".{stem}.{}.{n}{PART_SUFFIX}", florastack_core::process::id()));
         let file = File::create(&temp).map_err(|source| ProjectError::Write { path: temp.clone(), source })?;
         Ok(CacheWriter {
             file: Some(BufWriter::with_capacity(1 << 20, file)),
@@ -313,7 +313,7 @@ impl CacheWriter {
             return Err(ProjectError::CacheKey { len: key.len() });
         }
         let failed = |temp: &Path, source| {
-            let _ = std::fs::remove_file(temp);
+            let _ = florastack_core::fs::remove_file(temp);
             ProjectError::Write { path: temp.to_path_buf(), source }
         };
         let Some(writer) = self.file.take() else {
@@ -331,7 +331,7 @@ impl CacheWriter {
         let path = CachePath::new(self.area, &name).ok_or_else(|| ProjectError::CacheName { name: name.clone() })?;
         let target = self.dir.join(&name);
         // A file with this name has these very bytes (its name holds their hash), so replacing it changes nothing.
-        std::fs::rename(&self.temp, &target).map_err(|e| failed(&self.temp, e))?;
+        florastack_core::fs::rename(&self.temp, &target).map_err(|e| failed(&self.temp, e))?;
         Ok(CacheRef { path, size, hash, key })
     }
 }
@@ -353,7 +353,7 @@ impl Drop for CacheWriter {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
             drop(file);
-            let _ = std::fs::remove_file(&self.temp);
+            let _ = florastack_core::fs::remove_file(&self.temp);
         }
     }
 }

@@ -16,8 +16,8 @@
 //! temporary directory are the other half of startup cleanup, and are removed outright by
 //! `florastack_core::TempFileStore::remove_abandoned`: they hold only spilled tiles, never the user's work.
 
+use florastack_core::time::{Duration, SystemTime};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use florastack_core::branding::PROJECT_EXTENSION;
 use florastack_core::{LockFile, LockState};
@@ -65,7 +65,7 @@ impl Orphans {
 
     /// The orphans as if the time were `now`.
     pub fn find_at(&self, now: SystemTime) -> Result<Vec<Orphan>, ProjectError> {
-        let entries = match std::fs::read_dir(&self.root) {
+        let entries = match florastack_core::fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(source) => return Err(ProjectError::Read { path: self.root.clone(), source }),
@@ -103,7 +103,7 @@ impl Orphans {
 
     /// The orphan at `path`, or why it isn't one.
     fn check(&self, path: &Path, now: SystemTime) -> Result<Orphan, &'static str> {
-        let meta = std::fs::symlink_metadata(path).map_err(|_| "it can't be examined")?;
+        let meta = florastack_core::fs::symlink_metadata(path).map_err(|_| "it can't be examined")?;
         if !meta.is_dir() {
             return Err("it isn't a folder");
         }
@@ -122,7 +122,7 @@ impl Orphans {
             Ok(LockState::Held) => return Err("it is open in FloraStack"),
             Err(_) => return Err("it can't be told whether it is open"),
         }
-        let times = [std::fs::metadata(&file), std::fs::metadata(&lock)];
+        let times = [florastack_core::fs::metadata(&file), florastack_core::fs::metadata(&lock)];
         let last_used = times.iter().filter_map(|m| m.as_ref().ok()?.modified().ok()).max().ok_or("its age can't be told")?;
         // A time in the future (a clock set back) counts as now.
         if now.duration_since(last_used).unwrap_or(Duration::ZERO) < self.max_age {
@@ -134,7 +134,7 @@ impl Orphans {
 
 /// Whether two paths name the same folder.
 fn same_dir(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    match (florastack_core::fs::canonicalize(a), florastack_core::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -142,10 +142,10 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 /// The bytes of the files in a folder and its subfolders, without following links, eight levels deep at most.
 fn folder_bytes(dir: &Path, depth: usize) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = florastack_core::fs::read_dir(dir) else { return 0 };
     entries
         .flatten()
-        .map(|e| match std::fs::symlink_metadata(e.path()) {
+        .map(|e| match florastack_core::fs::symlink_metadata(e.path()) {
             Ok(m) if m.is_file() => m.len(),
             Ok(m) if m.is_dir() && depth < 8 => folder_bytes(&e.path(), depth + 1),
             _ => 0,
