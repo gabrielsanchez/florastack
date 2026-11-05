@@ -1,6 +1,6 @@
 //! Explicit Marlin G-code adapter (<https://marlinfw.org/docs/gcode/M400.html>) and FloraStack's DIY line protocol.
 //! No proprietary protocol is inferred. Zaber ASCII is a declared unavailable adapter pending hardware validation:
-//! <https://www.zaber.com/protocol-manual?protocol=ascii>. See docs/capture.md for the DIY firmware contract.
+//! <https://www.zaber.com/protocol-manual?protocol=ascii>. See book/src/user/capture.md for the DIY firmware contract.
 
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};

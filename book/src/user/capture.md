@@ -6,6 +6,32 @@ Many current cameras offer in-camera focus bracketing. Set the focus range, numb
 
 On Windows, configure the camera maker's tethering app to save into the watched folder: [Canon EOS Utility](https://www.usa.canon.com/support/eos-utilities), [Nikon NX Tether](https://downloadcenter.nikonimglib.com/en/products/578/NX_Tether.html), [Sony Imaging Edge Desktop Remote](https://support.d-imaging.sony.co.jp/app/imagingedge/en/instruction/4_5_remote.php), or [Fujifilm X Acquire](https://fujifilm-x.com/global/products/software/x-acquire/). Availability of tethered capture and automatic transfer depends on the model, connection, firmware and application. Check the maker's compatibility list. Built-in camera control uses libgphoto2 on Linux/macOS; Windows uses this watch-folder path and has the same serial rail controls.
 
+## Tethered capture on Windows, step by step
+
+Windows builds have no built-in camera control: the camera maker's tethering app takes the photos and saves them, and
+FloraStack stacks them as they arrive. The same steps work on macOS and Linux with any tethering app.
+
+1. **Make two empty folders**, for example `C:\Capture\Bee` for the photos and `C:\Capture\Bee-results` for what
+   FloraStack makes. Keep the results folder outside the photos' folder.
+2. **Set up the tethering app** (EOS Utility, NX Tether, Imaging Edge Desktop, X Acquire or another) to save every
+   photo into `C:\Capture\Bee`, with one file per photo and its final name. RAW or JPEG both work; RAW is best.
+3. **Set the camera** as for any stack (see [Shooting for focus stacking](shooting.md)): manual exposure, fixed white
+   balance, autofocus off. Use its focus bracketing if it has one, or a rail.
+4. **Start watching.** In FloraStack's **Capture** tab, pick `C:\Capture\Bee` as the watched folder,
+   `C:\Capture\Bee-results` as the results folder and a preset (**Insect macro**, for example), then press **Watch
+   folder and stack**.
+5. **Shoot.** Each photo shows up in a running stack in the viewer soon after it arrives, and the Capture tab counts
+   the frames stacked so far.
+6. **Stop shooting.** Once no new photo has arrived for the idle time, FloraStack aligns the whole stack again,
+   stacks it at full quality and saves the project, the stacked TIFF and a summary in the results folder. Open the
+   project from there to retouch or export it differently.
+
+If the camera only brackets to its card, copy the finished bracket into the watched folder instead, or drop it on the
+Stack tab. With a serial rail, the Capture tab can also move the rail between photos and wait for each one ([Serial
+rails](#serial-rails), below).
+
+## The standalone watcher
+
 For a standalone watcher, the CLI provides:
 
 ```sh
@@ -25,7 +51,7 @@ cargo build -p florastack-cli --features gphoto
 
 Windows builds must omit `gphoto`; enabling it there gives an explicit build error. The optional FFI module is excluded from Windows and default builds. There is no static link, LGPL Rust crate, or build-time dependency on libgphoto2 headers. Install a current libgphoto2 shared library with the OS package manager (`sudo apt install libgphoto2-6` on Debian/Ubuntu, `brew install libgphoto2` on macOS). Close competing photo importers and tether applications, connect exactly one supported camera, then **Connect camera**. Discovery is also available through `capture.camera` with `action=discover`; ambiguous connections are refused.
 
-The library is LGPL-2.1. FloraStack loads `libgphoto2.so.6` on Linux or `libgphoto2.6.dylib` on macOS at run time: on macOS first the copy inside the app bundle, then Homebrew's usual absolute paths. The release packages ([packaging guide](packaging.md#camera-control-and-libgphoto2)) carry it in the macOS app and the Flatpak, as separate shared libraries built from pinned sources that each release attaches; the .deb and .rpm depend on the distribution's package, and the tarball, AppImage and CLI archives use whichever is installed. Windows packages never include it. To use a different compatible build, set `FLORASTACK_GPHOTO_LIBRARY` to its **absolute** shared-library path before starting the app (and `CAMLIBS` and `IOLIBS` to its driver folders, if they aren't where it was built to find them). Its drivers, USB access and companion libraries remain the installed library's responsibility. Missing libraries, symbols, permissions or unsupported operations produce errors. [Public API](https://gphoto.sourceforge.io/doc/api/) and [camera support and focus controls](https://gphoto.sourceforge.io/doc/remote/).
+The library is LGPL-2.1. FloraStack loads `libgphoto2.so.6` on Linux or `libgphoto2.6.dylib` on macOS at run time: on macOS first the copy inside the app bundle, then Homebrew's usual absolute paths. The release packages ([packaging guide](../dev/packaging.md#camera-control-and-libgphoto2)) carry it in the macOS app and the Flatpak, as separate shared libraries built from pinned sources that each release attaches; the .deb and .rpm depend on the distribution's package, and the tarball, AppImage and CLI archives use whichever is installed. Windows packages never include it. To use a different compatible build, set `FLORASTACK_GPHOTO_LIBRARY` to its **absolute** shared-library path before starting the app (and `CAMLIBS` and `IOLIBS` to its driver folders, if they aren't where it was built to find them). Its drivers, USB access and companion libraries remain the installed library's responsibility. Missing libraries, symbols, permissions or unsupported operations produce errors. [Public API](https://gphoto.sourceforge.io/doc/api/) and [camera support and focus controls](https://gphoto.sourceforge.io/doc/remote/).
 
 **Refresh live view** retrieves a still live-view image; refresh again after focusing. With a supported `manualfocusdrive`, move by near/far unit pulses and mark both endpoints from that view. Turn off continuous autofocus, avoid shutter-triggered autofocus, and do not touch the focus ring or change camera focus settings. Marks count relative motor commands within the connection; they are not measured lens positions and cannot correct backlash, slip or nonuniform optical motion. Reconnects, focus errors and **Reset lens marks** invalidate both marks. Reset them after any uncertain movement. Unsupported camera/driver capabilities produce an error instead of pretending a move succeeded.
 

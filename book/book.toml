@@ -1,0 +1,25 @@
+# FloraStack's user and developer guide, built with mdBook (https://rust-lang.github.io/mdBook/).
+# `cargo xtask book` builds it into target/book/ and checks every link with lychee; the developer guide's
+# "Writing the documentation" chapter (src/dev/docs.md) says how.
+
+[book]
+title = "FloraStack"
+description = "The user and developer guide of FloraStack, free and open-source focus stacking in pure Rust."
+authors = ["The FloraStack contributors"]
+language = "en"
+src = "src"
+
+[build]
+# Outside the source tree, with the rest of the build's output.
+build-dir = "../target/book"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/gabrielsanchez/florastack"
+edit-url-template = "https://github.com/gabrielsanchez/florastack/edit/main/book/{path}"
+
+[output.html.fold]
+enable = true
+level = 1

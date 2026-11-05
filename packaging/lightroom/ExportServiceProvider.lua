@@ -56,7 +56,7 @@ function Provider.sectionsForTopOfDialog(factory, properties)
                 {title = "Depth map", value = "depthmap"},
                 {title = "Weighted average", value = "average"},
             }},
-            factory:static_text {title = "Inputs and logs are retained beside the result. See docs/integrations.md."},
+            factory:static_text {title = "Inputs and logs are retained beside the result. See book/src/user/integrations.md."},
         },
     }}
 end

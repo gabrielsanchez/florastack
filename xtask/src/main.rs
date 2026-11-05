@@ -2,6 +2,7 @@
 //! FloraStack crate: it checks the workspace from the outside, through `cargo metadata` and the manifests themselves.
 
 mod bench;
+mod book;
 mod branding;
 mod ci;
 mod corpus;
@@ -23,13 +24,15 @@ commands:
                 check that every crate inherits the workspace lints, that test-only crates and features are
                 used from [dev-dependencies] only, and that the binaries named in branding.toml exist
   ci            run what CI runs (.github/workflows/ci.yml): cargo fmt --check, clippy, check-layers, the tests,
-                the quality gate, cargo deny and cargo audit, stopping at the first failure, then print a summary
-                that lists the tests skipped for want of hardware or corpus files (cargo-deny and cargo-audit must
-                be installed)
+                the quality gate, cargo deny, cargo audit and the book's links, stopping at the first failure, then print a summary
+                that lists the tests skipped for want of hardware or corpus files (cargo-deny, cargo-audit, mdBook
+                and lychee must be installed)
   corpus        download the sample focus stacks pinned in corpus/manifest.toml (sha256-verified) and check
                 the local stacks in corpus/local/ (`cargo xtask corpus --help` for the options)
   gltf-validator install the pinned Khronos glTF validator test fixture outside the repository (needs Node.js/npm)
   python        build the Python extension with maturin in target/python-tests and run pytest (Python 3.9+)
+  book          build the user and developer guide (book/, mdBook) into target/book and check every link with
+                lychee; --update-reference writes the engine-command reference (`cargo xtask book --help`)
   bench         run the criterion benchmarks and write target/bench-summary.json, with the quality metrics
                 that benches record (`cargo xtask bench --help` for the options)
   dist          build the release packages of one target (installers, archives, the Python wheel) with
@@ -54,6 +57,7 @@ fn main() -> ExitCode {
         ["bench", rest @ ..] => cargo_metadata().and_then(|meta| bench::run(&meta, rest)),
         ["quality", rest @ ..] => cargo_metadata().and_then(|meta| quality::run(&meta, rest)),
         ["dist", rest @ ..] => cargo_metadata().and_then(|meta| dist::run(&meta, rest)),
+        ["book", rest @ ..] => cargo_metadata().and_then(|meta| book::run(&meta, rest)),
         [] | ["help" | "-h" | "--help"] => {
             print!("{USAGE}");
             Ok(())

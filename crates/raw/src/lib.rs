@@ -23,7 +23,7 @@
 //!   a raw converter is no RAW file: `florastack-codecs` reads it, and `florastack-engine` sends each file to the crate
 //!   that reads it (this crate's [`probe`] says which files are RAW).
 //!
-//! LightCraft's crates, pinned in the workspace manifest (`docs/lightcraft.md`), stay behind this crate's own types:
+//! LightCraft's crates, pinned in the workspace manifest (`book/src/dev/lightcraft.md`), stay behind this crate's own types:
 //! `lightcraft-raw` decodes, demosaics, rebuilds highlights and holds the DNG color model, and `lightcraft-pipeline`
 //! reduces noise and estimates chromatic aberration and white balance. None of their types is part of this crate's
 //! API.

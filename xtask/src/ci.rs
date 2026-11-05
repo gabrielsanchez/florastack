@@ -37,8 +37,8 @@ impl Step {
 /// The step that runs the tests, the only one whose skips the summary can report.
 const TEST_STEP: &str = "test";
 
-/// Everything CI runs, in its order: the `check` job (on every OS), then the `dependencies` job. A test keeps this list
-/// and the workflow's `run:` lines the same.
+/// Everything CI runs, in its order: the `check` job (on every OS), the `dependencies` job, then the `docs` job. A test
+/// keeps this list and the workflow's `run:` lines the same.
 pub const STEPS: &[Step] = &[
     Step { name: "fmt", args: &["fmt", "--all", "--check"], tool: None },
     Step { name: "clippy", args: &["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"], tool: None },
@@ -60,6 +60,8 @@ pub const STEPS: &[Step] = &[
     Step { name: "quality", args: &["xtask", "quality", "--gate"], tool: None },
     Step { name: "deny", args: &["deny", "check"], tool: Some("cargo-deny") },
     Step { name: "audit", args: &["audit"], tool: Some("cargo-audit") },
+    // mdBook and lychee aren't cargo subcommands: `cargo xtask book` checks for them itself.
+    Step { name: "book", args: &["xtask", "book"], tool: None },
 ];
 
 /// How a step went.

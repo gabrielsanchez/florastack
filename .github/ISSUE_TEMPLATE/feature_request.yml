@@ -1,0 +1,23 @@
+name: Idea or feature request
+description: Something FloraStack could do, or do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The task or the problem, rather than the solution. What you shoot, how you work, and where FloraStack gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: How you imagine it working. Mention other software that does it well, if any (FloraStack never copies another program's code, but learning from how it behaves is fine).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do now
+      description: Workarounds or alternatives you've tried.

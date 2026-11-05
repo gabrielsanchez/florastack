@@ -2,7 +2,7 @@
 //! always on screen (the method, radius and smoothing, the alignment's terms, the framing) with an Advanced section for
 //! the rest, the depth map's contrast-threshold step, and the outputs with their parameters, two of which can be
 //! compared. Every setting has a tooltip that says what it does and when to change it, and a "?" that opens its section
-//! of `docs/stack-tab.md`. Settings change through `stack.set` and `align.set` (a slider's drag is one undo step), and
+//! of `book/src/user/stack-tab.md`. Settings change through `stack.set` and `align.set` (a slider's drag is one undo step), and
 //! each change of a stacking setting asks for a quarter-scale preview once the frames are aligned, beside any full
 //! stack still running.
 
@@ -16,7 +16,7 @@ use crate::prefs::{Compare, Method};
 
 /// The docs page that every "?" opens, at the setting's section.
 pub fn docs_url(anchor: &str) -> String {
-    format!("{}/blob/main/docs/stack-tab.md#{anchor}", env!("CARGO_PKG_REPOSITORY"))
+    format!("{}/blob/main/book/src/user/stack-tab.md#{anchor}", env!("CARGO_PKG_REPOSITORY"))
 }
 
 /// A "?" after a setting: its section of the docs, opened in the browser.
@@ -492,7 +492,7 @@ mod tests {
         assert_eq!(depth, "Depth map · radius 2.5 · smoothing 8 · fills 40%");
         assert_eq!(made_with("pyramid", &json!({ "grit": 0.25, "rangeLimit": 1.0 })), "Pyramid · grit 0.25 · range limit 1");
         assert_eq!(made_with("slab", &json!({})), "slab", "an unknown method shows as its name");
-        assert!(docs_url("radius").ends_with("/blob/main/docs/stack-tab.md#radius"));
+        assert!(docs_url("radius").ends_with("/blob/main/book/src/user/stack-tab.md#radius"));
     }
 
     /// GitHub's anchor for a heading: lower case, spaces as hyphens, other punctuation dropped.
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn every_learn_more_link_has_its_section_in_the_docs() {
-        let docs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/stack-tab.md")).unwrap();
+        let docs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../book/src/user/stack-tab.md")).unwrap();
         let sections: Vec<String> = docs.lines().filter_map(|l| l.strip_prefix("## ")).map(anchor).collect();
         let source = include_str!("stack_tab.rs");
         // A setting's section is the literal after its tooltip's key, or the one `learn_more` and `row` are given.
@@ -526,7 +526,7 @@ mod tests {
         let anchors: Vec<&str> = anchors.into_iter().filter(|a| !a.is_empty() && a.chars().all(|c| c.is_ascii_lowercase() || c == '-')).collect();
         assert!(anchors.len() > 20, "{anchors:?}");
         for a in anchors {
-            assert!(sections.iter().any(|s| s == a), "docs/stack-tab.md has no section for #{a}: {sections:?}");
+            assert!(sections.iter().any(|s| s == a), "book/src/user/stack-tab.md has no section for #{a}: {sections:?}");
         }
     }
 }

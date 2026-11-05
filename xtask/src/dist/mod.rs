@@ -1,6 +1,6 @@
 //! `cargo xtask dist`: the release packages of one target, named from `branding.toml` (display name, binary names,
 //! app ID) and the workspace version, written with `SHA256SUMS.txt` into one folder. `.github/workflows/release.yml`
-//! runs it once per target on a version tag and publishes what the runs made; docs/packaging.md is the guide.
+//! runs it once per target on a version tag and publishes what the runs made; book/src/dev/packaging.md is the guide.
 //!
 //! The apps are built with the `dist` profile (the release profile, stripped), with camera control (`gphoto`) on
 //! Linux and macOS only. Each package format is a function of the platform's module; they share the staging helpers
@@ -26,7 +26,7 @@ pub const USAGE: &str = "\
 usage: cargo xtask dist [--target TARGET] [--formats LIST] [--out DIR] [--tag TAG]
 
 Builds the release packages of one target from the identity in branding.toml and the workspace version, and
-writes them with SHA256SUMS.txt into one folder (docs/packaging.md). Refuses an app ID that still contains the
+writes them with SHA256SUMS.txt into one folder (book/src/dev/packaging.md). Refuses an app ID that still contains the
 OWNER placeholder.
 
   --target TARGET  x86_64-pc-windows-msvc, aarch64-pc-windows-msvc, universal-apple-darwin, aarch64-apple-darwin,

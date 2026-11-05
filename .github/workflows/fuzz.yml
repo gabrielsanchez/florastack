@@ -1,0 +1,83 @@
+# Fuzzes FloraStack's file readers (the cargo-fuzz targets in fuzz/) for a while each week, and on demand, starting from
+# the format fixtures that corpus/manifest.toml pins. A crash fails the run and is uploaded as an artifact: reproduce it
+# with `cargo fuzz run <target> <file>` in fuzz/, and fix it with a regression test (SECURITY.md). This isn't part of
+# `cargo xtask ci`, whose list of steps matches ci.yml alone.
+#
+# Third-party actions are pinned to a full commit SHA, with the release in a comment. The nightly toolchain comes from
+# fuzz/rust-toolchain.toml.
+
+name: Fuzz
+
+on:
+  schedule:
+    # Mondays at 03:17 UTC.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: How long to fuzz each target, in seconds
+        default: "900"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: codecs_probe
+            seeds: ../corpus/fixtures/pngsuite ../corpus/fixtures/tiff ../corpus/fixtures/webp ../corpus/fixtures/openexr ../corpus/fixtures/raw
+            options: ""
+          - target: codecs_read
+            seeds: ../corpus/fixtures/pngsuite ../corpus/fixtures/tiff ../corpus/fixtures/webp ../corpus/fixtures/openexr
+            options: ""
+          # RAW files are large: a larger input size and memory limit than libFuzzer's defaults.
+          - target: raw_decode
+            seeds: ../corpus/fixtures/raw
+            options: -max_len=4194304 -rss_limit_mb=4096
+    env:
+      FUZZ_SECONDS: ${{ inputs.seconds || '900' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The workspace's toolchain (rust-toolchain.toml), for xtask, and the fuzz crate's nightly.
+      - name: Install the Rust toolchains
+        run: rustup toolchain install && cd fuzz && rustup toolchain install
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz --version 0.13.2
+
+      # The same cache of the format fixtures as CI's.
+      - name: Cache test fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: corpus/fixtures
+          key: corpus-fixtures-${{ hashFiles('corpus/manifest.toml') }}
+          restore-keys: corpus-fixtures-
+          enableCrossOsArchive: true
+
+      - name: Fetch test fixtures
+        run: cargo xtask corpus --fixtures
+
+      # The first folder is the corpus the fuzzer grows; the fixtures are read-only seeds.
+      - name: Fuzz
+        working-directory: fuzz
+        run: cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} ${{ matrix.seeds }} -- "-max_total_time=$FUZZ_SECONDS" ${{ matrix.options }}
+
+      - name: Keep the crashes
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

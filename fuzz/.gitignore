@@ -1,0 +1,7 @@
+# What fuzzing makes: the build, the corpora the fuzzer grows, the crashes it finds and coverage reports. Turn a crash
+# into a regression test in the crate it crashed (AGENTS.md, Never crash); don't commit the input itself unless it is
+# small and needed by that test.
+/target
+/corpus
+/artifacts
+/coverage

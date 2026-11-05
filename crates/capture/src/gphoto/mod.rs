@@ -5,7 +5,7 @@
 //! its drivers in `Contents/PlugIns/libgphoto2/`), which [`Bundled`] finds next to the executable. The library reads
 //! its drivers' folders from `CAMLIBS` and `IOLIBS`, or else from the folders it was built for, which don't exist on
 //! a user's Mac: [`prepare_bundled_drivers`] sets them. Any user may load another libgphoto2 instead by setting
-//! [`LIBRARY_VARIABLE`] to its absolute path, as the LGPL requires (docs/packaging.md).
+//! [`LIBRARY_VARIABLE`] to its absolute path, as the LGPL requires (book/src/dev/packaging.md).
 
 mod ffi;
 pub use ffi::{Connection, discover};

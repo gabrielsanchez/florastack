@@ -1,7 +1,11 @@
-"""Render README screenshots through the authenticated control channel, without opening a window.
+"""Render the README's and the user guide's screenshots through the authenticated control channel, without opening a
+window: the app loads, aligns and stacks the frames, then each tab is captured with the pyramid output.
 
-Run after cargo build -p florastack: python scripts/readme_screenshots.py
-NumPy is needed only for the original synthetic demo; --frames accepts an existing stack instead.
+Run after cargo build -p florastack:
+    python scripts/readme_screenshots.py --frames corpus/local/mosquito-jpg/*.JPG --name Mosquito
+Without --frames it stacks an original synthetic flower, for which NumPy is needed. The images go to book/src/images
+as <tab>.webp (quality 90, a tenth of a PNG's size, through Pillow) or, with --format png, as PNG files; the Retouch
+tab shows the middle frame as its source.
 """
 
 import argparse
@@ -52,7 +56,7 @@ def demo(folder):
     return paths
 
 
-def capture(app, output, frames):
+def capture(app, output, frames, name, tabs, size, image_format):
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="florastack-screenshots-") as temporary:
         folder = Path(temporary)
@@ -62,7 +66,7 @@ def capture(app, output, frames):
             file.write(token)
         files = [Path(path).resolve() for path in frames] if frames else demo(folder)
         process = subprocess.Popen([str(app.resolve()), "--headless", "--control", "--control-token-file", str(token_file),
-                                    "--temporary-projects", str(folder / "projects")],
+                                    "--temporary-projects", str(folder / "projects"), "--width", str(size[0]), "--height", str(size[1])],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         lines = queue.Queue()
 
@@ -99,7 +103,7 @@ def capture(app, output, frames):
                 result = request("command.dispatch", {"command": command, "params": {} if params is None else params})
                 if "job" not in result:
                     return result["result"]
-                deadline = time.monotonic() + 180
+                deadline = time.monotonic() + 900
                 while time.monotonic() < deadline:
                     job = request("job.get", {"job": result["job"]})
                     if job["state"] == "done":
@@ -111,24 +115,39 @@ def capture(app, output, frames):
 
             run("compute.set", {"device": "cpu"})
             run("project.new")
-            run("project.rename", {"name": "Synthetic flower" if not frames else "Focus stack"})
-            run("project.addFrames", {"paths": [str(path) for path in files]})
+            run("project.rename", {"name": name or ("Focus stack" if frames else "Synthetic flower")})
+            added = run("project.addFrames", {"paths": [str(path) for path in files]})["added"]
             if not frames:
                 run("align.set", {"shift_x": False, "shift_y": False, "scale": False, "rotation": False, "brightness": False})
             run("align.run")
             result = run("stack.pyramid")
-            for tab in ("stack", "export"):
-                request("ui.setView", {"tab": tab, "output": result["output"]})
-                deadline = time.monotonic() + 30
+            def settle():
+                deadline = time.monotonic() + 300
                 while not request("ui.state")["ready"]:
                     if time.monotonic() > deadline:
                         raise TimeoutError("viewer did not finish loading")
                     time.sleep(0.05)
+
+            for tab in tabs:
+                request("ui.setView", {"tab": tab, "output": result["output"]})
+                settle()
+                if tab == "retouch":
+                    # The tab opens the output for retouching by itself; then a frame becomes the source.
+                    run("retouch.setSource", {"frame": added[len(added) // 2]})
+                    settle()
                 # Let layout, thumbnails and the viewer's fit animation settle before capture.
                 time.sleep(0.5)
-                path = (output / f"{tab}.png").resolve()
-                request("ui.screenshot", {"path": str(path), "overwrite": True})
-                print(path)
+                png = (folder / f"{tab}.png").resolve()
+                request("ui.screenshot", {"path": str(png), "overwrite": True})
+                path = output / f"{tab}.{image_format}"
+                if image_format == "webp":
+                    from PIL import Image
+
+                    with Image.open(png) as image:
+                        image.convert("RGB").save(path, "WEBP", quality=90, method=6)
+                else:
+                    path.write_bytes(png.read_bytes())
+                print(path.resolve())
             request("ui.close", {"discardChanges": True})
             process.wait(timeout=10)
         finally:
@@ -141,7 +160,12 @@ def capture(app, output, frames):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=Path("target/debug/florastack.exe" if os.name == "nt" else "target/debug/florastack"))
-    parser.add_argument("--out", type=Path, default=Path("docs/images"))
+    parser.add_argument("--out", type=Path, default=Path("book/src/images"))
     parser.add_argument("--frames", nargs="+", default=[])
+    parser.add_argument("--name", default="", help="the project's name, shown in the title bar")
+    parser.add_argument("--tabs", default="stack,retouch,export", help="the tabs to capture, comma-separated")
+    parser.add_argument("--size", default="1440x900", help="the window's size in pixels (default 1440x900)")
+    parser.add_argument("--format", choices=("webp", "png"), default="webp", help="the images' format (webp needs Pillow)")
     args = parser.parse_args()
-    capture(args.app, args.out, args.frames)
+    size = tuple(int(v) for v in args.size.split("x"))
+    capture(args.app, args.out, args.frames, args.name, args.tabs.split(","), size, args.format)
