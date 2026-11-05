@@ -38,7 +38,7 @@ pub enum ControlError {
 pub fn read_token(path: &Path) -> Result<String, ControlError> {
     use std::io::Read;
     let mut text = String::new();
-    std::fs::File::open(path)?.take(259).read_to_string(&mut text)?;
+    florastack_core::fs::File::open(path)?.take(259).read_to_string(&mut text)?;
     if text.len() > 258 {
         return Err(ControlError::Token);
     }

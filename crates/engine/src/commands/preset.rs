@@ -20,6 +20,7 @@ pub const BUILT_IN: [(&str, &str); 4] = [
 pub const BUILT_IN_PREFIX: &str = "builtin:";
 
 /// The preset `reference` names: a built-in one (`builtin:<id>`), or a file.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "for batches and watch folders, which a browser doesn't have"))]
 pub(crate) fn load(reference: &str) -> Result<Preset, CommandError> {
     match reference.strip_prefix(BUILT_IN_PREFIX) {
         Some(id) => built_in(id),
@@ -216,7 +217,7 @@ struct Written {
 
 fn save(session: &mut Session, p: SaveParams) -> Result<Written, CommandError> {
     let path = absolute(&p.path)?;
-    if !p.overwrite && path.exists() {
+    if !p.overwrite && florastack_core::fs::path_exists(&path) {
         return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", path.display())));
     }
     let chosen = p.groups.unwrap_or_else(|| Group::ALL.to_vec());

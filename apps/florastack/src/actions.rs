@@ -147,10 +147,17 @@ impl Action {
         Some(KeyboardShortcut::new(modifiers, key))
     }
 
+    /// Whether this build has the action: in a browser, a project can't be opened from or saved to the user's folders,
+    /// and the page is closed rather than quit.
+    pub fn available(self) -> bool {
+        crate::dialogs::NATIVE_FILES || !matches!(self, Action::Open | Action::SaveAs | Action::Quit)
+    }
+
     /// The actions with shortcuts, those with more modifiers first: egui matches a shortcut whatever extra Shift is
     /// held, so Ctrl+Shift+S must be looked for before Ctrl+S takes it.
     pub fn by_shortcut() -> Vec<(Action, KeyboardShortcut)> {
-        let mut all: Vec<(Action, KeyboardShortcut)> = Action::ALL.iter().filter_map(|&a| a.shortcut().map(|s| (a, s))).collect();
+        let mut all: Vec<(Action, KeyboardShortcut)> =
+            Action::ALL.iter().filter(|a| a.available()).filter_map(|&a| a.shortcut().map(|s| (a, s))).collect();
         let weight = |m: Modifiers| u8::from(m.shift) + u8::from(m.alt) + u8::from(m.command || m.ctrl || m.mac_cmd);
         all.sort_by_key(|(_, s)| std::cmp::Reverse(weight(s.modifiers)));
         all

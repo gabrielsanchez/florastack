@@ -61,7 +61,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
 
 pub(crate) fn read_capped(path: &Path, maximum: u64) -> Result<Vec<u8>, CommandError> {
     let error = |source| florastack_project::ProjectError::Read { path: path.to_path_buf(), source };
-    let file = std::fs::File::open(path).map_err(error)?;
+    let file = florastack_core::fs::File::open(path).map_err(error)?;
     if file.metadata().map_err(error)?.len() > maximum {
         return Err(super::scientific::unavailable(format!("{} exceeds the {maximum}-byte limit", path.display())));
     }
@@ -75,7 +75,7 @@ pub(crate) fn read_capped(path: &Path, maximum: u64) -> Result<Vec<u8>, CommandE
 
 fn get(session: &Session, _: NoParams) -> Result<Profiles, CommandError> {
     let Some(path) = &session.calibration_path else { return Ok(Profiles::default()) };
-    if !path.exists() {
+    if !florastack_core::fs::path_exists(path) {
         return Ok(Profiles::default());
     }
     let value: serde_json::Value =
@@ -88,7 +88,8 @@ fn get(session: &Session, _: NoParams) -> Result<Profiles, CommandError> {
 fn set(session: &mut Session, p: Profiles) -> Result<Profiles, CommandError> {
     let path = session.calibration_path.as_ref().ok_or_else(|| session.unavailable("the host has no user settings folder"))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| florastack_project::ProjectError::Write { path: parent.to_path_buf(), source })?;
+        florastack_core::fs::create_dir_all(parent)
+            .map_err(|source| florastack_project::ProjectError::Write { path: parent.to_path_buf(), source })?;
     }
     let bytes = serde_json::to_vec_pretty(&p).map_err(|e| session.invalid("profiles", e.to_string()))?;
     super::output::write_atomically(path, &bytes)?;

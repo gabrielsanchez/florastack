@@ -1,0 +1,13 @@
+// A thread of @DISPLAY_NAME@ in the browser (florastack-core's `thread` module): the page's module, instantiated on
+// the page's shared memory, runs the work the number it is sent names. A worker whose work leaves futures running (the
+// storage worker's event loop) stays; the others free their thread's stack and end.
+import init, { florastackThread } from './@GUI_BINARY@.js';
+
+self.onmessage = async (event) => {
+  const [module, memory, work] = event.data;
+  const wasm = await init({ module_or_path: module, memory });
+  if (!florastackThread(work)) {
+    wasm.__wbindgen_thread_destroy?.();
+    close();
+  }
+};

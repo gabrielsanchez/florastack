@@ -232,7 +232,7 @@ fn export(session: &Session, p: ExportParams) -> Result<JobPlan<Written>, Comman
         session.unavailable("the project has no defect mask: detect one with `defects.detect`, or import one with `defects.import`")
     })?;
     let path = absolute(&p.path)?;
-    if !p.overwrite && path.exists() {
+    if !p.overwrite && florastack_core::fs::path_exists(&path) {
         return Err(session.unavailable(format!("{} exists: pass `overwrite` to replace it", path.display())));
     }
     let cache = session.cache_dir()?;

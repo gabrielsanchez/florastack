@@ -240,6 +240,14 @@ impl WarpGeometry {
 /// `frame` warped onto `rect` of the canvas as `geometry` says, with its coverage: florastack-align's
 /// `warp_to_canvas`, the gain applied as florastack-stack's `Gained` applies it.
 pub fn warp_to_canvas(gpu: &Gpu, frame: &Image<f32>, geometry: &WarpGeometry, rect: Rect) -> Result<(Image<f32>, Image<f32>), GpuError> {
+    let (dst, coverage) = warp_planes(gpu, frame, geometry, rect)?;
+    let mut image = gpu.download(&dst)?;
+    image.set_color_space(frame.color_space().clone());
+    Ok((image, gpu.download(&coverage)?))
+}
+
+/// [`warp_to_canvas`]'s result and coverage, on the GPU.
+pub(crate) fn warp_planes(gpu: &Gpu, frame: &Image<f32>, geometry: &WarpGeometry, rect: Rect) -> Result<(Plane, Plane), GpuError> {
     let geometry = WarpGeometry { frame_width: frame.width(), frame_height: frame.height(), ..*geometry };
     geometry.check()?;
     let block_rect = geometry.block(rect);
@@ -249,35 +257,43 @@ pub fn warp_to_canvas(gpu: &Gpu, frame: &Image<f32>, geometry: &WarpGeometry, re
     let mut batch = Batch::new(gpu);
     geometry.record(&mut batch, &block, block_rect, rect, &dst, &coverage)?;
     batch.finish()?;
-    let mut image = gpu.download(&dst)?;
-    image.set_color_space(frame.color_space().clone());
-    Ok((image, gpu.download(&coverage)?))
+    Ok((dst, coverage))
 }
 
 /// `image` blurred with a Gaussian of standard deviation `sigma` by `method`: florastack-core's
 /// `gaussian_blur_in_place`.
 pub fn gaussian_blur(gpu: &Gpu, image: &Image<f32>, sigma: f64, method: BlurMethod) -> Result<Image<f32>, GpuError> {
+    let mut out = gpu.download(&gaussian_blur_plane(gpu, image, sigma, method)?)?;
+    out.set_color_space(image.color_space().clone());
+    Ok(out)
+}
+
+/// [`gaussian_blur`]'s result, on the GPU.
+pub(crate) fn gaussian_blur_plane(gpu: &Gpu, image: &Image<f32>, sigma: f64, method: BlurMethod) -> Result<Plane, GpuError> {
     let blur = Blur::new(gpu, sigma, method)?;
     let plane = gpu.upload(image)?;
     let scratch = gpu.plane("blur scratch", image.width(), image.height(), image.channels())?;
     let mut batch = Batch::new(gpu);
     blur.record(&mut batch, &plane, &scratch)?;
     batch.finish()?;
-    let mut out = gpu.download(&plane)?;
-    out.set_color_space(image.color_space().clone());
-    Ok(out)
+    Ok(plane)
 }
 
 /// The five-point Laplacian of `image`: florastack-core's `laplacian`.
 pub fn laplacian(gpu: &Gpu, image: &Image<f32>) -> Result<Image<f32>, GpuError> {
+    let mut out = gpu.download(&laplacian_plane(gpu, image)?)?;
+    out.set_color_space(image.color_space().clone());
+    Ok(out)
+}
+
+/// [`laplacian`]'s result, on the GPU.
+pub(crate) fn laplacian_plane(gpu: &Gpu, image: &Image<f32>) -> Result<Plane, GpuError> {
     let src = gpu.upload(image)?;
     let dst = gpu.plane("laplacian", image.width(), image.height(), image.channels())?;
     let mut batch = Batch::new(gpu);
     record_laplacian(&mut batch, &src, &dst)?;
     batch.finish()?;
-    let mut out = gpu.download(&dst)?;
-    out.set_color_space(image.color_space().clone());
-    Ok(out)
+    Ok(dst)
 }
 
 /// The index of the alpha channel among `channels`, or one no channel has.

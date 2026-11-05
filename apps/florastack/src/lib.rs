@@ -5,15 +5,24 @@
 //! The binary (`main.rs`) only starts it; the app is a library so that its tests drive the whole UI headless
 //! (`tests/smoke.rs`, with `egui_kittest`). [`FloraStackApp`] holds the state, `panels` draws it, [`shell::Shell`]
 //! talks to the engine, and [`viewer::Viewer`] draws the image on the GPU.
+//!
+//! The same app runs in a browser (`cargo xtask web`, built for `wasm32-unknown-unknown`): `web` starts it on the
+//! page and does what the operating system does for the desktop app (files in and out, the log), `dialogs` hands
+//! out the page's folders where the desktop's would be, and what needs the user's own folders or devices (opening
+//! and saving projects elsewhere, recent projects, batches, capture, the control channel) is left out.
 
 pub mod actions;
 pub mod app;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod capture_tab;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod control;
+pub mod dialogs;
 pub mod export_tab;
 pub mod files;
 pub mod i18n;
 pub mod loader;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod offscreen;
 pub mod palette;
 pub mod panels;
@@ -27,13 +36,17 @@ mod scientific_export;
 pub mod shell;
 pub mod stack_tab;
 pub mod viewer;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 pub use app::{FloraStackApp, Options};
+#[cfg(not(target_arch = "wasm32"))]
 use florastack_engine::branding;
 
 /// The environment variable that asks for native Wayland instead of XWayland on Linux.
 pub const WAYLAND_VARIABLE: &str = "FLORASTACK_WAYLAND";
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The window's settings: its title and size, file drops, and on Linux X11 (XWayland under Wayland) unless
 /// [`WAYLAND_VARIABLE`] is set, since winit has no file drag-and-drop on Wayland.
 pub fn native_options() -> eframe::NativeOptions {
@@ -58,6 +71,7 @@ pub fn native_options() -> eframe::NativeOptions {
 }
 
 /// Opens the window and runs the app until it is closed.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(options: Options) -> eframe::Result {
     eframe::run_native(branding::DISPLAY_NAME, native_options(), Box::new(|cc| Ok(Box::new(FloraStackApp::new(cc, options)))))
 }

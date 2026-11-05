@@ -2,10 +2,10 @@
 //! asks for, folds the engine's events into what the panels show (the jobs, the frame list, the outputs) and keeps
 //! the messages to show the user. It decides nothing about the project: every change is a command.
 
+use florastack_engine::time::Instant;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
 
 use florastack_engine::{
     CommandError, DispatchOptions, Dispatched, Engine, EngineConfig, Event, JobId, JobInfo, JobState, ProjectEvent, Value, json,
@@ -136,6 +136,7 @@ impl Shell {
     }
 
     /// Automation uses the same engine on this thread; its normal events refresh the UI on the next poll.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn automation(&mut self, method: &str, params: Value) -> Result<Value, CommandError> {
         let compute_changed = method == "command.dispatch" && params.get("command").and_then(Value::as_str) == Some("compute.set");
         let result = florastack_engine::automation::request(&mut self.engine, method, params);
@@ -176,21 +177,31 @@ impl Shell {
 
     /// [`Shell::run`] with calls of the same `coalesce` key, one after another, as one undo step (a slider's drag).
     pub fn run_with(&mut self, name: &str, params: Value, coalesce: Option<String>) -> Option<Value> {
-        let done = self.engine.dispatch_with(name, params, DispatchOptions { coalesce });
-        self.take_retouch();
-        match done {
+        match self.dispatch_with(name, params, coalesce) {
             Ok(Dispatched::Done(value)) => Some(value),
-            Ok(Dispatched::Started(job)) => {
-                if let Some(info) = self.engine.job(job) {
-                    self.jobs.insert(job, info);
-                }
-                None
-            }
+            Ok(Dispatched::Started(_)) => None,
             Err(e) => {
                 self.failed(name, &e);
                 None
             }
         }
+    }
+
+    /// Dispatches `name` with `params` as [`Shell::run`] does, and says what it did, for scripts (the browser build's
+    /// `window.florastack.dispatch`); a failure isn't shown.
+    pub fn dispatch(&mut self, name: &str, params: Value) -> Result<Dispatched, CommandError> {
+        self.dispatch_with(name, params, None)
+    }
+
+    fn dispatch_with(&mut self, name: &str, params: Value, coalesce: Option<String>) -> Result<Dispatched, CommandError> {
+        let done = self.engine.dispatch_with(name, params, DispatchOptions { coalesce });
+        self.take_retouch();
+        if let Ok(Dispatched::Started(job)) = &done
+            && let Some(info) = self.engine.job(*job)
+        {
+            self.jobs.insert(*job, info);
+        }
+        done
     }
 
     /// Whether a job of one of `commands` is queued or running.

@@ -63,7 +63,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui, output: u64) {
             ("parallax-animation", "parallax.animate", json!({"frames":app.parallax.frames,"fps":app.parallax.fps})),
         ] {
             if ui.button(tr(key)).clicked()
-                && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                && let Some(folder) = crate::dialogs::write_folder(None)
             {
                 let mut params = json!({"output":output,"folder":folder,"settings":app.parallax.settings,"overwrite":app.export.overwrite});
                 if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {

@@ -16,10 +16,10 @@
 //! and sent to the worker threads of long jobs: they write new cache files while the folder, its lock and the project
 //! stay with the thread that owns them.
 
+use florastack_core::time::{Duration, SystemTime};
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use florastack_core::LockFile;
 use florastack_core::branding::{DISPLAY_NAME, PROJECT_EXTENSION};
@@ -107,7 +107,7 @@ impl ProjectFolder {
     pub fn create(parent: &Path, name: &str) -> Result<(ProjectFolder, Project), ProjectError> {
         let mut project = Project::new(Some(name))?;
         let root = parent.join(folder_name(name));
-        match std::fs::create_dir(&root) {
+        match florastack_core::fs::create_dir(&root) {
             Ok(()) => {}
             Err(e) if e.kind() == ErrorKind::AlreadyExists => return Err(ProjectError::Exists { path: root }),
             Err(source) => return Err(ProjectError::Write { path: root, source }),
@@ -120,11 +120,11 @@ impl ProjectFolder {
     /// `untitled-<date>-<time>-<n>.florastack`. Orphan cleanup offers to move it to the trash once it is old and the
     /// user hasn't named it.
     pub fn create_temporary(root: &Path) -> Result<(ProjectFolder, Project), ProjectError> {
-        std::fs::create_dir_all(root).map_err(|source| ProjectError::Write { path: root.to_path_buf(), source })?;
+        florastack_core::fs::create_dir_all(root).map_err(|source| ProjectError::Write { path: root.to_path_buf(), source })?;
         let stamp: String = Timestamp::now().to_string().chars().filter(char::is_ascii_digit).take(14).collect();
         for n in 0..1000u32 {
             let dir = root.join(format!("untitled-{stamp}-{n}{PROJECT_EXTENSION}"));
-            match std::fs::create_dir(&dir) {
+            match florastack_core::fs::create_dir(&dir) {
                 Ok(()) => {
                     let mut project = Project::new(None)?;
                     let folder = ProjectFolder::init(dir, &mut project)?;
@@ -141,7 +141,7 @@ impl ProjectFolder {
     fn init(root: PathBuf, project: &mut Project) -> Result<ProjectFolder, ProjectError> {
         for area in Area::ALL {
             let dir = root.join(area.dir());
-            std::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir, source })?;
+            florastack_core::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir, source })?;
         }
         let lock = ProjectFolder::lock(&root)?;
         let mut folder = ProjectFolder { cache: CacheDir::new(root, false), lock, migrated_from: None };
@@ -179,13 +179,13 @@ impl ProjectFolder {
     }
 
     fn open_with(path: &Path, read_only: bool) -> Result<(ProjectFolder, Project), ProjectError> {
-        let root = if path.file_name().is_some_and(|n| n == FILE_NAME) && path.is_file() {
+        let root = if path.file_name().is_some_and(|n| n == FILE_NAME) && florastack_core::fs::path_is_file(path) {
             path.parent().unwrap_or(path).to_path_buf()
         } else {
             path.to_path_buf()
         };
         let file = root.join(FILE_NAME);
-        if !file.is_file() {
+        if !florastack_core::fs::path_is_file(&file) {
             return Err(ProjectError::NotAProject { path: root });
         }
         let lock = if read_only { None } else { ProjectFolder::lock(&root)? };
@@ -208,8 +208,8 @@ impl ProjectFolder {
         let bytes = schema::encode(&saved).map_err(|e| schema_error(&file, e))?;
         if let Some(from) = self.migrated_from {
             let backup = self.cache.path().join(format!("project.v{from}.json"));
-            if !backup.exists() {
-                std::fs::copy(&file, &backup).map_err(|source| ProjectError::Write { path: backup, source })?;
+            if !florastack_core::fs::path_exists(&backup) {
+                florastack_core::fs::copy(&file, &backup).map_err(|source| ProjectError::Write { path: backup, source })?;
             }
         }
         write_atomic(&file, &bytes)?;
@@ -222,11 +222,11 @@ impl ProjectFolder {
     /// file but the lock, so the copy is the project as last saved, with its cache and previews. The original is left
     /// as it is. A copy that fails part way is removed (it is this function's own), and the original stays open.
     pub fn copy_to(&self, target: &Path) -> Result<(ProjectFolder, Project), ProjectError> {
-        if target.exists() {
+        if florastack_core::fs::path_exists(target) {
             return Err(ProjectError::Exists { path: target.to_path_buf() });
         }
         if let Err(e) = copy_tree(self.cache.path(), target, true) {
-            if let Err(cleanup) = std::fs::remove_dir_all(target) {
+            if let Err(cleanup) = florastack_core::fs::remove_dir_all(target) {
                 tracing::warn!("cannot remove the unfinished copy {}: {cleanup}", target.display());
             }
             return Err(e);
@@ -240,18 +240,18 @@ impl ProjectFolder {
     /// whether it was moved rather than copied; on failure, the error and the original ([`MoveFailed`]).
     pub fn move_to(self, target: &Path) -> Result<(ProjectFolder, Project, bool), Box<MoveFailed>> {
         let failed = |folder, error| Box::new(MoveFailed { folder, error });
-        if target.exists() {
+        if florastack_core::fs::path_exists(target) {
             return Err(failed(Some(self), ProjectError::Exists { path: target.to_path_buf() }));
         }
         let source = self.cache.path().to_path_buf();
         drop(self);
         let reopen = |e: ProjectError| failed(ProjectFolder::open(&source).ok().map(|(f, _)| f), e);
-        match std::fs::rename(&source, target) {
+        match florastack_core::fs::rename(&source, target) {
             Ok(()) => match ProjectFolder::open(target) {
                 Ok((folder, project)) => Ok((folder, project, true)),
                 // The folder is at `target` now: put it back so that the project opens where it was.
                 Err(e) => {
-                    if let Err(back) = std::fs::rename(target, &source) {
+                    if let Err(back) = florastack_core::fs::rename(target, &source) {
                         tracing::warn!("cannot move {} back to {}: {back}", target.display(), source.display());
                     }
                     Err(reopen(e))
@@ -311,7 +311,7 @@ impl ProjectFolder {
     /// time changed.
     pub fn check_frame(&self, frame: &Frame) -> Result<FrameState, ProjectError> {
         let path = self.frame_path(frame);
-        let meta = match std::fs::metadata(&path) {
+        let meta = match florastack_core::fs::metadata(&path) {
             Ok(meta) => meta,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(FrameState::Missing),
             Err(source) => return Err(ProjectError::Read { path, source }),
@@ -326,7 +326,7 @@ impl ProjectFolder {
         if modified.is_some() && modified == frame.modified {
             return Ok(FrameState::Unchanged);
         }
-        let file = std::fs::File::open(&path).map_err(|source| ProjectError::Read { path: path.clone(), source })?;
+        let file = florastack_core::fs::File::open(&path).map_err(|source| ProjectError::Read { path: path.clone(), source })?;
         let (hash, _) = ContentHash::of_reader(file).map_err(|source| ProjectError::Read { path, source })?;
         Ok(if hash == frame.hash { FrameState::Unchanged } else { FrameState::Changed })
     }
@@ -379,7 +379,7 @@ impl ProjectFolder {
         let mut out = Vec::new();
         for area in Area::ALL {
             let dir = root.join(area.dir());
-            let entries = match std::fs::read_dir(&dir) {
+            let entries = match florastack_core::fs::read_dir(&dir) {
                 Ok(entries) => entries,
                 Err(e) if e.kind() == ErrorKind::NotFound => continue,
                 Err(source) => return Err(ProjectError::Read { path: dir, source }),
@@ -388,7 +388,7 @@ impl ProjectFolder {
                 let entry = entry.map_err(|source| ProjectError::Read { path: dir.clone(), source })?;
                 let path = entry.path();
                 // Files only: folders (a tile store's, say) aren't the cache's.
-                let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+                let Ok(meta) = florastack_core::fs::symlink_metadata(&path) else { continue };
                 if meta.is_dir() || referenced.contains(&path) {
                     continue;
                 }
@@ -409,7 +409,7 @@ impl ProjectFolder {
         self.cache.writable()?;
         let files = self.unreferenced(project)?;
         for file in &files {
-            match std::fs::remove_file(file) {
+            match florastack_core::fs::remove_file(file) {
                 Ok(()) => {}
                 Err(e) if e.kind() == ErrorKind::NotFound => {}
                 Err(source) => return Err(ProjectError::Write { path: file.clone(), source }),
@@ -433,8 +433,8 @@ fn schema_error(file: &Path, e: SchemaError) -> ProjectError {
 /// Copies the folder `from` to the new folder `to`, its files and folders and nothing else (symbolic links and other
 /// special files are left out); at the top, `top`, without the lock file.
 fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), ProjectError> {
-    std::fs::create_dir(to).map_err(|source| ProjectError::Write { path: to.to_path_buf(), source })?;
-    let entries = std::fs::read_dir(from).map_err(|source| ProjectError::Read { path: from.to_path_buf(), source })?;
+    florastack_core::fs::create_dir(to).map_err(|source| ProjectError::Write { path: to.to_path_buf(), source })?;
+    let entries = florastack_core::fs::read_dir(from).map_err(|source| ProjectError::Read { path: from.to_path_buf(), source })?;
     for entry in entries {
         let entry = entry.map_err(|source| ProjectError::Read { path: from.to_path_buf(), source })?;
         let (path, name) = (entry.path(), entry.file_name());
@@ -446,7 +446,7 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), ProjectError> {
         if kind.is_dir() {
             copy_tree(&path, &dest, false)?;
         } else if kind.is_file() {
-            std::fs::copy(&path, &dest).map_err(|source| ProjectError::Write { path: dest, source })?;
+            florastack_core::fs::copy(&path, &dest).map_err(|source| ProjectError::Write { path: dest, source })?;
         }
     }
     Ok(())
@@ -459,8 +459,8 @@ mod tests {
     /// A fresh folder in the system's temporary directory, removed by the caller.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("florastack-folder-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let _ = florastack_core::fs::remove_dir_all(&dir);
+        florastack_core::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
@@ -472,7 +472,7 @@ mod tests {
         folder.save(&mut project).unwrap();
         // A copy has the project and its cache, and its own lock; the original is still open and locked.
         let copy_path = dir.join("copy").join("Bee.florastack");
-        std::fs::create_dir_all(copy_path.parent().unwrap()).unwrap();
+        florastack_core::fs::create_dir_all(copy_path.parent().unwrap()).unwrap();
         let (copy, copied) = folder.copy_to(&copy_path).unwrap();
         assert_eq!(copied.name(), Some("Bee"));
         assert_eq!(copy.read(&cached).unwrap(), b"pixels");
@@ -489,7 +489,7 @@ mod tests {
             Err(MoveFailed { folder: Some(back), error: ProjectError::Exists { .. } }) => assert_eq!(back.path(), moved_path.as_path()),
             other => panic!("a move onto a folder that exists is refused and keeps the project open: {other:?}"),
         }
-        std::fs::remove_dir_all(&dir).unwrap();
+        florastack_core::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

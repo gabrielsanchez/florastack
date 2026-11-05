@@ -7,11 +7,13 @@
 //! ([`crate::files::Autosave`]), and remembers the recent projects, the theme and the tab ([`crate::prefs`]), and the
 //! Preferences dialog's settings, which it hands to the engine again at startup ([`crate::preferences`]).
 
+use florastack_engine::time::Instant;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
-use florastack_engine::{Compute, EngineConfig, Tiling, Value, branding, json};
+#[cfg(not(target_arch = "wasm32"))]
+use florastack_engine::{Compute, branding};
+use florastack_engine::{EngineConfig, Tiling, Value, json};
 
 use crate::actions::Action;
 use crate::files::{Autosave, Dropped, paths_from_text};
@@ -36,6 +38,7 @@ pub struct Options {
 impl Options {
     /// The desktop app's defaults: temporary projects in the app's local data folder ([`local_data`]), the GPU when
     /// it passes its self-test, and the memory budget suggested for the memory installed (a quarter of it).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn standard(files: Vec<PathBuf>) -> Options {
         let data = local_data().unwrap_or_else(|| std::env::temp_dir().join(branding::APP_ID));
         let budget = florastack_engine::compute::suggested_budget(florastack_engine::compute::installed_memory());
@@ -47,16 +50,27 @@ impl Options {
         };
         Options { engine, files }
     }
+
+    /// The browser build's: the engine's browser defaults (temporary projects in the page's memory), with a memory
+    /// budget of 512 MiB for a stack's working data, beyond which its tiles go to the browser's private file system.
+    #[cfg(target_arch = "wasm32")]
+    pub fn web() -> Options {
+        let engine = EngineConfig { tiling: Tiling { budget: 512 << 20, ..Tiling::default() }, ..EngineConfig::default() };
+        Options { engine, files: Vec::new() }
+    }
 }
 
 /// The app's folder for data that stays on this machine: temporary projects, whose caches can be large. Not the
 /// system's temporary folder, which cleaners may empty, and on Windows not the roaming profile (eframe's storage
 /// folder, where the window layout goes), which follows the user from machine to machine.
 pub fn local_data() -> Option<PathBuf> {
+    #[cfg(target_arch = "wasm32")]
+    return None;
     #[cfg(windows)]
     if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|l| !l.is_empty()) {
         return Some(PathBuf::from(local).join(branding::APP_ID));
     }
+    #[cfg(not(target_arch = "wasm32"))]
     eframe::storage_dir(branding::APP_ID)
 }
 
@@ -128,6 +142,7 @@ pub enum Banner {
 
 /// See the module documentation.
 pub struct FloraStackApp {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) control: Option<florastack_engine::control::Server>,
     pub shell: Shell,
     pub prefs: Prefs,
@@ -161,6 +176,7 @@ pub struct FloraStackApp {
     pub retouch: crate::retouch_tab::RetouchUi,
     /// The Export tab's estimate and template being typed.
     pub export: crate::export_tab::ExportUi,
+    #[cfg(not(target_arch = "wasm32"))]
     pub capture: crate::capture_tab::CaptureUi,
     pub parallax: crate::parallax_ui::ParallaxUi,
     /// The built-in presets (`preset.list`), once asked.
@@ -201,11 +217,15 @@ impl FloraStackApp {
         prefs.forget_missing();
         apply_theme(ctx, prefs.theme);
         let temporary = options.engine.temporary_projects.clone();
+        // A job's news repaints the window. Not in a browser, where the workers that have news must not touch egui's
+        // locks, which the page's main thread could then have to wait for: the app polls while jobs run instead.
         let waker_ctx = ctx.clone();
-        let waker: florastack_engine::Waker = Arc::new(move || waker_ctx.request_repaint());
+        let waker: Option<florastack_engine::Waker> =
+            if cfg!(target_arch = "wasm32") { None } else { Some(Arc::new(move || waker_ctx.request_repaint())) };
         let mut app = FloraStackApp {
+            #[cfg(not(target_arch = "wasm32"))]
             control: None,
-            shell: Shell::new(options.engine, Some(waker)),
+            shell: Shell::new(options.engine, waker),
             prefs,
             selection: Selection::Nothing,
             viewer: Viewer::new(gpu),
@@ -226,6 +246,7 @@ impl FloraStackApp {
             preview_method: "pyramid",
             retouch: crate::retouch_tab::RetouchUi::default(),
             export: crate::export_tab::ExportUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             capture: crate::capture_tab::CaptureUi::default(),
             parallax: crate::parallax_ui::ParallaxUi::default(),
             built_in: None,
@@ -307,22 +328,32 @@ impl FloraStackApp {
     pub fn perform(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::New => self.after_unsaved(Then::New),
+            #[cfg(not(target_arch = "wasm32"))]
             Action::Open => {
-                if let Some(path) = self.dialog_folder().pick_folder() {
+                if let Some(path) = crate::dialogs::read_folder(self.prefs.last_folder.as_deref()) {
                     self.after_unsaved(Then::Open(path));
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Action::AddFrames => {
-                if let Some(paths) = self.dialog_folder().pick_files() {
+                if let Some(paths) = crate::dialogs::read_files(self.prefs.last_folder.as_deref()) {
                     self.add_frames(&paths);
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Action::ImportStacks => {
-                if let Some(folder) = self.dialog_folder().pick_folder() {
+                if let Some(folder) = crate::dialogs::read_folder(self.prefs.last_folder.as_deref()) {
                     self.remember_folder(&folder);
                     self.shell.run("project.findStacks", json!({ "paths": [folder] }));
                 }
             }
+            // In a browser, the files picked come back later (`web::tick`); projects stay in the page.
+            #[cfg(target_arch = "wasm32")]
+            Action::Open => {}
+            #[cfg(target_arch = "wasm32")]
+            Action::AddFrames => crate::web::pick(crate::web::Purpose::Frames),
+            #[cfg(target_arch = "wasm32")]
+            Action::ImportStacks => crate::web::pick(crate::web::Purpose::Stacks),
             Action::Save => self.save(),
             Action::SaveAs => {
                 if self.has_project() {
@@ -375,17 +406,8 @@ impl FloraStackApp {
         }
     }
 
-    /// A file dialog starting in the folder last used.
-    fn dialog_folder(&self) -> rfd::FileDialog {
-        let dialog = rfd::FileDialog::new();
-        match &self.prefs.last_folder {
-            Some(folder) => dialog.set_directory(folder),
-            None => dialog,
-        }
-    }
-
     pub(crate) fn remember_folder(&mut self, path: &std::path::Path) {
-        let folder = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let folder = if florastack_engine::fs::path_is_dir(path) { path } else { path.parent().unwrap_or(path) };
         self.prefs.last_folder = Some(folder.to_path_buf());
     }
 
@@ -598,7 +620,10 @@ impl FloraStackApp {
 
     /// The engine's news, loaded images, autosave, and what follows a project's opening.
     pub(crate) fn tick(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::tick(self);
         self.update_state(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
         self.poll_control(ctx);
     }
 
@@ -704,7 +729,8 @@ impl FloraStackApp {
             ctx.request_repaint_after(film.next.saturating_duration_since(now));
         }
         self.autosave_if_due();
-        if self.shell.busy() || self.loading.is_some() {
+        let reading = [&self.view_loader, &self.pair_loader, &self.thumb_loader].iter().any(|l| l.pending() > 0);
+        if self.shell.busy() || self.loading.is_some() || (reading && cfg!(target_arch = "wasm32")) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
@@ -722,6 +748,10 @@ impl FloraStackApp {
     fn exported(&mut self) {
         if let Some(exported) = self.shell.exported.take() {
             let files = exported["files"].as_array().map_or(0, Vec::len);
+            if !crate::dialogs::NATIVE_FILES {
+                self.shell.notify(tr_args("notice-downloaded", &[("count", files.into())]), false);
+                return;
+            }
             let folder = exported["files"][0]["path"].as_str().and_then(|p| std::path::Path::new(p).parent()).map(|p| p.display().to_string());
             self.shell.notify(tr_args("notice-exported", &[("count", files.into()), ("folder", folder.unwrap_or_default().into())]), false);
         }
@@ -771,6 +801,13 @@ impl FloraStackApp {
             }
         }
         let (dropped, pasted) = ctx.input(|i| {
+            // In a browser, dropped files are read asynchronously, then come as picked ones do (`web::tick`).
+            #[cfg(target_arch = "wasm32")]
+            let dropped: Vec<PathBuf> = {
+                crate::web::dropped(&i.raw.dropped_files);
+                Vec::new()
+            };
+            #[cfg(not(target_arch = "wasm32"))]
             let dropped: Vec<PathBuf> = i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect();
             let pasted: Vec<String> =
                 i.events.iter().filter_map(|e| if let egui::Event::Paste(text) = e { Some(text.clone()) } else { None }).collect();
@@ -848,10 +885,12 @@ impl eframe::App for FloraStackApp {
 }
 
 impl FloraStackApp {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_quitting(&self) -> bool {
         self.quitting
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn close_from_control(&mut self) {
         self.quitting = true;
     }

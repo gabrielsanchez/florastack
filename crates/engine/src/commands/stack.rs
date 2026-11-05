@@ -39,7 +39,13 @@ use std::ops::Range;
 use florastack_align::{AlignError, Canvas, DEFAULT_FEATHER, Framing, Status, thumbnail, warp_to_canvas};
 use florastack_core::{Affine, AnyImage, Image, Monitor, Rect};
 use florastack_gpu::ops::WarpGeometry;
-use florastack_gpu::{Frame as GpuFrame, Gpu, GpuError, GpuStacked, GpuStacker, GpuTiling, Method as GpuMethod};
+use florastack_gpu::{Frame as GpuFrame, GpuError, GpuStacked, GpuTiling, Method as GpuMethod};
+// florastack-gpu's stacker natively, the browser's GPU worker's in a browser: the same methods (`crate::webgpu`).
+#[cfg(not(target_arch = "wasm32"))]
+use florastack_gpu::GpuStacker as DeviceStacker;
+
+#[cfg(target_arch = "wasm32")]
+use crate::webgpu::RemoteStacker as DeviceStacker;
 use florastack_project::{Area, CacheDir, CacheRef, Edit, FrameId, Group, Input, Maps, NewOutput, OutputId, Preferences, Table};
 use florastack_raw::Quality;
 use florastack_stack::{
@@ -52,7 +58,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::align::Plan;
 use super::check_name;
-use crate::compute::{Backend, Compute};
+use crate::compute::{Backend, Compute, GpuDevice};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::project::{
@@ -988,6 +994,10 @@ impl StackPlan {
     /// depth-map method, and the last stage is the end. The stack and, for the depth-map method, its depth map.
     pub(super) fn stack_any(&mut self, ctx: &JobContext, reduced: bool) -> Result<(Stacked, Option<DepthMap>), CommandError> {
         let settings = if reduced { self.settings.reduced() } else { self.settings.clone() };
+        // A preview is smaller: counted at half the sides, which is more than it takes.
+        let scale = |(w, h): (usize, usize)| if reduced { (w.div_ceil(2), h.div_ceil(2)) } else { (w, h) };
+        let needed = crate::compute::stack_memory(scale(self.size), scale((self.canvas.width, self.canvas.height)), self.tiling.budget);
+        crate::compute::check_memory(self.command, needed)?;
         self.reader.load_mask()?;
         let n = self.frames.len();
         let mut units = Units::new(n);
@@ -1303,7 +1313,7 @@ fn focus_stats(s: GpuStacked, radius: f64) -> Result<FocusStats, StackError> {
 }
 
 /// Folds every frame of `feed` into `stacker`, which begins its stack on the first frame's canvas.
-fn gpu_pass(stacker: &mut GpuStacker, feed: &mut dyn Feed, ctx: &dyn Monitor, units: &mut Units) -> Result<(), Failed> {
+fn gpu_pass(stacker: &mut DeviceStacker, feed: &mut dyn Feed, ctx: &dyn Monitor, units: &mut Units) -> Result<(), Failed> {
     each(feed, ctx, units, |loaded, progress, first| {
         if first {
             let (w, h, c) = loaded.shape();
@@ -1319,7 +1329,7 @@ fn gpu_pass(stacker: &mut GpuStacker, feed: &mut dyn Feed, ctx: &dyn Monitor, un
 fn stack_gpu(
     feed: &mut dyn Feed,
     settings: &Chosen,
-    gpu: &Gpu,
+    gpu: &GpuDevice,
     tiling: &GpuTiling,
     ctx: &dyn Monitor,
     finishing: &dyn Monitor,
@@ -1335,7 +1345,7 @@ fn stack_gpu(
             GpuMethod::Pyramid { levels: s.levels, blend, channel_decisions: s.decisions == Decisions::Channels, range_limit }
         }
         Chosen::DepthMap(depth) => {
-            let mut estimator = GpuStacker::new(gpu, GpuMethod::Focus { radius: depth.radius }, tiling.clone())?;
+            let mut estimator = DeviceStacker::new(gpu, GpuMethod::Focus { radius: depth.radius }, tiling.clone())?;
             gpu_pass(&mut estimator, feed, ctx, units)?;
             let stats = focus_stats(estimator.finish(finishing)?, depth.radius)?;
             drop(estimator);
@@ -1344,13 +1354,13 @@ fn stack_gpu(
             drop(stats);
             stage(1, units);
             let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&map.depth), frames: map.frames };
-            let mut compositor = GpuStacker::new(gpu, method, tiling.clone())?;
+            let mut compositor = DeviceStacker::new(gpu, method, tiling.clone())?;
             gpu_pass(&mut compositor, feed, ctx, units)?;
             stage(2, units);
             return Ok((stacked(compositor.finish(finishing)?), Some(map)));
         }
     };
-    let mut stacker = GpuStacker::new(gpu, method, tiling.clone())?;
+    let mut stacker = DeviceStacker::new(gpu, method, tiling.clone())?;
     gpu_pass(&mut stacker, feed, ctx, units)?;
     stage(1, units);
     Ok((stacked(stacker.finish(finishing)?), None))

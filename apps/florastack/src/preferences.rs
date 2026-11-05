@@ -168,8 +168,9 @@ fn cache(app: &mut FloraStackApp, ui: &mut egui::Ui, form: &mut Form) {
     ui.horizontal(|ui| {
         let default = crate::app::local_data().map(|d| d.display().to_string()).unwrap_or_default();
         ui.add(egui::TextEdit::singleline(&mut form.cache_folder).hint_text(default).desired_width(300.0));
+        #[cfg(not(target_arch = "wasm32"))]
         if ui.button(tr("browse")).clicked()
-            && let Some(folder) = rfd::FileDialog::new().pick_folder()
+            && let Some(folder) = crate::dialogs::read_folder(None)
         {
             form.cache_folder = folder.display().to_string();
         }

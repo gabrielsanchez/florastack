@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use florastack_project::{Project, Trash};
@@ -17,7 +18,9 @@ use serde_json::Value;
 use crate::compute::Compute;
 use crate::error::{CommandError, Invalid};
 use crate::events::Event;
-use crate::jobs::{Clock, Executor, JobId, JobInfo, JobState, Jobs, Waker};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::jobs::JobState;
+use crate::jobs::{Clock, Executor, JobId, JobInfo, Jobs, Waker};
 use crate::registry::Registry;
 use crate::session::{Host, Session};
 
@@ -64,6 +67,26 @@ impl Default for EngineConfig {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl Default for EngineConfig {
+    /// The browser build's: temporary projects in the in-memory file system's `/projects` (florastack-core's `fs`),
+    /// orphans moved to its `/trash`, a thread per lane on Web Workers, the page's clock, and the CPU (see
+    /// [`crate::compute`]).
+    fn default() -> EngineConfig {
+        EngineConfig {
+            temporary_projects: Some(PathBuf::from("/projects")),
+            trash: Arc::new(florastack_project::FolderTrash::new("/trash")),
+            executor: Arc::new(crate::jobs::LaneExecutor::new()),
+            clock: Arc::new(crate::jobs::SystemClock::new()),
+            waker: None,
+            max_heavy_jobs: 1,
+            max_preview_jobs: 1,
+            compute: Compute::default(),
+            tiling: florastack_stack::Tiling::default(),
+        }
+    }
+}
+
 /// What dispatching a command did.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dispatched {
@@ -98,6 +121,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn session(&self) -> &Session {
         &self.session
     }
@@ -158,6 +182,19 @@ impl Engine {
         match self.dispatch(name, params)? {
             Dispatched::Done(value) => Ok(value),
             Dispatched::Started(job) => self.wait(job),
+        }
+    }
+
+    /// Runs a command that isn't a job and returns its result. In the browser build, whose main thread may not block,
+    /// a job isn't waited for: it runs, and this is an error that says so; poll for its end instead.
+    #[cfg(target_arch = "wasm32")]
+    pub fn run(&mut self, name: &str, params: Value) -> Result<Value, CommandError> {
+        match self.dispatch(name, params)? {
+            Dispatched::Done(value) => Ok(value),
+            Dispatched::Started(job) => Err(CommandError::Unavailable {
+                command: name.to_owned(),
+                reason: format!("it runs as {job}, which the browser's main thread can't wait for"),
+            }),
         }
     }
 

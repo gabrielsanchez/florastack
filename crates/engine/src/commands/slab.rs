@@ -208,7 +208,7 @@ struct Slab {
 
 /// Whether the cache holds `reference`'s file.
 fn present(cache: &CacheDir, reference: &CacheRef) -> bool {
-    reference.path.resolve(cache.path()).is_file()
+    florastack_core::fs::path_is_file(&reference.path.resolve(cache.path()))
 }
 
 /// The output of `project` that a slab with `key`, by `method`, can be taken from: the first whose image has that key

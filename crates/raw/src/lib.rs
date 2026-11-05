@@ -75,6 +75,6 @@ pub fn decode(bytes: &[u8], max_pixels: u64) -> Result<RawFrame, RawError> {
 /// Decodes a RAW file.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn decode_file(path: &std::path::Path, max_pixels: u64) -> Result<RawFrame, RawError> {
-    let bytes = std::fs::read(path).map_err(|source| RawError::Read { path: path.to_path_buf(), source })?;
+    let bytes = florastack_core::fs::read(path).map_err(|source| RawError::Read { path: path.to_path_buf(), source })?;
     decode(&bytes, max_pixels)
 }

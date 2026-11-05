@@ -122,7 +122,8 @@ fn set(session: &mut Session, p: SetParams) -> Result<ComputeInfo, CommandError>
             None
         } else {
             let folder = super::absolute(&folder)?;
-            std::fs::create_dir_all(&folder).map_err(|e| session.unavailable(format!("the tile folder {} can't be made: {e}", folder.display())))?;
+            florastack_core::fs::create_dir_all(&folder)
+                .map_err(|e| session.unavailable(format!("the tile folder {} can't be made: {e}", folder.display())))?;
             Some(folder)
         };
     }

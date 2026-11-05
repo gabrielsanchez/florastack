@@ -3,12 +3,12 @@
 //! ingest setup succeeds. Explicit completion prevents quiet timeouts during exposures. On any failure the I/O
 //! worker is stopped and joined; completed originals remain in input, independently of staged stack outputs.
 
+use florastack_core::time::{Duration, Instant};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use florastack_capture::{Devices, Error, Focus, optics, serial};
 use florastack_core::Monitor;

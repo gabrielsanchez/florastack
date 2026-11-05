@@ -11,7 +11,7 @@ use crate::error::ProjectError;
 /// Reads `path` whole, refusing a file larger than `max` bytes before reading it.
 pub(crate) fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, ProjectError> {
     let read = |source| ProjectError::Read { path: path.to_path_buf(), source };
-    let file = std::fs::File::open(path).map_err(read)?;
+    let file = florastack_core::fs::File::open(path).map_err(read)?;
     let size = file.metadata().map_err(read)?.len();
     if size > max {
         return Err(ProjectError::TooLarge { path: path.to_path_buf(), size, max });
@@ -30,18 +30,18 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = path.with_file_name(format!(".{name}.{}.{n}.part", std::process::id()));
+    let temp = path.with_file_name(format!(".{name}.{}.{n}.part", florastack_core::process::id()));
     let failed = |source| {
-        let _ = std::fs::remove_file(&temp);
+        let _ = florastack_core::fs::remove_file(&temp);
         ProjectError::Write { path: path.to_path_buf(), source }
     };
     // The file is closed at the end of this block, before it is renamed.
     {
-        let mut file = std::fs::File::create(&temp).map_err(|source| ProjectError::Write { path: path.to_path_buf(), source })?;
+        let mut file = florastack_core::fs::File::create(&temp).map_err(|source| ProjectError::Write { path: path.to_path_buf(), source })?;
         file.write_all(bytes).map_err(failed)?;
         file.sync_all().map_err(failed)?;
     }
-    std::fs::rename(&temp, path).map_err(failed)?;
+    florastack_core::fs::rename(&temp, path).map_err(failed)?;
     sync_parent(path);
     Ok(())
 }
@@ -51,7 +51,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError
 fn sync_parent(path: &Path) {
     #[cfg(unix)]
     if let Some(parent) = path.parent()
-        && let Ok(dir) = std::fs::File::open(parent)
+        && let Ok(dir) = florastack_core::fs::File::open(parent)
     {
         let _ = dir.sync_all();
     }

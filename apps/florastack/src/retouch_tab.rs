@@ -6,8 +6,8 @@
 //! The views show what the engine holds (`florastack_engine::retouch::RetouchView`), updated region by region as
 //! strokes paint, undo and redo; the brightness boost is the view's alone.
 
+use florastack_engine::time::{Duration, Instant};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use egui::{Pos2, Rect, RichText, Sense, Vec2};
 use florastack_engine::{Brush, RetouchSource, Value, json};

@@ -13,11 +13,11 @@
 //! [`LayerId`]), so that references to them survive reordering and removal. A reference may name something that has
 //! since been removed: it records where a result came from.
 
+use florastack_core::time::{Duration, SystemTime};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 
 use florastack_core::Affine;
 use serde::de::DeserializeOwned;
@@ -230,19 +230,19 @@ impl FrameFile {
     /// The time is read after the bytes, so a file changed in between has a new, untrusted time
     /// ([`FrameFile::modified`]), and later checks hash it and find that it changed.
     pub fn from_bytes(path: &Path, bytes: &[u8]) -> Result<FrameFile, ProjectError> {
-        let absolute = std::path::absolute(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+        let absolute = florastack_core::fs::absolute(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
         let text = absolute.to_str().ok_or_else(|| ProjectError::Path { path: absolute.clone() })?.to_owned();
-        let meta = std::fs::metadata(&absolute).map_err(|source| ProjectError::Read { path: absolute.clone(), source })?;
+        let meta = florastack_core::fs::metadata(&absolute).map_err(|source| ProjectError::Read { path: absolute.clone(), source })?;
         let hash = ContentHash::of(bytes);
         Ok(FrameFile { path: text, size: bytes.len() as u64, modified: trusted_modified(meta.modified().ok()), hash })
     }
 
     /// Reads and hashes the file at `path`, which is made absolute (relative to the current directory).
     pub fn read(path: &Path) -> Result<FrameFile, ProjectError> {
-        let absolute = std::path::absolute(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
+        let absolute = florastack_core::fs::absolute(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
         let text = absolute.to_str().ok_or_else(|| ProjectError::Path { path: absolute.clone() })?.to_owned();
         let read = |source| ProjectError::Read { path: absolute.clone(), source };
-        let file = std::fs::File::open(&absolute).map_err(read)?;
+        let file = florastack_core::fs::File::open(&absolute).map_err(read)?;
         let meta = file.metadata().map_err(read)?;
         let (hash, size) = ContentHash::of_reader(file).map_err(read)?;
         Ok(FrameFile { path: text, size, modified: trusted_modified(meta.modified().ok()), hash })

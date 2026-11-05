@@ -236,6 +236,8 @@ impl Gpu {
             mapped_at_creation: false,
         });
         tracing::debug!("GPU device on {summary}");
+        // In a browser built with threads, wgpu's objects aren't `Send`: a `Gpu` stays on the worker that made it.
+        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
         Ok(Gpu { inner: Arc::new(Inner { device, queue, adapter: summary, limits, errors, lost, pipelines: Mutex::new(HashMap::new()), dummy }) })
     }
 
@@ -287,6 +289,7 @@ impl Gpu {
     }
 
     /// Checks the device without waiting, running the callbacks of what it has finished.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "a browser runs the callbacks itself"))]
     pub(crate) fn poll(&self) -> Result<(), GpuError> {
         self.inner.device.poll(wgpu::PollType::Poll).map_err(|e| GpuError::Lost { message: e.to_string() })?;
         self.check()

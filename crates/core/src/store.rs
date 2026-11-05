@@ -6,7 +6,8 @@
 //!   reads it back. A tile read back and left unchanged isn't written again when it is evicted the next time.
 //! - [`TileStore`] is where the evicted tiles go, as plain bytes by key. [`TempFileStore`] keeps one file per tile in a
 //!   temporary folder of its own, with ordinary file I/O, and removes the folder when it is dropped; [`MemoryStore`]
-//!   keeps them in memory, for tests. The browser build can implement the trait over the origin-private file system.
+//!   keeps them in memory, for tests. In the browser build, `TempFileStore` keeps its tiles in the origin-private
+//!   file system instead (`opfs`), with the same API.
 //!   A run that crashes can't remove its folder, so each folder holds a lock file for as long as its store lives, and
 //!   [`TempFileStore::remove_abandoned`] removes, at the next startup, the folders whose lock nobody holds.
 //!
@@ -16,12 +17,18 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{ErrorKind, Read as _};
-use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::image::{AnyImage, ColorSpace, Image, ImageError, Sample, SampleFormat};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::lock::{LockFile, LockState};
 
 /// A tile's name in a cache or store: which image (a frame, an accumulator, a pyramid level: the caller's numbering)
@@ -166,6 +173,7 @@ impl TileStore for MemoryStore {
 /// The folder is named after the desktop app's binary with `-tiles-` (`florastack-tiles-<pid>-...`), and holds a lock
 /// file, [`TempFileStore::LOCK_FILE`], locked for as long as the store lives. A run that crashes leaves its folder
 /// behind with the lock released, and [`TempFileStore::remove_abandoned`] removes it at the next startup.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub struct TempFileStore {
     dir: PathBuf,
@@ -176,12 +184,18 @@ pub struct TempFileStore {
     lock: Option<LockFile>,
 }
 
+#[cfg(target_arch = "wasm32")]
+pub use crate::opfs::TempFileStore;
+
 /// A tile folder younger than this is never removed as abandoned: the folder may be between its creation and its
 /// lock, or its run may have crashed a moment ago (it goes at the next startup).
+#[cfg(not(target_arch = "wasm32"))]
 const ABANDONED_AFTER: Duration = Duration::from_secs(60);
 /// A tile folder without a lock file (from a build before the lock existed) is removed only when it is this old.
+#[cfg(not(target_arch = "wasm32"))]
 const UNLOCKED_ABANDONED_AFTER: Duration = Duration::from_hours(24);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TempFileStore {
     /// The name of the lock file in each tile folder.
     pub const LOCK_FILE: &'static str = ".lock";
@@ -315,6 +329,7 @@ impl TempFileStore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TileStore for TempFileStore {
     fn write(&mut self, key: TileKey, bytes: &[u8]) -> Result<(), StoreError> {
         let path = self.file(key);
@@ -357,6 +372,7 @@ impl TileStore for TempFileStore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for TempFileStore {
     fn drop(&mut self) {
         if self.removed {

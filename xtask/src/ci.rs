@@ -62,6 +62,7 @@ pub const STEPS: &[Step] = &[
     Step { name: "audit", args: &["audit"], tool: Some("cargo-audit") },
     // mdBook and lychee aren't cargo subcommands: `cargo xtask book` checks for them itself.
     Step { name: "book", args: &["xtask", "book"], tool: None },
+    Step { name: "web", args: &["xtask", "web", "--clippy", "--test"], tool: None },
 ];
 
 /// How a step went.

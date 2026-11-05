@@ -29,8 +29,9 @@
 //!
 //! # Waiting
 //!
-//! Readbacks wait for the GPU, which native targets can do; in a browser nothing may block, so the stackers need the
-//! web build's jobs to await them (roadmap 7.3), and until then the engine stacks there on the CPU.
+//! Readbacks wait for the GPU, which native targets can do. In a browser nothing may block, so the stack's result is
+//! awaited instead ([`GpuStacker::finish_async`], on the worker that owns the device, the engine's `webgpu`); a stack
+//! whose tiles must be read back to make room during the frames fails there, and the engine stacks it on the CPU.
 
 mod average;
 mod depth;
@@ -264,7 +265,7 @@ fn key(plane: usize, tile: usize) -> TileKey {
 impl Residency {
     fn new(tiling: &GpuTiling, total: u64) -> Result<Residency, GpuError> {
         let store = if total > tiling.budget as u64 + tiling.host_budget as u64 {
-            let dir = tiling.spill_dir.clone().unwrap_or_else(std::env::temp_dir);
+            let dir = tiling.spill_dir.clone().unwrap_or_else(florastack_core::fs::temp_dir);
             Spill::Files(TempFileStore::in_dir(&dir)?)
         } else {
             Spill::Memory(MemoryStore::new())
@@ -542,8 +543,8 @@ impl GpuStacker {
         Ok(())
     }
 
-    /// The tile's result and coverage, read back.
-    fn tile_result(&self, stack: &mut InProgress, tile: Tile, image: bool) -> Result<Image<f32>, GpuError> {
+    /// The tile's result and coverage, on the GPU.
+    fn tile_planes(&self, stack: &mut InProgress, tile: Tile) -> Result<(Plane, Plane), GpuError> {
         let gpu = self.gpu.clone();
         let view = View {
             region: self.method.read_region(tile.outer, stack.shape.width, stack.shape.height),
@@ -554,18 +555,24 @@ impl GpuStacker {
         let mut batch = Batch::new(&gpu);
         let method = &self.method;
         let state = stack.residency.get(&gpu, &mut batch, tile.index, |b| method.state(b, &view, stack.shape))?;
-        let (result, covered) = method.result(&mut batch, state, &view, stack.shape)?;
+        let planes = method.result(&mut batch, state, &view, stack.shape)?;
         batch.submit();
-        let mut out = gpu.download(if image { &result } else { &covered })?;
+        Ok(planes)
+    }
+
+    /// The tile's result (`image`) or coverage, read back.
+    fn tile_result(&self, stack: &mut InProgress, tile: Tile, image: bool) -> Result<Image<f32>, GpuError> {
+        let (result, covered) = self.tile_planes(stack, tile)?;
+        let mut out = self.gpu.download(if image { &result } else { &covered })?;
         if image {
             out.set_color_space(stack.color.clone().unwrap_or(ColorSpace::LINEAR));
         }
         Ok(out)
     }
 
-    /// The stack of the frames added since `begin`, which ends it. `monitor` hears the progress (in tiles).
-    pub fn finish(&mut self, monitor: &dyn Monitor) -> Result<GpuStacked, GpuError> {
-        let mut stack = self.stack.take().ok_or(GpuError::Unsupported { what: "finishing before `begin`" })?;
+    /// The stack begun, with the method's last step before its results recorded.
+    fn finishing(&mut self) -> Result<InProgress, GpuError> {
+        let stack = self.stack.take().ok_or(GpuError::Unsupported { what: "finishing before `begin`" })?;
         if stack.frames == 0 {
             return Err(GpuError::Unsupported { what: "a stack of no frames" });
         }
@@ -573,13 +580,50 @@ impl GpuStacker {
         let mut batch = Batch::new(&gpu);
         self.method.prepare(&mut batch)?;
         batch.finish()?;
+        Ok(stack)
+    }
+
+    /// The stack of the frames added since `begin`, which ends it. `monitor` hears the progress (in tiles).
+    pub fn finish(&mut self, monitor: &dyn Monitor) -> Result<GpuStacked, GpuError> {
+        let mut stack = self.finishing()?;
+        Self::assemble(&mut stack, monitor, |stack, tile, image| self.tile_result(stack, tile, image))
+    }
+
+    /// [`GpuStacker::finish`] in a browser, where the tiles are read back by awaiting them: every tile's result and
+    /// coverage first, then the stack assembled from them.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn finish_async(&mut self, monitor: &dyn Monitor) -> Result<GpuStacked, GpuError> {
+        let mut stack = self.finishing()?;
+        let mut read = HashMap::new();
+        for tile in stack.grid.clone().tiles() {
+            monitor.checkpoint()?;
+            let (result, covered) = self.tile_planes(&mut stack, tile)?;
+            let mut image = self.gpu.download_async(&result).await?;
+            image.set_color_space(stack.color.clone().unwrap_or(ColorSpace::LINEAR));
+            read.insert((tile.index, true), image);
+            read.insert((tile.index, false), self.gpu.download_async(&covered).await?);
+        }
+        Self::assemble(&mut stack, monitor, |_, tile, image| {
+            // The coverage is read twice: to count what no frame covers, then for the alpha.
+            let got = if image { read.remove(&(tile.index, true)) } else { read.get(&(tile.index, false)).cloned() };
+            got.ok_or(GpuError::Readback { what: "a tile" })
+        })
+    }
+
+    /// The stack from its tiles' results and coverage, which `read` gives (`true`: the result): the uncovered pixels
+    /// counted from the coverage, the result stitched, and the alpha stitched when some pixel is uncovered.
+    fn assemble(
+        stack: &mut InProgress,
+        monitor: &dyn Monitor,
+        mut read: impl FnMut(&mut InProgress, Tile, bool) -> Result<Image<f32>, GpuError>,
+    ) -> Result<GpuStacked, GpuError> {
         let grid = stack.grid.clone();
         let n = grid.len();
         // Count the pixels no frame covered, in the tiles' cores, which partition the canvas.
         let mut uncovered = 0;
         for (done, tile) in grid.tiles().enumerate() {
             monitor.checkpoint()?;
-            let covered = self.tile_result(&mut stack, tile, false)?;
+            let covered = read(stack, tile, false)?;
             let inner = inner(&grid, tile);
             let (x0, y0) = (tile.core.x - inner.x, tile.core.y - inner.y);
             uncovered += (y0..y0 + tile.core.height)
@@ -592,7 +636,7 @@ impl GpuStacker {
         let image = grid.stitch_with(|index| {
             monitor.checkpoint()?;
             let tile = grid.tile(index).ok_or(GpuError::Readback { what: "a tile" })?;
-            let result = self.tile_result(&mut stack, tile, true)?;
+            let result = read(stack, tile, true)?;
             done += 1;
             monitor.progress(done as u64, 3 * n as u64);
             outer_sized(tile, inner(&grid, tile), result)
@@ -601,7 +645,7 @@ impl GpuStacker {
             Some(grid.stitch_with(|index| {
                 monitor.checkpoint()?;
                 let tile = grid.tile(index).ok_or(GpuError::Readback { what: "a tile" })?;
-                let covered = self.tile_result(&mut stack, tile, false)?;
+                let covered = read(stack, tile, false)?;
                 done += 1;
                 monitor.progress(done as u64, 3 * n as u64);
                 outer_sized(tile, inner(&grid, tile), covered)

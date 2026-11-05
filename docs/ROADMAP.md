@@ -81,7 +81,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Reduced-size development straight from the mosaic, for thumbnails, the filmstrip (2.3) and quarter-scale previews (3.1): `Quality::Preview` demosaics the whole frame
 - [ ] `RawDecoder::decode` checks the size from the headers before decoding, and LightCraft's header probe unpacks the samples of uncompressed ORF and PEF files to read them: those files are decoded twice
 - [ ] A truncated RAW file, such as one a camera is still writing, is a `Malformed` error like a damaged one: the watch folder (4.2) must wait until a file's size settles
-- [ ] `cargo check -p florastack-raw --target wasm32-unknown-unknown`, with LightCraft's pipeline, develop and raster crates (7.3)
+- [x] `cargo check -p florastack-raw --target wasm32-unknown-unknown`, with LightCraft's pipeline, develop and raster crates (7.3): they build for the browser, threads and all, and CI's `web` job lints them for it (`cargo xtask web --clippy`)
 
 ### 1.4 Project model
 
@@ -102,7 +102,8 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Frames found again when a project moves to another machine (the stored paths are absolute; a relative path is resolved from the folder that holds the project folder)
 - [ ] Retouch strokes: `project.json` is capped at 64 MiB, so long stroke lists may have to move into cache files (5.3)
 - [ ] Re-arm the quick frame check: a frame hashed within `TRUSTED_AGE` (3 s) of its last modification keeps no modification time, so that a same-size rewrite can't pass for unchanged, and every check hashes it again; store its time once a later check finds it unchanged and settled (frames from tethered capture and the watch folder, 4.2 and 6.1, are all this kind)
-- [ ] `cargo check -p florastack-project --target wasm32-unknown-unknown` in CI (it builds and passes Clippy locally), and a project-folder backend over the browser's origin-private storage (7.3)
+- [x] `cargo check -p florastack-project --target wasm32-unknown-unknown` in CI (7.3): CI's `web` job lints it for the browser; its files go through florastack-core's `fs`, an in-memory file system there
+- [ ] A project-folder backend over the browser's origin-private storage, so that a browser's projects outlive the page (7.3 keeps them in the page's memory), with projects saved and opened as downloaded and uploaded archives
 
 ### 1.5 Command registry and job engine *(plan first)*
 
@@ -115,7 +116,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] Watch captures commit arrivals as they go in a private engine (4.2): each ingest extends the alignment chain, updates a preview and saves its own project through registry commands. The host job publishes the staged artifacts after the quiet period; cancellation before publication removes them without changing the host session. Job events carry the current preview path and frame count
 - [ ] Preview jobs' pixels to the UI (5.2): job results are JSON, which carries no images; `stack.preview` (3.1) writes its result as a lossless TIFF in `previews/` and returns the path, and every call leaves one there until the project is closed (about 10 MB for a 20 MP stack). Keep the latest preview in memory for the viewer to read instead
 - [ ] Per-command capabilities for the control channel and MCP (6.4): `CommandInfo::effects` says what each command may change, and untrusted clients need a gate
-- [ ] The browser build's executor, over a Web Worker pool, and a `project.close` that doesn't block (7.3): `Engine::wait` is native only, and closing waits for cancelled jobs to stop
+- [x] The browser build's executor, over a Web Worker pool, and a `project.close` that doesn't block (7.3): `LaneExecutor`, one long-lived worker per lane, the jobs' data-parallel work on rayon's pool of workers; in a browser, closing asks the project's jobs to stop and refuses, saying so, until they have
 - [x] Typed preference group for stack (3.1): `preset.apply` checks it with florastack-stack's `StackSettings`, as it checks align's with `AlignSettings` (2.1)
 - [x] Typed preference group for output (5.4): `preset.apply` checks it with the engine's `OutputSettings` (`commands::export`)
 - [ ] A byte budget for the undo history (long retouch sessions, 5.3): it keeps the last 1000 steps, whatever their size
@@ -300,7 +301,8 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] Found by the agreement tests: florastack-core's box passes kept the rounding of large samples in their running sums after the samples had left the window, so that a noiseless flat region beside sharp detail got weights below 0 in the weighted average (whose weights span 1e18 to 1e-24 there) and came out black and uncovered: 525 pixels of a 400x120 test stack, 4007 of a 1800x1200 one. A running sum that cancels is now summed again from its window (`CANCELLED`); sums that don't cancel compute as before. Regression tests in `ops/blur.rs` and `crates/stack/tests/average.rs`, which failed before; the quality gate passes on the baseline unchanged
 - [ ] The depth map's resolve step (the domain transform and push-pull, 1.85 s at 24 MP on the CPU) on the GPU, between its passes
 - [ ] The pyramid's coarse limit on the GPU
-- [ ] The web build: the stackers wait for their readbacks, which a browser can't; the engine stacks there on the CPU until its jobs can await the GPU (7.3)
+- [x] The web build: the stackers wait for their readbacks, which a browser can't; the engine stacks there on the CPU until its jobs can await the GPU (7.3): a GPU worker owns the WebGPU device and awaits the results (`finish_async`, `self_test_async`); jobs stack through it (`crate::webgpu`)
+- [ ] In a browser, tiles read back during the frames, to make room on the GPU, are awaited too: a stack that outgrows the GPU's budget stacks on the CPU there now
 - [ ] The VRAM budget is a fixed 1 GiB: wgpu doesn't report a device's memory, but DXGI's budget and Metal's recommended working set could size it
 - [ ] Frames reach the GPU as linear `f32` from the decoders and the RAW develop; uploading 16-bit samples and converting them on the GPU (the unpacking kernel exists) would halve what crosses the bus
 - [ ] A GPU frame takes about 150 ms whatever the method: copying and uploading its 288 MB, not the kernels. Overlapping a tile's copy and upload with the previous tile's kernels, and uploading 16-bit samples (below), would cut it
@@ -450,11 +452,20 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 
 ### 7.3 Browser build *(optional)*
 
-- [ ] wasm32 build with eframe's web backend and WebGPU, with a CPU fallback on a Web Worker pool
-- [ ] OPFS-backed `TileStore`, capture disabled, and a clear message when a stack needs more memory than the browser has
-- [ ] Cross-origin isolation headers (COOP and COEP) in the Dockerfile's server config and documented for other hosts; `cargo xtask web`
-- [ ] A headless browser test stacks a 20-frame synthetic stack
-- [ ] `cargo check -p florastack-codecs --target wasm32-unknown-unknown` in CI (exr is single-threaded there, and a decoder panic aborts instead of becoming an error)
+- [x] wasm32 build with eframe's web backend and WebGPU, with a CPU fallback on a Web Worker pool: the desktop app's library built for `wasm32-unknown-unknown` with threads (atomics and shared memory, the standard library rebuilt on the fuzz targets' nightly), started on the page by `apps/florastack/src/web.rs`, drawn with WebGPU or WebGL; florastack-core supplies what the standard library can't there (`fs`, an in-memory file system; `thread`, Web Workers on shared memory, and rayon's pool on them; `time`; `sync`, locks that spin on the main thread; `process`); the engine runs its jobs on `LaneExecutor`'s workers and stacks on WebGPU through a GPU worker (`crate::webgpu`) when the device passes the self-test, on the CPU's workers otherwise. Files come from the file input and drops into `/files`, exports leave as downloads from `/downloads`, and `window.florastack.dispatch` runs engine commands from the page's scripts. Book: [In the browser](../book/src/user/browser.md), [The browser build](../book/src/dev/web.md)
+- [x] OPFS-backed `TileStore`, capture disabled, and a clear message when a stack needs more memory than the browser has: the browser's `TempFileStore` keeps its tiles in the origin-private file system through a storage worker (`crates/core/src/opfs.rs`), which also removes what closed pages left; the Capture and Batch tabs, opening and saving projects elsewhere, recent projects and the control channel are left out; files beyond half of the page's 4 GiB are refused, and a stack that wouldn't fit beside them stops before it starts, each with a message that says how much it takes and what to do (`compute::check_memory`)
+- [x] Cross-origin isolation headers (COOP and COEP) in the Dockerfile's server config and documented for other hosts; `cargo xtask web`: the root `Dockerfile` builds the site and serves it with nginx (`packaging/web/nginx.conf`, unprivileged, base images pinned to digests), or serves a site built already (`--build-context site=…`); `packaging/web/README.md` gives the headers with nginx, Apache, Caddy, Netlify and Cloudflare Pages examples; `cargo xtask web` builds the site (`--serve`, `--test`, `--clippy`, `--dev`), and a test checks that every config sends the headers
+- [x] A headless browser test stacks a 20-frame synthetic stack: `cargo xtask web --test` gives the page 20 frames of a layered scene (the engine's `web_stack` example) through its file input, aligns and stacks them by the pyramid in headless Edge or Chrome (Playwright's library, `apps/florastack/tests/web/stack.mjs`), downloads the output and compares it with the same stack stacked natively. Locally, in headless Edge on Windows with WebGPU, over two runs: frames added in 0.9 to 2.3 s, aligned in 2.2 to 2.5 s, stacked on WebGPU in 1.0 to 4.2 s and on the CPU's 16 threads in 0.5 s; 88.3 dB (WebGPU) and 104.5 dB (CPU) against the native stack. CI's `web` job runs it in Chrome on Linux; it hasn't run there yet
+- [x] `cargo check -p florastack-codecs --target wasm32-unknown-unknown` in CI (exr is single-threaded there, and a decoder panic aborts instead of becoming an error): CI's `web` job runs Clippy on every crate the browser build compiles, for wasm32 with threads (`cargo xtask web --clippy`)
+- [ ] Follow-up: the CI `web` job's first run (the browser test in Chrome on Linux, without a GPU, and the Docker image's headers); the Dockerfile's full build, from the source in a container, hasn't been run (no Docker daemon here)
+- [ ] Follow-up: the GPU viewer and the 3D orbit view in the browser: egui-wgpu keeps paint-callback resources in a map that wants them `Send` and `Sync`, which wgpu's objects aren't with threads, so the browser's viewer draws through egui, very large images reduced; resources kept in a thread-local would do
+- [ ] Follow-up: stacking on WebGPU in the browser copies each frame to the GPU worker, which makes it slower than the CPU's threads on small stacks (1 to 4 s against 0.5 s for 20 frames of 480 x 360); measure it on camera-sized frames, and share the frames instead, or choose the CPU below a size
+- [ ] Follow-up: a frame too large to decode in the page's memory (above about 100 MP) is caught only when a stack starts: check frames' sizes when they are added or aligned
+- [ ] Follow-up: the browser version tested in Firefox and Safari, which have WebGPU on some systems only; the test drives Chromium-based browsers
+- [ ] Follow-up: a smaller download: `wasm-opt`, and precompressed `.br` and `.gz` files (the module is 28 MB, about 7 MB gzipped)
+- [ ] Follow-up: in the browser, the empty view's hint and **Import stacks from a folder…** mention folders, which a page can't open
+- [ ] Follow-up: `wasm_sync`'s `OnceLock` spins forever with the standard library this nightly brings (it reads `Once`'s private state); florastack-core uses its own (`sync::OnceLock`), but report it upstream
+- [ ] Follow-up: the nightly toolchain, which only `-Z build-std` needs, until the standard library ships for wasm32 with atomics
 
 ### After the last step
 

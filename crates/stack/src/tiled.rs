@@ -484,7 +484,7 @@ impl<K: TileKernel> Stacker for Tiled<K> {
             kinds.get_or_insert_with(|| state.iter().map(Kind::of).collect::<Vec<_>>());
         }
         let store = if bytes > self.tiling.budget {
-            let dir = self.tiling.spill_dir.clone().unwrap_or_else(std::env::temp_dir);
+            let dir = self.tiling.spill_dir.clone().unwrap_or_else(florastack_core::fs::temp_dir);
             tracing::info!(
                 "stacking a {}x{} canvas: its accumulators ({} MiB) exceed the {} MiB budget, so tiles spill to temporary files in {}",
                 shape.width,

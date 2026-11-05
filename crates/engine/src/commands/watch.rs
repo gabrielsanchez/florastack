@@ -1,9 +1,9 @@
 //! Tethered capture through native filesystem notifications with a periodic directory scan as a fallback.
 
+use florastack_core::time::{Duration, Instant, SystemTime};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
-use std::time::{Duration, Instant, SystemTime};
 
 use florastack_core::Monitor;
 use notify::{EventKind, RecursiveMode, Watcher};
@@ -100,7 +100,7 @@ struct Stamp {
 }
 
 fn stamp(path: &Path) -> Result<Stamp, CommandError> {
-    let metadata = std::fs::metadata(path).map_err(|e| io_error(path, e))?;
+    let metadata = florastack_core::fs::metadata(path).map_err(|e| io_error(path, e))?;
     Ok(Stamp { size: metadata.len(), modified: metadata.modified().ok() })
 }
 
@@ -125,7 +125,7 @@ impl Capture {
     /// A bounded rescan also catches rename-to-final-name, missed events and unsupported network shares.
     fn scan(&mut self, input: &Path) -> Result<(), CommandError> {
         let paths = children(input)?;
-        for path in paths.into_iter().filter(|p| p.is_file() && crate::frames::is_frame_name(p)) {
+        for path in paths.into_iter().filter(|p| florastack_core::fs::path_is_file(p) && crate::frames::is_frame_name(p)) {
             let Ok(current) = stamp(&path) else { continue };
             if let Some(file) = self.files.get_mut(&path) {
                 if file.stamp != current {
@@ -146,7 +146,7 @@ impl Capture {
             }
         }
         // Missing pending files are usually temporary filenames renamed by the tethering application.
-        self.files.retain(|path, file| file.accepted || path.exists());
+        self.files.retain(|path, file| file.accepted || florastack_core::fs::path_exists(path));
         if self.files.len() > super::MAX_ITEMS {
             return Err(unavailable("watch.run", "capture has more than 100000 frames"));
         }
@@ -167,7 +167,7 @@ impl Capture {
             }
             // A settled length alone is insufficient: writers can pause partway through a RAW or TIFF file.
             let readable = (|| {
-                let bytes = std::fs::read(path).map_err(|e| io_error(path, e))?;
+                let bytes = florastack_core::fs::read(path).map_err(|e| io_error(path, e))?;
                 let mut reader = crate::frames::FrameReader::new(settings.clone(), florastack_codecs::ReadOptions::default());
                 reader.read(&bytes, florastack_raw::Quality::Preview)?;
                 Ok::<_, CommandError>(())
@@ -284,10 +284,10 @@ pub(super) fn ingest(
                 let preview = call(&mut engine, ctx, "stack.preview", json!({"method": p.method.name()}))?;
                 if let Some(path) = preview.get("path").and_then(Value::as_str) {
                     let destination = workspace.stage.path().join(&preview_name);
-                    let bytes = std::fs::read(path).map_err(|e| io_error(Path::new(path), e))?;
+                    let bytes = florastack_core::fs::read(path).map_err(|e| io_error(Path::new(path), e))?;
                     super::output::write_atomically(&destination, &bytes)?;
                     // stack.preview creates an unreferenced cache file. Keep only the published capture copy.
-                    std::fs::remove_file(path).map_err(|e| io_error(Path::new(path), e))?;
+                    florastack_core::fs::remove_file(path).map_err(|e| io_error(Path::new(path), e))?;
                     ctx.preview(super::display(&destination), capture.frames.len());
                 }
                 call(&mut engine, ctx, "project.save", json!({}))?;

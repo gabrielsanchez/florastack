@@ -224,7 +224,7 @@ fn update(session: &Session, _: NoParams) -> Result<JobPlan<Updated>, CommandErr
             let preview = match job.preview {
                 Ok(current) => current,
                 Err(key) => {
-                    let read = std::fs::read(&job.path)
+                    let read = florastack_core::fs::read(&job.path)
                         .map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: job.path.clone(), source }))
                         .and_then(|bytes| {
                             reader.read(&bytes, Quality::Preview).map_err(|source| ProjectDataError::ReadFrame { path: job.path.clone(), source })

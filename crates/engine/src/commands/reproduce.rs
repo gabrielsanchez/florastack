@@ -1,11 +1,14 @@
 //! Versioned export manifests and native replay from original, SHA-256-verified inputs.
 //! Output pixels are recomputed; non-regenerable project masks are the only binary assets in the sidecar.
 
+#[cfg(not(target_arch = "wasm32"))]
 use florastack_core::Monitor;
 use std::path::{Path, PathBuf};
 
 use florastack_codecs::OutputSpec;
-use florastack_project::{CacheDir, CacheRef, ContentHash, FrameFile, FrameId, Input, OutputId, Project};
+#[cfg(not(target_arch = "wasm32"))]
+use florastack_project::FrameFile;
+use florastack_project::{CacheDir, CacheRef, ContentHash, FrameId, Input, OutputId, Project};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -261,7 +264,7 @@ fn reproduce(_: &Session, p: ReproduceParams) -> Result<crate::jobs::JobPlan<Rep
             source.outputs.clone_from(&rebuilt);
             let bytes = serde_json::to_vec(&source).map_err(|source| florastack_project::ProjectError::Data { what: "replay project", source })?;
             let file = project_path.join(florastack_project::schema::FILE_NAME);
-            std::fs::write(&file, bytes).map_err(|e| super::batch::io_error(&file, e))?;
+            florastack_core::fs::write(&file, bytes).map_err(|e| super::batch::io_error(&file, e))?;
             (folder, _) = florastack_project::ProjectFolder::open(&project_path)?;
         }
         recipe.project.outputs = rebuilt;
@@ -272,7 +275,7 @@ fn reproduce(_: &Session, p: ReproduceParams) -> Result<crate::jobs::JobPlan<Rep
         let mut engine = replay_engine(stage.path());
         engine.run("project.open", json!({"path": project_path}))?;
         let staged_exports = stage.path().join("export");
-        std::fs::create_dir_all(&staged_exports).map_err(|e| super::batch::io_error(&staged_exports, e))?;
+        florastack_core::fs::create_dir_all(&staged_exports).map_err(|e| super::batch::io_error(&staged_exports, e))?;
         let mut result = match recipe.export {
             Export::Run { settings } => {
                 engine.run("export.reset", json!({}))?;
@@ -311,8 +314,8 @@ fn publish_copy(
     let source = PathBuf::from(value.as_str().ok_or_else(|| super::scientific::unavailable("an exported file has no path"))?);
     let relative = source.strip_prefix(stage).map_err(|_| super::scientific::unavailable("an exported path is outside the replay workspace"))?;
     let target = destination.join(relative);
-    let bytes =
-        std::fs::read(&source).map_err(|source_error| florastack_project::ProjectError::Read { path: source.clone(), source: source_error })?;
+    let bytes = florastack_core::fs::read(&source)
+        .map_err(|source_error| florastack_project::ProjectError::Read { path: source.clone(), source: source_error })?;
     publication.stage(&target, &bytes)?;
     *value = json!(super::display(&target));
     Ok(())
@@ -334,7 +337,7 @@ fn restore_assets(assets: &[Asset], project: &Path) -> Result<(), CommandError> 
             return Err(super::scientific::unavailable("embedded mask hash mismatch"));
         }
         let path = asset.reference.path.resolve(project);
-        std::fs::write(&path, &asset.bytes).map_err(|e| super::batch::io_error(&path, e))?;
+        florastack_core::fs::write(&path, &asset.bytes).map_err(|e| super::batch::io_error(&path, e))?;
     }
     Ok(())
 }

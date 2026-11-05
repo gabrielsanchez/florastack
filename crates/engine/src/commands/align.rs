@@ -349,8 +349,8 @@ impl Plan {
     /// Reads and develops the `i`-th frame, without inpainting it.
     pub(crate) fn read_unmasked(&mut self, i: usize) -> Result<Image<f32>, CommandError> {
         let (Some(&id), Some(path)) = (self.ids.get(i), self.paths.get(i)) else { return Err(self.internal()) };
-        let bytes =
-            std::fs::read(path).map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: path.clone(), source }))?;
+        let bytes = florastack_core::fs::read(path)
+            .map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: path.clone(), source }))?;
         let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
         if florastack_project::ContentHash::of(&bytes) != frame.hash {
             return Err(CommandError::Unavailable {

@@ -126,7 +126,7 @@ impl FolderTrash {
 
 impl Trash for FolderTrash {
     fn trash(&self, path: &Path) -> Result<(), TrashError> {
-        std::fs::create_dir_all(&self.dir)?;
+        florastack_core::fs::create_dir_all(&self.dir)?;
         let name = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "nothing to move"))?;
         // A free name: renaming onto an existing empty folder would replace it on some systems.
         for n in 0..10_000u32 {
@@ -135,8 +135,8 @@ impl Trash for FolderTrash {
                 candidate.push(format!(" ({n})"));
             }
             let target = self.dir.join(candidate);
-            if std::fs::symlink_metadata(&target).is_err() {
-                std::fs::rename(path, &target)?;
+            if florastack_core::fs::symlink_metadata(&target).is_err() {
+                florastack_core::fs::rename(path, &target)?;
                 return Ok(());
             }
         }
@@ -151,19 +151,19 @@ mod tests {
     #[test]
     fn a_folder_trash_moves_and_never_overwrites() {
         let root = std::env::temp_dir().join(format!("florastack-project-trash-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = florastack_core::fs::remove_dir_all(&root);
         let bin = FolderTrash::new(root.join("bin"));
         for content in [&b"first"[..], b"second"] {
             let dir = root.join("old.florastack");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("project.json"), content).unwrap();
+            florastack_core::fs::create_dir_all(&dir).unwrap();
+            florastack_core::fs::write(dir.join("project.json"), content).unwrap();
             bin.trash(&dir).unwrap();
             assert!(!dir.exists());
         }
-        assert_eq!(std::fs::read(bin.path().join("old.florastack").join("project.json")).unwrap(), b"first");
-        assert_eq!(std::fs::read(bin.path().join("old.florastack (1)").join("project.json")).unwrap(), b"second");
+        assert_eq!(florastack_core::fs::read(bin.path().join("old.florastack").join("project.json")).unwrap(), b"first");
+        assert_eq!(florastack_core::fs::read(bin.path().join("old.florastack (1)").join("project.json")).unwrap(), b"second");
         let missing = bin.trash(&root.join("missing")).unwrap_err();
         assert!(matches!(&missing.0, Kind::Io(e) if e.kind() == std::io::ErrorKind::NotFound), "{missing:?}");
-        std::fs::remove_dir_all(&root).unwrap();
+        florastack_core::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -116,22 +116,19 @@ impl Gpu {
         self.queue().write_buffer(&plane.buffer, 0, bytemuck::cast_slice(words));
     }
 
-    /// `plane`'s raw words, once the GPU has done everything submitted before.
-    pub(crate) fn read_words(&self, plane: &Plane, what: &'static str) -> Result<Vec<u32>, GpuError> {
-        let len = plane.len();
-        let Some(bytes) = sample_bytes(len) else { return Err(GpuError::Readback { what }) };
+    /// A buffer the CPU can map, with `plane`'s words copied into it once the GPU has done everything submitted
+    /// before: a readback's first step.
+    fn staged(&self, plane: &Plane, what: &'static str) -> Result<wgpu::Buffer, GpuError> {
+        let Some(bytes) = sample_bytes(plane.len()) else { return Err(GpuError::Readback { what }) };
         let staging = self.buffer(what, bytes, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST)?;
         let mut encoder = self.device().create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(what) });
         encoder.copy_buffer_to_buffer(&plane.buffer, 0, &staging, 0, bytes);
         self.queue().submit([encoder.finish()]);
-        let (sent, mapped) = std::sync::mpsc::channel();
-        staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sent.send(result.is_ok());
-        });
-        self.wait()?;
-        if !self.mapping(&mapped)? {
-            return Err(GpuError::Readback { what });
-        }
+        Ok(staging)
+    }
+
+    /// The first `len` words of `staging`, mapped: a readback's last step.
+    fn mapped_words(staging: &wgpu::Buffer, len: usize, what: &'static str) -> Result<Vec<u32>, GpuError> {
         let words = {
             let view = staging.slice(..).get_mapped_range().map_err(|_| GpuError::Readback { what })?;
             let mut words: Vec<u32> = match bytemuck::try_cast_slice::<u8, u32>(&view) {
@@ -143,6 +140,36 @@ impl Gpu {
         };
         staging.unmap();
         Ok(words)
+    }
+
+    /// `plane`'s raw words, once the GPU has done everything submitted before.
+    pub(crate) fn read_words(&self, plane: &Plane, what: &'static str) -> Result<Vec<u32>, GpuError> {
+        let staging = self.staged(plane, what)?;
+        let (sent, mapped) = std::sync::mpsc::channel();
+        staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sent.send(result.is_ok());
+        });
+        self.wait()?;
+        if !self.mapping(&mapped)? {
+            return Err(GpuError::Readback { what });
+        }
+        Gpu::mapped_words(&staging, plane.len(), what)
+    }
+
+    /// [`Gpu::read_words`] in a browser, where a readback is awaited: the mapping's callback runs once the thread
+    /// that awaits it returns to its event loop.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) async fn read_words_async(&self, plane: &Plane, what: &'static str) -> Result<Vec<u32>, GpuError> {
+        let staging = self.staged(plane, what)?;
+        let (sent, mapped) = futures_channel::oneshot::channel();
+        staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sent.send(result.is_ok());
+        });
+        // A dropped callback cancels the channel: the mapping can't succeed.
+        if !mapped.await.unwrap_or(false) {
+            return Err(GpuError::Readback { what });
+        }
+        Gpu::mapped_words(&staging, plane.len(), what)
     }
 
     /// Whether a mapping succeeded, once its callback has run. A poll runs the callbacks of every mapping it finds
@@ -164,15 +191,27 @@ impl Gpu {
         }
     }
 
-    /// In a browser nothing may block: the callback has run by now, or the readback fails (see `stack/mod.rs`).
+    /// In a browser nothing may block: the callback has run by now, or the readback fails. A browser reads back with
+    /// [`Gpu::read_words_async`] instead; what still calls this there (a stack's tiles read back to make room on the GPU)
+    /// fails, and the stack starts again on the CPU.
     #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps, reason = "the native `mapping`'s signature")]
     fn mapping(&self, mapped: &std::sync::mpsc::Receiver<bool>) -> Result<bool, GpuError> {
         Ok(mapped.try_recv().unwrap_or(false))
     }
 
     /// `plane` read back as a linear `f32` image.
     pub fn download(&self, plane: &Plane) -> Result<Image<f32>, GpuError> {
-        let words = self.read_words(plane, "a plane")?;
+        Gpu::image_of(plane, self.read_words(plane, "a plane")?)
+    }
+
+    /// [`Gpu::download`] in a browser (see [`Gpu::read_words_async`]).
+    #[cfg(target_arch = "wasm32")]
+    pub async fn download_async(&self, plane: &Plane) -> Result<Image<f32>, GpuError> {
+        Gpu::image_of(plane, self.read_words_async(plane, "a plane").await?)
+    }
+
+    fn image_of(plane: &Plane, words: Vec<u32>) -> Result<Image<f32>, GpuError> {
         let samples = words.into_iter().map(f32::from_bits).collect();
         Ok(Image::from_vec(plane.width, plane.height, plane.channels, ColorSpace::LINEAR, samples)?)
     }

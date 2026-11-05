@@ -148,8 +148,8 @@ struct Read {
 
 /// Reads `path` for comparison with its neighbors.
 fn read(reader: &mut FrameReader, path: &std::path::Path) -> Result<Read, CommandError> {
-    let bytes =
-        std::fs::read(path).map_err(|source| CommandError::from(florastack_project::ProjectError::Read { path: path.to_path_buf(), source }))?;
+    let bytes = florastack_core::fs::read(path)
+        .map_err(|source| CommandError::from(florastack_project::ProjectError::Read { path: path.to_path_buf(), source }))?;
     let time = florastack_codecs::read_metadata(&bytes).summary().capture_time.as_deref().and_then(capture_seconds);
     let frame = reader
         .read(&bytes, Quality::Preview)

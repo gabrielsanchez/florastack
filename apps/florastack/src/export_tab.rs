@@ -129,14 +129,10 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     estimate(app, ui, output.id);
     ui.checkbox(&mut app.export.overwrite, tr("export-overwrite")).on_hover_text(tr("tip-export-overwrite"));
     ui.horizontal(|ui| {
-        if ui.button(tr("export-run")).on_hover_text(tr("tip-export-run")).clicked() {
-            let mut dialog = rfd::FileDialog::new();
-            if let Some(folder) = &app.prefs.last_folder {
-                dialog = dialog.set_directory(folder);
-            }
-            if let Some(folder) = dialog.pick_folder() {
-                app.export_to(output.id, &folder);
-            }
+        if ui.button(tr("export-run")).on_hover_text(tr("tip-export-run")).clicked()
+            && let Some(folder) = crate::dialogs::write_folder(app.prefs.last_folder.as_deref())
+        {
+            app.export_to(output.id, &folder);
         }
         if ui.button(tr("export-remove")).clicked() {
             app.shell.run("output.remove", json!({ "output": output.id }));

@@ -19,21 +19,32 @@
 //!   folder in use (a tile store's, an open project's) can be told from one that a crashed run left behind.
 //! - [`progress`]: [`Monitor`], what long operations report their progress to and check for cancellation at their
 //!   checkpoints, so that the engine can run them as cancellable jobs.
+//! - What the browser build (`cargo xtask web`) needs in place of the standard library's, which is the same on
+//!   native targets: [`fs`], an in-memory file system in the browser; [`thread`], threads on Web Workers there;
+//!   [`time`], the browser's clocks; [`sync`], locks that the page's main thread, which may not block, can take; and
+//!   [`process`], a process id. The crates that run in the browser use these.
 //!
 //! Behind the `testutil` feature, which only `[dev-dependencies]` may enable, the [`testutil`] module generates
 //! synthetic focus stacks with known ground truth for the alignment and stacking tests.
 
 pub mod convert;
+pub mod fs;
 pub mod geometry;
 pub mod image;
 pub mod lock;
+#[cfg(target_arch = "wasm32")]
+mod opfs;
 pub mod ops;
 pub mod orientation;
+pub mod process;
 pub mod progress;
 pub mod store;
+pub mod sync;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
+pub mod thread;
 pub mod tile;
+pub mod time;
 
 pub use geometry::{Affine, Rect};
 pub use image::{AnyImage, ColorSpace, Encoding, Image, ImageError, Sample, SampleFormat};
@@ -42,6 +53,13 @@ pub use orientation::Orientation;
 pub use progress::{Cancelled, Monitor, Unmonitored};
 pub use store::{CacheStats, MemoryStore, StoreError, TempFileStore, TileCache, TileKey, TileStore};
 pub use tile::{Tile, TileError, TileGrid};
+
+/// Starts the browser build's storage worker, which holds the origin-private files that spilled tiles go to (see
+/// [`TempFileStore`]): the app calls it at startup. `false` when no worker can start, and tiles stay in memory.
+#[cfg(target_arch = "wasm32")]
+pub fn start_storage() -> bool {
+    opfs::start()
+}
 
 /// FloraStack's product identity: display name, binary names, project-folder extension, app ID and the XMP namespace of
 /// its output files.
