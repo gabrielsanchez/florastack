@@ -70,6 +70,41 @@ tolerance; runtime counts only against a baseline made on the same machine with 
 moves a measure on purpose, or changes a synthetic stack or the runner, runs `--update-baseline` and commits the
 baseline with it, so that its diff shows what moved.
 
+## Comparing with other stackers
+
+`cargo xtask quality` scores FloraStack against itself. To see how an output stands against another program's, of the
+same frames, `scripts/compare_outputs.py` compares finished images, from any stacker:
+
+```sh
+python scripts/compare_outputs.py corpus/comparison-inputs/cricket --frames corpus/local/cricket-jpg --name cricket --note "pyramid, defaults"
+python scripts/compare_outputs.py FloraStack=a.jpg Helicon=b.jpg --name ladybug --crop eye:1600,1838
+```
+
+It needs NumPy, SciPy and Pillow, and takes outputs as JPEG or PNG files, whatever their size or crop: it registers them
+onto the grid of the smallest. It then measures, for each:
+
+- **Detail**, by frequency band, on the subject and the background. The figures that count are tone-matched: a contrast
+  boost raises every band and looks crisper, but adds no detail.
+- **Noise** on the flattest background, tones and clipping, color differences, and brightness beside the subject,
+  where a halo would show.
+- **Match to the frames**, with `--frames`: how closely each output's fine detail follows the frame that is sharpest
+  in each tile, which tells real detail from what a method made up.
+
+It also crops the places where the baseline output (FloraStack's, unless `--baseline` says otherwise) falls furthest
+behind the others and furthest ahead of them, and any `--crop` regions, beside the sharpest frame.
+
+Each run keeps its own `report.md`, `metrics.json` and crops in `corpus/comparisons/<name>/<date-time>/`, and its report
+says what moved since that stack's last run. `corpus/comparisons/history.md` lists every run, grouped by stack, so
+that comparisons add up over time. Say what a run is about with `--note`, since not every output records its settings.
+`--reports` puts all of this elsewhere.
+
+Most differences between good stacks are a few percent, and one stack is one stack, so confirm a small lead by eye.
+The script's docstring lists what else to keep in mind when reading the figures.
+
+Comparing output is fine, but other programs' output must not be committed (see Clean-room in `AGENTS.md`). Keep the
+inputs and reports under `corpus/`, which git ignores, but not in `corpus/local/`: a folder there without a `stack.toml`
+makes `cargo xtask corpus` fail.
+
 ## Everything CI runs
 
 `cargo xtask ci` runs, in CI's order, formatting, Clippy, the layering check, the fixtures, the tests, the Python
