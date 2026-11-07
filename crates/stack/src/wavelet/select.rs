@@ -13,7 +13,7 @@ use florastack_core::{ColorSpace, Image, Monitor, Rect, Tile};
 use rayon::prelude::*;
 
 use super::frame::{Layout, Split, context, gather, read_region, tile_extension};
-use super::transform::{Bank, Details, activity, analyze, extend, extension, pool};
+use super::transform::{Bank, Spare, activity, analyze, extend, extension, pool};
 use super::{Lowpass, WAVELET, WaveletSettings};
 use crate::depth::MAX_FRAMES;
 use crate::error::StackError;
@@ -26,6 +26,41 @@ use crate::tiled::{Share, StatePlane, TileKernel, TileView, Tiled, Tiling};
 
 /// No frame covers this position.
 pub(super) const NO_FRAME: f32 = -1.0;
+
+/// The level of the whole-canvas part that decides for the levels above it.
+const ANCHOR: usize = 1;
+
+/// What decides each of the `levels` levels of the whole-canvas part, from a frame's `luminance` there, and last what
+/// weighs its low-pass: a level's activity up to [`ANCHOR`], then that level's, pooled to the scale of each level above
+/// it. See the module documentation of [`super`]. Without levels, nothing.
+pub(super) fn deciding(bank: &Bank, window: u32, luminance: &Image<f32>, levels: usize, spare: &Spare) -> Result<Vec<Image<f32>>, StackError> {
+    let mut out = Vec::with_capacity(levels + 1);
+    if levels == 0 {
+        return Ok(out);
+    }
+    let anchor = ANCHOR.min(levels - 1);
+    let mut plane = spare.copy(luminance)?;
+    for j in 0..=anchor {
+        let (low, details) = analyze(bank, &plane, 1 << j, spare)?;
+        out.push(activity(&details, window, spare)?);
+        details.recycle(spare);
+        spare.give(std::mem::replace(&mut plane, low));
+    }
+    spare.give(plane);
+    let Some(last) = out.last() else { return Ok(out) };
+    let mut energy = spare.copy(last)?;
+    let mut pooled = 0;
+    for j in anchor + 1..=levels {
+        while pooled < j {
+            let next = pool(&energy, 1 << pooled, spare)?;
+            spare.give(std::mem::replace(&mut energy, next));
+            pooled += 1;
+        }
+        out.push(spare.copy(&energy)?);
+    }
+    spare.give(energy);
+    Ok(out)
+}
 
 /// The most activity so far at a coarse level, and its frame.
 #[derive(Clone, Debug)]
@@ -43,7 +78,10 @@ pub struct SelectKernel {
     power: Option<f32>,
     layout: Option<Layout>,
     coarse: Vec<CoarsePick>,
+    /// With [`Lowpass::Focus`], the most of what weighs a low-pass so far, on the extended plane.
+    peak: Option<Image<f32>>,
     frames: usize,
+    spare: Spare,
 }
 
 /// Folds a level's `energy` into `best` and `frame`, planes of `at`'s size: a frame replaces the one before it where it
@@ -71,7 +109,9 @@ impl SelectKernel {
             power: settings.power(),
             layout: None,
             coarse: Vec::new(),
+            peak: None,
             frames: 0,
+            spare: Spare::default(),
         })
     }
 
@@ -125,6 +165,10 @@ impl TileKernel for SelectKernel {
         self.coarse = (0..layout.coarse())
             .map(|_| Ok(CoarsePick { best: filled(small.width, small.height, 1, NO_FRAME)?, frame: filled(small.width, small.height, 1, NO_FRAME)? }))
             .collect::<Result<_, StackError>>()?;
+        let by = extension(self.bank, layout.coarse());
+        self.peak = (self.settings.lowpass == Lowpass::Focus && layout.coarse() > 0)
+            .then(|| filled(small.width + 2 * by, small.height + 2 * by, 1, 0.0))
+            .transpose()?;
         self.layout = Some(layout);
         self.frames = 0;
         Ok(())
@@ -149,8 +193,9 @@ impl TileKernel for SelectKernel {
         let span = layout.span(view.region);
         let split = Split::new(patch, span, layout.tiled)?;
         let by = tile_extension(self.bank, layout.tiled);
-        let mut plane = extend(&luminance(&split.residual)?, span, by, 0)?;
-        let mut coverage = split.coverage().map(|k| extend(k, span, by, 0)).transpose()?;
+        let spare = &self.spare;
+        let mut plane = extend(&luminance(&split.residual)?, span, by, 0, spare)?;
+        let mut coverage = split.coverage().map(|k| extend(k, span, by, 0, spare)).transpose()?;
         let inner = view.inner_in_patch();
         let at = Rect::new(inner.x + by, inner.y + by, inner.width, inner.height);
         #[allow(clippy::cast_precision_loss)] // Below MAX_FRAMES, exact.
@@ -159,9 +204,13 @@ impl TileKernel for SelectKernel {
         let bad = || StackError::Shape { width: 0, height: 0, channels: planes };
         for k in 0..layout.tiled {
             let dilation = 1 << k;
-            let (low, details) = analyze(self.bank, &plane, dilation)?;
-            let energy = activity(&details, self.settings.window)?;
-            coverage = coverage.map(|c| pool(&c, dilation)).transpose()?;
+            let (low, details) = analyze(self.bank, &plane, dilation, spare)?;
+            let energy = activity(&details, self.settings.window, spare)?;
+            details.recycle(spare);
+            if let Some(last) = coverage.take() {
+                coverage = Some(pool(&last, dilation, spare)?);
+                spare.give(last);
+            }
             let first = self.plane(k);
             if let (Some(power), 0) = (self.power, k) {
                 let sum = state.get_mut(first).and_then(StatePlane::as_f32_mut).ok_or_else(bad)?;
@@ -171,7 +220,12 @@ impl TileKernel for SelectKernel {
                 let (Some(best), Some(frame)) = (best.as_f32_mut(), frame.as_f32_mut()) else { return Err(bad()) };
                 pick(&energy, coverage.as_ref(), at, index, best, frame);
             }
-            plane = low;
+            spare.give(energy);
+            spare.give(std::mem::replace(&mut plane, low));
+        }
+        spare.give(plane);
+        if let Some(coverage) = coverage {
+            spare.give(coverage);
         }
         Ok(Some(split.share(&layout, view)?))
     }
@@ -181,18 +235,28 @@ impl TileKernel for SelectKernel {
         let (values, coverage) = gather(&layout, shares)?;
         let small = layout.small();
         let by = extension(self.bank, layout.coarse());
-        let mut plane = extend(&luminance(&values)?, small, by, 0)?;
-        let mut pooled = extend(&coverage, small, by, 0)?;
+        let plane = extend(&luminance(&values)?, small, by, 0, &self.spare)?;
+        let mut pooled = extend(&coverage, small, by, 0, &self.spare)?;
         let at = Rect::new(by, by, small.width, small.height);
         #[allow(clippy::cast_precision_loss)] // Below MAX_FRAMES, exact.
         let index = self.frames as f32;
-        for (j, level) in self.coarse.iter_mut().enumerate() {
-            let dilation = 1 << j;
-            let (low, details): (Image<f32>, Details) = analyze(self.bank, &plane, dilation)?;
-            let energy = activity(&details, self.settings.window)?;
-            pooled = pool(&pooled, dilation)?;
-            pick(&energy, Some(&pooled), at, index, &mut level.best, &mut level.frame);
-            plane = low;
+        let energies = deciding(self.bank, self.settings.window, &plane, layout.coarse(), &self.spare)?;
+        for (j, (level, energy)) in self.coarse.iter_mut().zip(&energies).enumerate() {
+            let next = pool(&pooled, 1 << j, &self.spare)?;
+            self.spare.give(std::mem::replace(&mut pooled, next));
+            pick(energy, Some(&pooled), at, index, &mut level.best, &mut level.frame);
+        }
+        if let (Some(peak), Some(energy)) = (self.peak.as_mut(), energies.last()) {
+            peak.par_rows_mut().zip(energy.par_rows()).for_each(|(peak, energy)| {
+                for (p, &e) in peak.iter_mut().zip(energy) {
+                    *p = p.max(e);
+                }
+            });
+        }
+        self.spare.give(plane);
+        self.spare.give(pooled);
+        for energy in energies {
+            self.spare.give(energy);
         }
         self.frames += 1;
         Ok(())
@@ -240,7 +304,7 @@ pub struct Selector {
 
 impl Selector {
     pub fn new(settings: &WaveletSettings, tiling: &Tiling) -> Result<Selector, StackError> {
-        Ok(Selector { tiled: Tiled::new(SelectKernel::new(settings)?, tiling.clone()) })
+        Ok(Selector { tiled: Tiled::new(SelectKernel::new(settings)?, super::wider(tiling)) })
     }
 
     /// Starts on a canvas of `shape`, dropping any pass in progress.
@@ -275,6 +339,8 @@ pub struct Choices {
     pub(super) coarse: Vec<Image<f32>>,
     /// With [`Lowpass::Select`], the low-pass's frames there.
     pub(super) low: Option<Image<f32>>,
+    /// With [`Lowpass::Focus`], the most of what weighs a low-pass, on the extended plane.
+    pub(super) peak: Option<Image<f32>>,
     pub(super) frames: usize,
 }
 
@@ -302,7 +368,7 @@ impl Choices {
             coarse.push(if consistent { majority(&level.frame, 1 << j) } else { level.frame.clone() });
         }
         let low = match kernel.settings.lowpass {
-            Lowpass::Average => None,
+            Lowpass::Average | Lowpass::Focus => None,
             Lowpass::Select => {
                 let last = coarse.len().saturating_sub(1);
                 match coarse.last() {
@@ -311,7 +377,7 @@ impl Choices {
                 }
             }
         };
-        Ok(Choices { settings: kernel.settings.clone(), layout, fine, coarse, low, frames })
+        Ok(Choices { settings: kernel.settings.clone(), layout, fine, coarse, low, peak: kernel.peak.clone(), frames })
     }
 
     /// The frames folded in pass 1.
@@ -321,7 +387,7 @@ impl Choices {
 
     /// The pass-2 stacker that composes these choices, tiled as `tiling` says.
     pub fn compositor(self: Arc<Self>, tiling: &Tiling) -> Result<Tiled<super::compose::ComposeKernel>, StackError> {
-        Ok(Tiled::new(super::compose::ComposeKernel::new(self)?, tiling.clone()))
+        Ok(Tiled::new(super::compose::ComposeKernel::new(self)?, super::wider(tiling)))
     }
 }
 

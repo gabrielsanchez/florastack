@@ -230,6 +230,7 @@ fn the_method_stacks_overlapping_thin_structures_near_the_pyramid() {
                 ("wavelet, no range limit", WaveletSettings { range_limit: 0.0, ..defaults.clone() }),
                 ("wavelet, window 5", WaveletSettings { window: 5, ..defaults.clone() }),
                 ("wavelet, select low-pass", WaveletSettings { lowpass: Lowpass::Select, ..defaults.clone() }),
+                ("wavelet, average low-pass", WaveletSettings { lowpass: Lowpass::Average, ..defaults.clone() }),
             ] {
                 show(name, &scores(&wavelet(&settings, &synthetic.frames), truth));
             }
@@ -237,6 +238,26 @@ fn the_method_stacks_overlapping_thin_structures_near_the_pyramid() {
             assert!(ours.halo < pyr.halo * 1.25, "halo {} against the pyramid's {}", ours.halo, pyr.halo);
         }
     }
+}
+
+#[test]
+fn a_dark_object_only_the_sharp_frames_show_stays_dark() {
+    // On real stacks a ladybug's black spot came out at 33 of 255 and a wasp's antenna at 62, about their frames' mean,
+    // where the frames in focus have 15 and 7: an average low-pass lifted what only the sharp frames show dark. Here, a
+    // dark disc that blurs away frame by frame, as a focus series does. It must be wide against the coarsest levels: a
+    // small one's contrast is all in the details, which any low-pass leaves dark.
+    let size = 1024;
+    let disc = Image::from_fn(size, size, 1, ColorSpace::LINEAR, |x, y, _| {
+        let (dx, dy) = (x as f64 - 512.0, y as f64 - 512.0);
+        if dx.hypot(dy) < 64.0 { 0.01 } else { 0.6 }
+    })
+    .unwrap();
+    let mut frames = vec![disc.clone()];
+    frames.extend((1..8).map(|i| gaussian_blur(&disc, 16.0 * f64::from(i)).unwrap()));
+    let center = |lowpass| wavelet(&WaveletSettings { lowpass, ..WaveletSettings::default() }, &frames).get(512, 512, 0).unwrap();
+    let (focus, average) = (center(Lowpass::Focus), center(Lowpass::Average));
+    assert!(focus < 0.02, "the disc's center is {focus}, 0.01 in the sharp frame");
+    assert!(average > 3.0 * focus, "the scene no longer shows what an average does: {average} against {focus}");
 }
 
 #[test]
@@ -453,7 +474,7 @@ fn hostile_samples_and_tiny_canvases_give_finite_stacks() {
     // Canvases smaller than the levels, the filters and the tiles.
     for (w, h) in [(1, 1), (3, 2), (17, 1), (9, 40)] {
         let frames = vec![Image::from_fn(w, h, 2, ColorSpace::LINEAR, |x, y, c| ((x + y + c) % 3) as f32 * 0.3).unwrap(); 2];
-        for lowpass in [Lowpass::Average, Lowpass::Select] {
+        for lowpass in [Lowpass::Focus, Lowpass::Average, Lowpass::Select] {
             let settings = WaveletSettings { levels: 10, lowpass, ..WaveletSettings::default() };
             let out = run(&settings, &Tiling::default(), &frames);
             assert_eq!((out.image.width(), out.image.height()), (w, h));

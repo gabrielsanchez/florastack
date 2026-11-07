@@ -22,13 +22,20 @@
 //!    small binomial window of `window` samples. One decision covers the three subbands and every channel, so a pixel's
 //!    color is one some frame has: no colored fringes.
 //! 2. **Selection**: each position takes the frame with the most activity, weighed by the fourth power of its pooled
-//!    coverage, as the pyramid's choices are. Ties keep the earlier frame.
+//!    coverage, as the pyramid's choices are. Ties keep the earlier frame. Blur barely lowers energy at coarse scales,
+//!    so a level's own activity stops telling focus there: the levels above the whole-canvas part's second decide on
+//!    that level's activity, pooled to their own scale (`select::deciding`), which groups the decision across scales
+//!    (Z. Zhang and R. S. Blum, "A categorization of multiscale-decomposition-based image fusion schemes with a
+//!    performance study for a digital camera application", Proc. IEEE 87(8), 1999).
 //! 3. **Consistency** (`consistency`): each level's map of frames goes through a majority filter
 //!    (`select::majority`), which replaces isolated picks, the ones noise makes, by the choice around them.
 //! 4. **Grit** (`grit`): picking the largest of several frames' noise builds up grit at the finest level, so there, as
 //!    in the pyramid, each frame is weighted by its activity raised to `1 / grit`. 0 picks, as the other levels do.
-//! 5. **Low-pass** (`lowpass`): the coarsest low-pass is the frames' average, weighted by coverage, or the frame chosen
-//!    most often around each position at the coarsest detail level.
+//! 5. **Low-pass** (`lowpass`): the coarsest low-pass is the frames', weighted by that same pooled activity to the
+//!    power [`FOCUS_POWER`] and by coverage. A plain average lifts what only the sharp frames show dark: measured on real
+//!    stacks, a ladybug's spot came out at 33 of 255 where its sharp frames have 15, about the frames' mean. Taking the
+//!    frame chosen most often there, which `select` does, keeps it dark but mottles smooth backgrounds, where the
+//!    choice is arbitrary and a hard edge between frames shows; the weights change gradually and have none.
 //! 6. **Range** (`range_limit`): each pixel is held within the range of the frames that cover it, as in the pyramid,
 //!    which removes the inversion halos selection can leave. [`crate::compress_range`] brings the unclipped result
 //!    into `[0, 1]` as `tone` says.
@@ -40,13 +47,22 @@
 //! away with every frame, which tiles can't reproduce. So the method reads the frames twice, as the depth map does:
 //! [`Selector`] keeps the best activity and its frame per level (`select.rs`), the maps are filtered once, whole, into
 //! [`Choices`], and the compositor (`compose.rs`) reads every frame again and adds what it was chosen for. Synthesis is
-//! linear, so that sum needs no coefficient planes, and both passes hold about 30 bytes a pixel, like the pyramid.
-//! Decisions need only luminance, so pass 1 transforms one plane.
+//! linear, so that sum needs no coefficient planes, and memory doesn't grow with the frames. It is more than the
+//! pyramid's all the same: on 20 MP frames the two peak at about 3.7 and 1.8 GB. Decisions need only luminance, so
+//! pass 1 transforms one plane.
 //!
 //! # Tiles
 //!
 //! Tiles read the canvas from multiples of `2^TILED_LEVELS` pixels, as the pyramid's do, and every filter has fixed taps:
 //! the result is the same bit for bit on one tile or many, one thread or many.
+//!
+//! # Speed
+//!
+//! Undecimated levels make the method's filters run on whole planes, and what limits it is memory traffic, not
+//! arithmetic: on 8 cores it takes the same time on 4 threads as on 16, and with no page faults at all it still doesn't
+//! scale. So it cuts the traffic: its tiles are wider than other methods' ([`TILE_SIZE`]), which halves the share of
+//! their work that overlaps, and it reuses its planes ([`transform::Spare`]). Filtering in cache-sized bands of rows
+//! is what would help next.
 
 pub mod compose;
 mod frame;
@@ -59,7 +75,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub use select::{Choices, Selector};
-pub use transform::{Decomposition, Wavelet, decompose};
+pub use transform::{Decomposition, Spare, Wavelet, decompose};
 
 use crate::error::StackError;
 use crate::method::{FrameProgress, Quiet, StackShape, Stacked, Stacker};
@@ -70,12 +86,29 @@ use crate::tiled::Tiling;
 /// The method's name, as outputs and commands record it.
 pub const WAVELET: &str = "wavelet";
 
+/// The side of the method's tiles, unless the caller asks for another: on a 5 MP stack, 1024 took two thirds of the
+/// time 512 did, and tiles of the whole canvas half, for more memory.
+pub const TILE_SIZE: usize = 1024;
+
+/// `tiling` with the method's tile size in place of the default one.
+pub(crate) fn wider(tiling: &Tiling) -> Tiling {
+    let tile_size = if tiling.tile_size == Tiling::DEFAULT_TILE_SIZE { TILE_SIZE } else { tiling.tile_size };
+    Tiling { tile_size, ..tiling.clone() }
+}
+
+/// The power of a frame's pooled activity in [`Lowpass::Focus`]'s weights. On four real stacks, 1 and 2 left dark
+/// objects lighter and 8 gained little over 4.
+pub const FOCUS_POWER: i32 = 4;
+
 /// How the coarsest low-pass is made.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Lowpass {
-    /// The frames' average, weighted by coverage, which keeps the stack's brightness that of its frames.
+    /// The frames' weighted by their pooled activity at a coarse level, so that the frames in focus around a position
+    /// set its brightness, with no edge between frames.
     #[default]
+    Focus,
+    /// The frames' average, weighted by coverage. Dark objects that only the sharp frames show dark come out lighter.
     Average,
     /// At each position, the frame chosen most often around it at the coarsest detail level.
     Select,
@@ -98,7 +131,7 @@ pub struct WaveletSettings {
     pub window: u32,
     /// Whether a majority filter replaces isolated picks in each level's choices.
     pub consistency: bool,
-    /// How the coarsest low-pass is made: `average`, or `select`.
+    /// How the coarsest low-pass is made: `focus`, `average` or `select`.
     pub lowpass: Lowpass,
     /// Grit suppression at the finest level, from 0.25 (closest to picking) to 1 (blends most), or 0 (off: the
     /// sharpest frame's coefficients are picked, as at the other levels).
@@ -119,7 +152,7 @@ impl Default for WaveletSettings {
             wavelet: Wavelet::Bior22,
             window: 3,
             consistency: true,
-            lowpass: Lowpass::Average,
+            lowpass: Lowpass::Focus,
             grit: 0.5,
             range_limit: 1.0,
             tone: Tone::Compress,
