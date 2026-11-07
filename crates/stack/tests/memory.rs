@@ -11,7 +11,9 @@
 
 use florastack_core::testutil::{StackParams, generate, scene};
 use florastack_core::{Image, Unmonitored};
-use florastack_stack::{AverageSettings, DepthSettings, FrameProgress, Method, PyramidSettings, StackShape, Stacker, Tiling};
+use florastack_stack::{
+    AverageSettings, DepthSettings, FrameProgress, Method, PyramidSettings, Selector, StackShape, Stacker, Tiling, WaveletSettings,
+};
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -61,6 +63,9 @@ fn peak_memory_does_not_grow_with_the_stack() {
         // Both passes: pass 1's records (32 bytes a pixel), the focus statistics, the depth map and the confidence map
         // (4 bytes a pixel each), and pass 2's sums (32 bytes a pixel for RGB).
         ("depth map", 12 * frame_bytes, on_one_thread(|| (measure_depth(&distinct, 20), measure_depth(&distinct, 200)))),
+        // Both passes: pass 1's activity and frames (20 bytes a pixel with the finest level blended), the choices on the
+        // whole canvas (12), pass 2's sums and bounds (28 for RGB), and the scratch planes of a tile's transform.
+        ("wavelet", 20 * frame_bytes, on_one_thread(|| (measure_wavelet(&distinct, 20), measure_wavelet(&distinct, 200)))),
     ] {
         let ((shallow, left_shallow), (deep, left_deep)) = peak;
         println!(
@@ -74,6 +79,37 @@ fn peak_memory_does_not_grow_with_the_stack() {
         assert!(deep <= shallow + shallow / 100, "{name}: {shallow} bytes for 20 frames, {deep} for 200");
         assert!(deep < bound, "{name}: {deep} bytes");
     }
+}
+
+/// The peak heap, in bytes, while stacking `depth` frames from `distinct` by the wavelet method, each pass making its
+/// frames afresh, and the bytes left at the end.
+fn measure_wavelet(distinct: &[Image<f32>], depth: usize) -> (usize, usize) {
+    let profiler = dhat::Profiler::builder().testing().build();
+    let tiling = Tiling { tile_size: 256, ..Tiling::default() };
+    let shape = StackShape { width: WIDTH, height: HEIGHT, channels: 3 };
+    let progress = |i: usize| FrameProgress { inner: &Unmonitored, frame: i as u64, frames: depth as u64 };
+    let mut selector = Selector::new(&WaveletSettings::default(), &tiling).unwrap();
+    selector.begin(shape).unwrap();
+    for i in 0..depth {
+        let frame = distinct[i % distinct.len()].clone();
+        selector.add_frame(&frame, &progress(i)).unwrap();
+        drop(frame);
+    }
+    let choices = std::sync::Arc::new(selector.finish(&Unmonitored).unwrap());
+    drop(selector);
+    let mut compositor = choices.clone().compositor(&tiling).unwrap();
+    compositor.begin(shape).unwrap();
+    for i in 0..depth {
+        let frame = distinct[i % distinct.len()].clone();
+        compositor.add_frame(&frame, &progress(i)).unwrap();
+        drop(frame);
+    }
+    let result = compositor.finish(&Unmonitored).unwrap();
+    assert_eq!(result.frames, depth);
+    drop((result, compositor, choices));
+    let stats = dhat::HeapStats::get();
+    drop(profiler);
+    (stats.max_bytes, stats.curr_bytes)
 }
 
 /// The peak heap, in bytes, while stacking `depth` frames from `distinct` by the depth-map method, each pass making

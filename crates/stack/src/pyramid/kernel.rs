@@ -93,7 +93,7 @@ pub struct Pyramid {
 }
 
 /// The weight of a frame's coverage `c` in a choice at a coarse level: its fourth power, 0 below [`MIN_COVERAGE`].
-fn pick_weight(c: f32) -> f32 {
+pub(crate) fn pick_weight(c: f32) -> f32 {
     if c >= MIN_COVERAGE {
         let c = c.min(1.0);
         let s = c * c;
@@ -104,12 +104,12 @@ fn pick_weight(c: f32) -> f32 {
 }
 
 /// How far, in pixels, level `k`'s state reaches beyond the inner region (none at level 0).
-fn margin(k: usize) -> usize {
+pub(crate) fn margin(k: usize) -> usize {
     if k == 0 { 0 } else { 3 * (1 << k) - 2 }
 }
 
 /// The samples of level `k` (whole span `level`) around the canvas rectangle `rect` grown by `grow` pixels.
-fn level_span(level: Span, rect: Rect, k: usize, grow: usize) -> Span {
+pub(crate) fn level_span(level: Span, rect: Rect, k: usize, grow: usize) -> Span {
     let a = signed(1 << k);
     let x0 = (signed(rect.x) - signed(grow)).div_euclid(a);
     let y0 = (signed(rect.y) - signed(grow)).div_euclid(a);
@@ -120,7 +120,7 @@ fn level_span(level: Span, rect: Rect, k: usize, grow: usize) -> Span {
 
 /// The samples of `level` whose position at level 0 (`2^k` times theirs) lies in the canvas rectangle `core`: the
 /// cores partition the canvas, so these partition the level.
-fn core_span(level: Span, core: Rect, k: usize) -> Option<Span> {
+pub(crate) fn core_span(level: Span, core: Rect, k: usize) -> Option<Span> {
     let a = 1usize << k;
     let (x0, x1) = (core.x.div_ceil(a), (core.x + core.width).div_ceil(a).min(level.full_width));
     let (y0, y1) = (core.y.div_ceil(a), (core.y + core.height).div_ceil(a).min(level.full_height));
@@ -128,13 +128,13 @@ fn core_span(level: Span, core: Rect, k: usize) -> Option<Span> {
 }
 
 /// The pixels of `span` (a span of the same level as `within`'s) out of `image`, an image of `within`.
-fn crop(image: &Image<f32>, within: Span, span: Span) -> Result<Image<f32>, StackError> {
+pub(crate) fn crop(image: &Image<f32>, within: Span, span: Span) -> Result<Image<f32>, StackError> {
     Ok(image.crop(Rect::new(span.x - within.x, span.y - within.y, span.width, span.height))?)
 }
 
 /// A frame's samples made safe: non-finite ones are uncovered (0, coverage 0), the rest clamped to [`MAX_SAMPLE`];
 /// coverage below [`MIN_COVERAGE`] is none. The coverage is `None` when the frame covers every pixel.
-fn clean(patch: &Patch) -> Result<(Image<f32>, Option<Image<f32>>), StackError> {
+pub(crate) fn clean(patch: &Patch) -> Result<(Image<f32>, Option<Image<f32>>), StackError> {
     let mut image = patch.image.clone();
     let c = image.channels();
     let broken = image.par_rows().any(|row| row.iter().any(|v| !v.is_finite()));
@@ -163,14 +163,14 @@ fn clean(patch: &Patch) -> Result<(Image<f32>, Option<Image<f32>>), StackError> 
 }
 
 /// A frame's Gaussian pyramid on a tile's region, levels 0 to `top`, with its coverage pyramid.
-struct Gaussian {
-    levels: Vec<Image<f32>>,
-    coverage: Vec<Option<Image<f32>>>,
-    spans: Vec<Span>,
+pub(crate) struct Gaussian {
+    pub(crate) levels: Vec<Image<f32>>,
+    pub(crate) coverage: Vec<Option<Image<f32>>>,
+    pub(crate) spans: Vec<Span>,
 }
 
 impl Gaussian {
-    fn new(image: Image<f32>, coverage: Option<Image<f32>>, span: Span, top: usize) -> Result<Gaussian, StackError> {
+    pub(crate) fn new(image: Image<f32>, coverage: Option<Image<f32>>, span: Span, top: usize) -> Result<Gaussian, StackError> {
         let mut g = Gaussian { levels: vec![image], coverage: vec![coverage], spans: vec![span] };
         for k in 0..top {
             let (src, cov, s) = (&g.levels[k], &g.coverage[k], g.spans[k]);
@@ -235,7 +235,7 @@ impl Pyramid {
     }
 
     /// The finest level's blend weight for an energy `e` and coverage weight `k`.
-    fn blend_weight(power: f32, e: f32, k: f32) -> f32 {
+    pub(crate) fn blend_weight(power: f32, e: f32, k: f32) -> f32 {
         let e = (e.max(0.0) / ENERGY_SCALE).min(ENERGY_CAP) + ENERGY_FLOOR;
         #[allow(clippy::float_cmp)] // The common powers take fast paths that powf gives too, up to rounding.
         let w = if power == 2.0 {
@@ -433,7 +433,7 @@ impl Pyramid {
 }
 
 /// A plane of `width` x `height` x `channels` filled with `value`.
-fn filled(width: usize, height: usize, channels: usize, value: f32) -> Result<Image<f32>, StackError> {
+pub(crate) fn filled(width: usize, height: usize, channels: usize, value: f32) -> Result<Image<f32>, StackError> {
     Ok(Image::from_fn(width, height, channels, ColorSpace::LINEAR, |_, _, _| value)?)
 }
 
@@ -729,7 +729,7 @@ impl TileKernel for Pyramid {
 }
 
 /// Copies `block` into `into` at the samples of `at`.
-fn paste(into: &mut Image<f32>, block: &Image<f32>, at: Span) {
+pub(crate) fn paste(into: &mut Image<f32>, block: &Image<f32>, at: Span) {
     let c = into.channels();
     for (j, row) in block.rows().enumerate() {
         if let Some(dst) = into.row_mut(at.y + j).and_then(|r| r.get_mut(at.x * c..(at.x + at.width) * c))

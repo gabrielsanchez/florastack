@@ -53,9 +53,9 @@
 //! in focus on the background is the one its out-of-focus foreground veils), and the range limit is what stops
 //! inversion halos; it is there for scenes it suits, and for the depth map of roadmap 3.3 to replace its estimate.
 
-mod kernel;
+pub(crate) mod kernel;
 pub mod levels;
-mod range;
+pub(crate) mod range;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

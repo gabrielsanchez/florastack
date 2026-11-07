@@ -99,7 +99,7 @@ pub fn mirror(i: isize, n: usize) -> usize {
 
 /// Sample `global` of a level of `full` samples, as an index into a span of it starting at `start` of `len` samples:
 /// mirrored at the level's edges, then clamped to the span.
-fn local(global: isize, full: usize, start: usize, len: usize) -> usize {
+pub(crate) fn local(global: isize, full: usize, start: usize, len: usize) -> usize {
     mirror(global, full).saturating_sub(start).min(len.saturating_sub(1))
 }
 

@@ -154,7 +154,7 @@ pub fn stack<S: Stacker + ?Sized, F: FrameSource>(stacker: &mut S, frames: &[F],
 }
 
 /// A monitor that passes cancellation on but not progress.
-struct Quiet<'a>(&'a dyn Monitor);
+pub(crate) struct Quiet<'a>(pub(crate) &'a dyn Monitor);
 
 impl Monitor for Quiet<'_> {
     fn is_cancelled(&self) -> bool {
