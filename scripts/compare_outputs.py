@@ -54,6 +54,8 @@ HALO_BINS = ((1, 3), (3, 6), (6, 10), (10, 16), (16, 24), (24, 36), (36, 60), (6
 TILE = 96
 FRAME_TILE = 64
 UNCOVERED = 0.5
+# How far from anything an output doesn't cover the measures stay: the coarsest band's filter reads this far.
+MEASURE_MARGIN = 32
 # A frame far from most of the scene's focus matches in few tiles, and a loose fit would score outputs against the wrong pixels.
 MAX_FRAME_RESIDUAL = 2.0
 
@@ -220,7 +222,11 @@ def tone_match(image, reference, valid):
     q = np.linspace(0.001, 0.999, 400)
     source = np.quantile(ni.gaussian_filter(image, 1.5)[valid][::16], q)
     target = np.quantile(ni.gaussian_filter(reference, 1.5)[valid][::16], q)
-    return np.interp(image, np.maximum.accumulate(source + np.arange(400) * 1e-7), target).astype(np.float32)
+    source = np.maximum.accumulate(source + np.arange(400) * 1e-7)
+    # At slope 1 beyond the quantiles: a flat end would clip the extremes' detail, even of an image matched to itself.
+    source = np.concatenate(([source[0] - 1], source, [source[-1] + 1]))
+    target = np.concatenate(([target[0] - 1], target, [target[-1] + 1]))
+    return np.interp(image, source, target).astype(np.float32)
 
 
 def tile_mean(image, size):
@@ -442,18 +448,22 @@ def score_frames(frames, grays, valid, subject):
     return result
 
 
-def crop_sheet(path, regions, images, valid, frames, size=300, zoom=1):
-    """Rows of matched crops, one per region, the outputs and then the sharpest frame in gray."""
+def crop_sheet(path, regions, images, holes, frames, size=300, zoom=1):
+    """Rows of matched crops, one per region, the outputs and then the sharpest frame in gray.
+
+    `holes` says what each output doesn't cover, which shows gray here and nowhere else: painted into the images, its
+    edge would reach the measures through the band filters.
+    """
     columns = len(images) + (1 if frames else 0)
     cell = size * zoom
     sheet = Image.new("RGB", (columns * (cell + 10), len(regions) * (cell + 20)), "white")
     draw = ImageDraw.Draw(sheet)
-    height, width = valid.shape
+    height, width = next(iter(images.values())).shape[:2]
     for row, (label, cx, cy) in enumerate(regions):
         x0 = min(max(cx - size // 2, 0), width - size)
         y0 = min(max(cy - size // 2, 0), height - size)
         crop = np.s_[y0 : y0 + size, x0 : x0 + size]
-        cells = [(k, v[crop]) for k, v in images.items()]
+        cells = [(k, np.where(holes[k][crop][..., None], UNCOVERED, v[crop]) if k in holes else v[crop]) for k, v in images.items()]
         if frames:
             index = frames.sharpest(x0, y0, size)
             shot = frames.load(index)[crop]
@@ -634,7 +644,7 @@ def main():
     grid_label = min(raw, key=lambda k: raw[k].shape[0] * raw[k].shape[1])
     ref = gray(raw[grid_label])
     height, width = ref.shape
-    images, registration = {}, {}
+    images, registration, holes = {}, {}, {}
     valid = np.ones((height, width), bool)
     valid[:8], valid[-8:], valid[:, :8], valid[:, -8:] = False, False, False, False
     for label, image in raw.items():
@@ -648,11 +658,12 @@ def main():
         x, y, blur, stats = aligned
         images[label] = np.clip(sample(image, x, y, blur), 0, 1)
         inside = (x >= 8) & (y >= 8) & (x <= image.shape[1] - 9) & (y <= image.shape[0] - 9)
-        images[label][~inside] = UNCOVERED
+        holes[label] = ~inside
         valid &= inside
         registration[label] = stats
         print(f"  {label}: {stats}", flush=True)
     del raw
+    valid = ni.minimum_filter(valid.astype(np.uint8), size=2 * MEASURE_MARGIN + 1).astype(bool)
     images = {label: images[label] for label in labels}
     grays = {k: gray(v) for k, v in images.items()}
 
@@ -689,7 +700,7 @@ def main():
         if args.crop:
             sheets["crops-chosen.png"] = args.crop
         for file, regions in sheets.items():
-            crop_sheet(out / file, regions, images, valid, frames)
+            crop_sheet(out / file, regions, images, holes, frames)
         data["crops"] = list(sheets)
     finally:
         shutil.rmtree(work, ignore_errors=True)
