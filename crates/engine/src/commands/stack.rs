@@ -1093,6 +1093,8 @@ pub(super) struct ToStack {
     pub(super) id: FrameId,
     pub(super) transform: Affine,
     pub(super) gain: f32,
+    /// Its white balance's gains, red, green and blue.
+    pub(super) white_balance: [f32; 3],
 }
 
 /// What a stacking job reads, taken from the project when it starts.
@@ -1178,7 +1180,13 @@ impl StackPlan {
             if f.report.as_ref().is_some_and(|r| r.status == Status::Rejected) {
                 skipped.push(id);
             } else {
-                frames.push(ToStack { index, id, transform: f.alignment.transform, gain: gain(f.alignment.brightness_gain) });
+                frames.push(ToStack {
+                    index,
+                    id,
+                    transform: f.alignment.transform,
+                    gain: gain(f.alignment.brightness_gain),
+                    white_balance: crate::project::white_balance(&f.alignment),
+                });
             }
         }
         if frames.is_empty() {
@@ -1233,9 +1241,16 @@ impl StackPlan {
             let small = thumbnail(&image, w.max(h).div_ceil(PREVIEW_FACTOR))?;
             drop(image);
             let (canvas, transform, feather) = reduced_geometry(&self.canvas, &frame.transform, (w, h), (small.width(), small.height()));
-            Ok(Loaded::Warp { image: small, transform, canvas, feather, gain: frame.gain })
+            Ok(Loaded::Warp { image: small, transform, canvas, feather, gain: frame.gain, white_balance: frame.white_balance })
         } else {
-            Ok(Loaded::Warp { image, transform: frame.transform, canvas: self.canvas, feather: DEFAULT_FEATHER, gain: frame.gain })
+            Ok(Loaded::Warp {
+                image,
+                transform: frame.transform,
+                canvas: self.canvas,
+                feather: DEFAULT_FEATHER,
+                gain: frame.gain,
+                white_balance: frame.white_balance,
+            })
         }
     }
 
@@ -1284,7 +1299,7 @@ impl Units {
 pub(super) enum Loaded {
     /// A decoded frame, warped onto the canvas as it is stacked: by florastack-align's `warp_to_canvas` a rectangle
     /// at a time on the CPU ([`Warped`]), by florastack-gpu's warp kernel a tile at a time on the GPU.
-    Warp { image: Image<f32>, transform: Affine, canvas: Canvas, feather: f64, gain: f32 },
+    Warp { image: Image<f32>, transform: Affine, canvas: Canvas, feather: f64, gain: f32, white_balance: [f32; 3] },
     /// A frame already on the canvas (a slab's output), with its coverage where it has one.
     Canvas { image: Image<f32>, coverage: Option<Image<f32>> },
 }
@@ -1327,9 +1342,11 @@ impl Loaded {
     /// The frame as florastack-stack's stackers read it.
     pub(super) fn source<R>(&self, f: impl FnOnce(&dyn FrameSource) -> R) -> R {
         match self {
-            Loaded::Warp { image, transform, canvas, feather, gain } => {
-                f(&Gained { frame: Warped { frame: image, transform: *transform, canvas: *canvas, feather: *feather }, gain: *gain })
-            }
+            Loaded::Warp { image, transform, canvas, feather, gain, white_balance } => f(&Gained {
+                frame: Warped { frame: image, transform: *transform, canvas: *canvas, feather: *feather },
+                gain: *gain,
+                white_balance: *white_balance,
+            }),
             Loaded::Canvas { image, coverage: Some(coverage) } => f(&OnCanvas { image, coverage }),
             Loaded::Canvas { image, coverage: None } => f(image),
         }
@@ -1338,7 +1355,7 @@ impl Loaded {
     /// The frame as florastack-gpu's stackers read it.
     fn gpu(&self) -> GpuFrame<'_> {
         match self {
-            Loaded::Warp { image, transform, canvas, feather, gain } => GpuFrame::Warp {
+            Loaded::Warp { image, transform, canvas, feather, gain, white_balance } => GpuFrame::Warp {
                 image,
                 geometry: WarpGeometry {
                     to_frame: canvas.to_frame(transform),
@@ -1346,6 +1363,7 @@ impl Loaded {
                     frame_height: image.height(),
                     feather: *feather,
                     gain: *gain,
+                    white_balance: *white_balance,
                 },
             },
             Loaded::Canvas { image, coverage } => GpuFrame::Canvas { image, coverage: coverage.as_ref() },

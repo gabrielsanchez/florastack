@@ -38,6 +38,7 @@ use crate::model::{Geometry, Params, Similarity};
 use crate::motion::{self, Motion};
 use crate::prepare::Prepared;
 use crate::settings::{AlignSettings, Term};
+use crate::white_balance::{self, Colors};
 
 /// A second correlation peak at least this high, relative to the first, flags a repeating pattern.
 const AMBIGUOUS: f64 = 0.5;
@@ -96,6 +97,10 @@ pub struct FrameAlignment {
     /// The gain that matches this frame's brightness to the master's: 1 when brightness isn't corrected or can't be
     /// measured.
     pub gain: f64,
+    /// The gains, red, green and blue, that match this frame's color to the master's on top of `gain`, their
+    /// luminance-weighted mean 1 (`white_balance.rs`): when white balance is asked for and could be measured, `None`
+    /// otherwise, which changes no color.
+    pub white_balance: Option<[f64; 3]>,
     /// How well the frame matched the frame it was aligned to, from 0 to 1: the correlation of their band-passed
     /// luminance once aligned. 1 for the master.
     pub score: f64,
@@ -121,6 +126,7 @@ impl FrameAlignment {
             transform: Affine::IDENTITY,
             similarity: Similarity::IDENTITY,
             gain: 1.0,
+            white_balance: None,
             score: 1.0,
             reference: None,
             status: Status::Master,
@@ -143,7 +149,8 @@ pub struct StackAlignment {
 
 impl StackAlignment {
     /// The same alignment relative to frame `master` instead: each frame's transform from the new master's pixels is
-    /// the inverse of the new master's transform followed by its own, and its gain is divided by the new master's.
+    /// the inverse of the new master's transform followed by its own, and its gain and white balance are divided by
+    /// the new master's.
     /// Scores, references, flags and sharp-content fractions stay; the new master's status becomes [`Status::Master`]
     /// and the old one's [`Status::Aligned`]. Rebase onto a frame that was aligned: a rejected frame's transform is
     /// only its reference's.
@@ -172,6 +179,7 @@ impl StackAlignment {
                     transform: similarity.to_affine(self.width, self.height),
                     similarity,
                     gain: if i == master { 1.0 } else { f.gain / base_gain },
+                    white_balance: if i == master { None } else { white_balance::rebased(f.white_balance, base.white_balance) },
                     status,
                     ..f.clone()
                 }
@@ -293,7 +301,10 @@ impl StackAligner {
             mask.check_size(w, h)?;
         }
         monitor.checkpoint()?;
-        let prepared = Prepared::new(frame, self.settings.resolution as usize, self.settings.brightness)?;
+        let mut prepared = Prepared::new(frame, self.settings.resolution as usize, self.settings.brightness)?;
+        if self.settings.white_balance {
+            prepared.colors = Colors::new(frame)?;
+        }
         if let Some(slot) = self.focus.get_mut(index) {
             *slot = Some(prepared.focus.clone());
         }
@@ -412,6 +423,10 @@ impl StackAligner {
         let similarity = geometry.similarity(&total);
         let transform = similarity.to_affine(geometry.width, geometry.height);
         let gain = if self.settings.brightness { gain(master, &prepared, &transform).unwrap_or(1.0) } else { 1.0 };
+        let white_balance = match (&master.colors, &prepared.colors) {
+            (Some(m), Some(f)) => white_balance::measure(m, f, &transform),
+            _ => None,
+        };
         if !rejected {
             self.last = Some(Link { index, prepared, total, step: link.params });
         }
@@ -419,6 +434,7 @@ impl StackAligner {
             transform,
             similarity,
             gain,
+            white_balance,
             score: link.score.clamp(0.0, 1.0),
             reference: Some(reference_index),
             status: if rejected { Status::Rejected } else { Status::Aligned },

@@ -719,6 +719,10 @@ struct AlignedFrameInfo {
     shift: Option<[f64; 2]>,
     /// The gain that matches its brightness to the master's.
     gain: f64,
+    /// The gains, red, green and blue, that match its color to the master's on top of `gain`, when white balance was
+    /// corrected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    white_balance: Option<[f64; 3]>,
     /// How well it matched its neighbor, from 0 to 1.
     score: f64,
     /// Aligned, rejected or the master (none when the project has no report for it).
@@ -761,6 +765,7 @@ fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
                 rotation: terms.map(|t| t.rotation_deg),
                 shift: terms.map(|t| [t.shift_x, t.shift_y]),
                 gain: f.alignment.brightness_gain,
+                white_balance: f.alignment.white_balance,
                 score: f.alignment.quality,
                 status: report.map(|r| r.status),
                 flags: report.map(|r| r.flags.clone()).unwrap_or_default(),

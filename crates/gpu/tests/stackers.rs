@@ -86,7 +86,7 @@ fn cpu_warped(stacker: &mut dyn Stacker, frames: &[Image<f32>], alignment: &[(Af
     let sources: Vec<Gained<Warped<'_>>> = frames
         .iter()
         .zip(alignment)
-        .map(|(frame, &(transform, gain))| Gained { frame: Warped { frame, transform, canvas: *canvas, feather: 2.0 }, gain })
+        .map(|(frame, &(transform, gain))| Gained::new(Warped { frame, transform, canvas: *canvas, feather: 2.0 }, gain))
         .collect();
     stack(stacker, &sources, &Unmonitored).unwrap()
 }
@@ -95,7 +95,8 @@ fn cpu_warped(stacker: &mut dyn Stacker, frames: &[Image<f32>], alignment: &[(Af
 fn gpu_warped(stacker: &mut GpuStacker, frames: &[Image<f32>], alignment: &[(Affine, f32)], canvas: &Canvas) -> GpuStacked {
     stacker.begin(canvas.width, canvas.height, frames[0].channels()).unwrap();
     for (frame, &(transform, gain)) in frames.iter().zip(alignment) {
-        let geometry = WarpGeometry { to_frame: canvas.to_frame(&transform), frame_width: 0, frame_height: 0, feather: 2.0, gain };
+        let geometry =
+            WarpGeometry { to_frame: canvas.to_frame(&transform), frame_width: 0, frame_height: 0, feather: 2.0, gain, white_balance: [1.0; 3] };
         stacker.add_frame(&Frame::Warp { image: frame, geometry }, &Unmonitored).unwrap();
     }
     stacker.finish(&Unmonitored).unwrap()
@@ -201,7 +202,8 @@ fn small_budgets_move_tiles_to_the_host_and_back_without_changing_the_stack() {
         let mut spilling = GpuStacker::new(gpu, method.clone(), tiling(64, budget)).unwrap();
         spilling.begin(canvas.width, canvas.height, 3).unwrap();
         for (frame, &(transform, gain)) in frames.iter().zip(&align) {
-            let geometry = WarpGeometry { to_frame: canvas.to_frame(&transform), frame_width: 0, frame_height: 0, feather: 2.0, gain };
+            let geometry =
+                WarpGeometry { to_frame: canvas.to_frame(&transform), frame_width: 0, frame_height: 0, feather: 2.0, gain, white_balance: [1.0; 3] };
             spilling.add_frame(&Frame::Warp { image: frame, geometry }, &Unmonitored).unwrap();
         }
         assert!(spilling.evictions() > 0, "{}: the budget holds a few tiles", method.name());
@@ -268,7 +270,7 @@ fn the_depth_map_agrees_with_the_cpu() {
         let sources: Vec<Gained<Warped<'_>>> = frames
             .iter()
             .zip(&align)
-            .map(|(frame, &(transform, gain))| Gained { frame: Warped { frame, transform, canvas, feather: 2.0 }, gain })
+            .map(|(frame, &(transform, gain))| Gained::new(Warped { frame, transform, canvas, feather: 2.0 }, gain))
             .collect();
         estimator.begin(florastack_stack::StackShape::of(&sources[0])).unwrap();
         for s in &sources {
@@ -326,7 +328,14 @@ fn hostile_settings_and_frames_are_errors() {
     assert!(stacker.begin(10, 10, 5).is_err());
     stacker.begin(10, 10, 3).unwrap();
     assert!(stacker.add_frame(&Frame::Canvas { image: &frame, coverage: None }, &Unmonitored).is_err(), "a frame of another size");
-    let broken = WarpGeometry { to_frame: Affine { m: [[f64::NAN; 3]; 2] }, frame_width: 0, frame_height: 0, feather: 2.0, gain: 1.0 };
+    let broken = WarpGeometry {
+        to_frame: Affine { m: [[f64::NAN; 3]; 2] },
+        frame_width: 0,
+        frame_height: 0,
+        feather: 2.0,
+        gain: 1.0,
+        white_balance: [1.0; 3],
+    };
     assert!(stacker.add_frame(&Frame::Warp { image: &frame, geometry: broken }, &Unmonitored).is_err());
     assert!(stacker.finish(&Unmonitored).is_err(), "refused frames are never added: a stack of none");
     // A composite of another canvas's depth map.

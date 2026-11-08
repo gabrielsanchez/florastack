@@ -277,6 +277,7 @@ fn settings(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     align_toggle(app, ui, &["scale"], ("align-scale", "tip-align-scale", "alignment"), free);
     align_toggle(app, ui, &["rotation"], ("align-rotation", "tip-align-rotation", "alignment"), free);
     align_toggle(app, ui, &["brightness"], ("align-brightness", "tip-align-brightness", "alignment"), free);
+    align_toggle(app, ui, &["white_balance"], ("align-white-balance", "tip-align-white-balance", "alignment"), free);
     ui.add_space(6.0);
     let framing = app.shell.align_settings["framing"].as_str().unwrap_or("narrow").to_owned();
     let mut picked = None;

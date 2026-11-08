@@ -65,7 +65,8 @@ the same way.
 *Colors differ from the frames: a tint over the whole image, or colored fringes and blotches in places.*
 
 - **Frames with different white balance.** JPEGs shot with automatic white balance can each have another color, and
-  the stack mixes them. Fix the camera's white balance. RAW frames are developed with one white balance for the whole
+  the stack mixes them. Turn on **White balance** under **Alignment** and align again: each frame's color is matched
+  to the master's. Next time, fix the camera's white balance. RAW frames are developed with one white balance for the whole
   stack; choose it with `develop.set` (as shot, automatic, or a temperature and tint).
 - **Decisions by channel.** The pyramid's **Decisions: By channel** picks detail for each color on its own, which can
   shift colors. Use **By luminance**, the default.

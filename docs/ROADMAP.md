@@ -178,6 +178,23 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Defects and movement checked on the real corpus stacks once they are in
 - [x] Stacking (3.1) reads the frames developed and inpainted the same way (`align::Plan::read`, with the settings' demosaic for a full stack)
 
+### 2.4 Alignment corrections *(plan first)*
+
+Each frame's color and tone matched to the master's, and the geometry beyond a similarity, in rough order of value for the effort. Every color and tone correction is measured on broad tones only, as the brightness gain is: a blurred frame has less local contrast than a sharp one, and that difference is what stacking picks frames by.
+
+- [x] White balance: one gain per color channel on top of the brightness gain, measured as that gain is (the median ratio on each linear channel low-passed to 64 pixels, against the master, leaving out the dark and the clipped) and balanced so it changes color and not brightness (`AlignSettings::white_balance`, off by default; `crates/align/src/white_balance.rs`), for JPEG stacks shot with automatic white balance and light that changes color. Stored in the project (format version 5), reported by `align.info` and the alignment CSV, applied wherever the brightness gain is (CPU and GPU stacking, previews, retouch sources, exported aligned frames); the app's **White balance** toggle, `--align white-balance`. On moved, defocused, noisy synthetic stacks the gains are within 0.15% of the truth, and within 0.23% of 1 when frames differ only in focus (`crates/align/tests/white_balance.rs`); stacking frames whose white balance changes, the mean deltaE against the master's colors falls from 5.29 to 1.78 (`crates/engine/tests/white_balance.rs`)
+- [ ] Contrast: a gain and an offset, for haze, flare and shadows lifted differently from frame to frame. Tried and set aside: fitted on the same low-passed planes, on synthetic frames that differ only in focus, the slope rose with distance from the master (up to 4% at 1920 px, 7.5% at 320 px), from depth edges, where a blurred near edge spreads over a background of another tone; without depth edges it stayed within 0.3% of 1. The low-pass also narrows the tones, so slope and offset trade off and extrapolate badly to dark tones. Needs a measure that leaves out where the frames' sharpness differs, a fallback to the gain when the tones are too narrow, or a check across two scales, and a real stack whose tones change to judge it
+- [ ] Tone curve: a smooth, increasing curve from each frame's broad tones to the master's, for JPEGs, whose tone curve makes a change of exposure nonlinear (RAW frames, developed linear, need only the gains). Tried with contrast (brightness transfer function, Grossberg and Nayar 2003, made increasing by pool-adjacent-violators) and set aside for the same reasons: errors of 14 to 38% on frames that differ only in focus
+- [ ] Vignetting that changes with focus: a smooth brightness map per frame (a low-order polynomial over the frame), so that the corners don't blotch
+- [ ] Transforms smoothed along the stack: on a rail or a steady focus ramp, shift and scale change smoothly from frame to frame; fit a curve through them and flag the frames far from it
+- [ ] Less drift along the chain: match each frame against frames two or three away as well as its neighbor, and solve every transform together (the synthetic stacks drift 0.5 to 2.5 px, 3.5)
+- [ ] Lateral chromatic aberration that changes with focus: a scale of the red and blue channels against green per frame, for JPEG stacks (RAW frames get the develop step's correction)
+- [ ] Distortion that changes with focus: one radial term per frame, for wide-angle stacks
+- [ ] Perspective: a homography for handheld stacks whose camera tilts, and microscope stages that aren't level, with care not to fit noise
+- [ ] The region to align on: the user marks the subject, or leaves out a moving background or sky
+- [ ] The master frame chosen by hand
+- [ ] Local movement corrected rather than flagged: a smooth warp from the motion maps, for a swaying flower or a moving antenna, without mistaking a change of blur for movement
+
 ## Phase 3 — Stacking engines
 
 ### 3.1 Streaming framework and weighted average

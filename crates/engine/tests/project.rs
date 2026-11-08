@@ -288,7 +288,7 @@ fn the_shapes_stored_in_project_files_are_pinned() {
     assert_eq!(
         to_data("alignment settings", &AlignSettings::default()).unwrap(),
         json!({
-            "shift_x": true, "shift_y": true, "scale": true, "rotation": true, "brightness": true, "refine": false,
+            "shift_x": true, "shift_y": true, "scale": true, "rotation": true, "brightness": true, "white_balance": false, "refine": false,
             "max_shift": 10.0, "max_scale": 15.0, "max_rotation": 5.0, "min_score": 0.3, "reject": true, "resolution": 2048,
             "automatic_order": true, "reverse_order": false, "framing": "narrow", "min_sharp_fraction": 0.002, "min_motion": 2.0,
             "detect_defects": false,

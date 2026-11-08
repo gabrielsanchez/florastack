@@ -236,6 +236,7 @@ pub enum AlignTerm {
     Scale,
     Rotation,
     Brightness,
+    WhiteBalance,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

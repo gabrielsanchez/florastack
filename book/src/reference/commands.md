@@ -169,6 +169,7 @@ Parameters:
 | `scale` | boolean | Correct changes of scale: focus breathing, or the magnification a rail changes as it moves. Default: `true`. |
 | `shift_x` | boolean | Correct horizontal shifts. Default: `true`. |
 | `shift_y` | boolean | Correct vertical shifts. Default: `true`. |
+| `white_balance` | boolean | Match each frame's color to the master's with a gain per color channel, which changes the color and not the brightness: for JPEGs shot with automatic white balance, and light that changes color. Off by default. Default: `false`. |
 
 Result:
 

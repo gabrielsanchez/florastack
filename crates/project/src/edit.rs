@@ -476,11 +476,10 @@ impl Project {
             if self.frame(f.frame).is_none() {
                 return Err(EditError::NoFrame(f.frame));
             }
-            if let Some(a) = &f.alignment {
-                let finite = a.transform.m.iter().flatten().all(|v| v.is_finite()) && a.brightness_gain.is_finite() && a.quality.is_finite();
-                if !finite {
-                    return Err(EditError::Invalid(Problem::NotFinite { what: "frame alignment" }));
-                }
+            if let Some(a) = &f.alignment
+                && !a.is_finite()
+            {
+                return Err(EditError::Invalid(Problem::NotFinite { what: "frame alignment" }));
             }
         }
         let mut old = Vec::with_capacity(frames.len());
@@ -567,7 +566,7 @@ mod tests {
     }
 
     fn aligned(gain: f64) -> Alignment {
-        Alignment { transform: florastack_core::Affine::translation(1.5, -0.25), brightness_gain: gain, quality: 0.9 }
+        Alignment { transform: florastack_core::Affine::translation(1.5, -0.25), brightness_gain: gain, white_balance: None, quality: 0.9 }
     }
 
     #[test]

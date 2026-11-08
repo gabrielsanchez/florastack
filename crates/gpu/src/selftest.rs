@@ -62,7 +62,7 @@ impl Gpu {
         // A small rotation and shift, inside the frame, where the CPU's clamped warp needs no coverage.
         let to_frame = Affine::similarity((18.0, 11.0), 1.02, 0.05, (0.3, -0.4));
         let rect = Rect::new(4, 4, 29, 15);
-        let geometry = WarpGeometry { to_frame, frame_width: 37, frame_height: 23, feather: 0.0, gain: 1.0 };
+        let geometry = WarpGeometry { to_frame, frame_width: 37, frame_height: 23, feather: 0.0, gain: 1.0, white_balance: [1.0; 3] };
         let (warped, coverage) = ops::warp_planes(self, &image, &geometry, rect)?;
         let mut cpu = Image::new(rect.width, rect.height, 3, ColorSpace::LINEAR)?;
         let to_source = Affine::translation(rect.x as f64, rect.y as f64).then(&to_frame);

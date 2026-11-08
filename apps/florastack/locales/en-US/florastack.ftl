@@ -216,6 +216,8 @@ tip-align-shift = Corrects frames that moved sideways or up and down. Leave it o
 tip-align-scale = Corrects the change of magnification as focus moves (focus breathing) or as a rail moves the camera. Leave it on for most stacks.
 tip-align-rotation = Corrects frames that turned slightly. Turn it off for stacks on a rail, which can't rotate, to make alignment faster and steadier.
 tip-align-brightness = Matches each frame's brightness to the master's, for flickering lights or exposure that drifted.
+align-white-balance = White balance
+tip-align-white-balance = Matches each frame's color to the master's, for JPEGs shot with automatic white balance or light that changes color. Changes the color, not the brightness.
 
 setting-framing = Framing
 framing-narrow = Narrow
@@ -322,6 +324,7 @@ quality-master = master
 quality-rejected = rejected
 quality-score = match { $score }
 quality-tip = Match score { $score } · shift { $x }, { $y } px · scale { $scale }% · rotation { $rotation }° · brightness ×{ $gain }
+quality-tip-white-balance = White balance: red ×{ $red } · green ×{ $green } · blue ×{ $blue }
 
 ## Retouch tab
 

@@ -1,7 +1,8 @@
 // A frame warped onto a region of the canvas with its coverage: florastack-align's `warp_to_canvas` (bicubic, Keys'
 // a = -0.5, taps clamped to the frame) and `Coverage::weight` (the inset of the sampled point in the frame, ramping
-// from 0 at the frame's edge to 1 at `feather` frame pixels inside it), then the frame's brightness gain
-// (florastack-stack's `Gained`). Uncovered pixels are 0.
+// from 0 at the frame's edge to 1 at `feather` frame pixels inside it), then the frame's brightness gain and, for a
+// frame with three color channels, its white balance's gain per color channel (florastack-stack's `Gained`).
+// Uncovered pixels are 0.
 //
 // Output pixel (i, j) of the region samples the frame at (u, v) = M (i, j, 1), in frame pixels relative to the
 // uploaded block of the frame, which starts at (src_x0, src_y0) and holds every tap a pixel of the region reads. The
@@ -33,6 +34,10 @@ struct Params {
     inset_bottom: f32,
     feather: f32,
     gain: f32,
+    wb_red: f32,
+    wb_green: f32,
+    wb_blue: f32,
+    pad3: f32,
 }
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -108,6 +113,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             }
             acc = acc + wy[r] * across;
         }
-        dst[at + c] = acc * p.gain;
+        var factor = p.gain;
+        if (p.channels >= 3u && c < 3u) {
+            factor = p.gain * vec3<f32>(p.wb_red, p.wb_green, p.wb_blue)[c];
+        }
+        dst[at + c] = acc * factor;
     }
 }

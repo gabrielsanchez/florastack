@@ -308,13 +308,26 @@ pub fn alignment_edit(
                     sharp_fraction: f.sharp_fraction,
                     motion: f.motion.as_ref().map(|m| FrameMotion { score: m.score, peak: m.peak, regions: m.regions.clone() }),
                 };
-                (Some(Alignment { transform: f.transform, brightness_gain: f.gain, quality: f.score }), Some(to_data("frame alignment", &report)?))
+                (
+                    Some(Alignment { transform: f.transform, brightness_gain: f.gain, white_balance: f.white_balance, quality: f.score }),
+                    Some(to_data("frame alignment", &report)?),
+                )
             }
             None => (None, None),
         };
         frames.push(AlignedFrame { frame: frame.id(), alignment, report });
     }
     Ok(Edit::SetAlignment { run: Some(run), frames })
+}
+
+/// The white balance's gains of `alignment`, red, green and blue, as stacking multiplies them: `[1.0; 3]` when it has
+/// none, or one that isn't finite and positive.
+#[allow(clippy::cast_possible_truncation)] // Gains near 1.
+pub(crate) fn white_balance(alignment: &Alignment) -> [f32; 3] {
+    match alignment.white_balance {
+        Some(g) if g.iter().all(|v| v.is_finite() && *v > 0.0) => g.map(|v| v as f32),
+        _ => [1.0; 3],
+    }
 }
 
 /// A frame of an alignment run, as the project holds it.

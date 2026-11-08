@@ -47,7 +47,7 @@ duplicate input stops it with a diagnostic.
 | `--method` | `pyramid` (the default), `depthmap`, `average`, `wavelet` (on the CPU only, and several times slower), or `both`, which writes `<name>-pyramid.tif` and `<name>-depthmap.tif` |
 | `--depth 16\|32f` | 16-bit (the default) or 32-bit float samples |
 | `--preset PRESET` | A preset file, or a built-in one as `builtin:insect-macro` (`product-shot`, `landscape`, `microscope`), applied first; the options below override it |
-| `--align TERMS` | The terms to correct, from `shift`, `scale`, `rotation`, `brightness` |
+| `--align TERMS` | The terms to correct, from `shift`, `scale`, `rotation`, `brightness`, `white-balance` (off unless named) |
 | `--crop narrow\|wide\|common` | The framing |
 | `--slab SIZE:OVERLAP` | [Stack in slabs](../user/slabbing.md) of SIZE frames sharing OVERLAP, by the method for both stages |
 | `--raw-wb asshot` | The camera's white balance for the whole RAW stack |

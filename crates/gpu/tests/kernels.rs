@@ -67,7 +67,14 @@ fn the_laplacian_agrees_with_the_cpu() {
 
 /// The frame of `canvas` for `transform` as florastack-align and the GPU see it.
 fn geometry(canvas: &Canvas, transform: &Affine, frame: &Image<f32>, feather: f64, gain: f32) -> WarpGeometry {
-    WarpGeometry { to_frame: canvas.to_frame(transform), frame_width: frame.width(), frame_height: frame.height(), feather, gain }
+    WarpGeometry {
+        to_frame: canvas.to_frame(transform),
+        frame_width: frame.width(),
+        frame_height: frame.height(),
+        feather,
+        gain,
+        white_balance: [1.0; 3],
+    }
 }
 
 #[test]
@@ -110,6 +117,19 @@ fn the_warp_and_its_coverage_agree_with_florastack_align() {
     let (gained, _) = ops::warp_to_canvas(gpu, &frame, &geometry(&canvas, &Affine::IDENTITY, &frame, 2.0, 1.25), rect).unwrap();
     let scaled = Image::from_fn(40, 30, 3, ColorSpace::LINEAR, |x, y, ch| plain.get(x, y, ch).unwrap() * 1.25).unwrap();
     assert_eq!(max_difference(&gained, &scaled), 0.0, "the gain is one multiplication, as on the CPU");
+    // So is the white balance, color channel by color channel, as florastack-stack's `Gained` applies it: the factors
+    // are florastack-stack's own, so the results are equal to the bit.
+    let wb = [1.1, 1.0, 0.85];
+    let balanced = WarpGeometry { white_balance: wb, ..geometry(&canvas, &Affine::IDENTITY, &frame, 2.0, 1.25) };
+    let (colored, _) = ops::warp_to_canvas(gpu, &frame, &balanced, rect).unwrap();
+    let cpu = florastack_stack::Gained { frame: &frame, gain: 1.25, white_balance: wb };
+    let want = Image::from_fn(40, 30, 3, ColorSpace::LINEAR, |x, y, ch| plain.get(x, y, ch).unwrap() * cpu.factor(ch, 3)).unwrap();
+    assert_eq!(max_difference(&colored, &want), 0.0, "the white balance is one multiplication too");
+    let gray = random(51, 37, 1, 8, 0.0, 1.0);
+    let (one, _) = ops::warp_to_canvas(gpu, &gray, &geometry(&canvas, &Affine::IDENTITY, &gray, 2.0, 1.25), rect).unwrap();
+    let (other, _) =
+        ops::warp_to_canvas(gpu, &gray, &WarpGeometry { white_balance: wb, ..geometry(&canvas, &Affine::IDENTITY, &gray, 2.0, 1.25) }, rect).unwrap();
+    assert_eq!(max_difference(&one, &other), 0.0, "a gray frame has no color to balance");
     // A transform that isn't finite is an error, as on the CPU.
     let broken =
         WarpGeometry { to_frame: Affine { m: [[f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0]] }, ..geometry(&canvas, &Affine::IDENTITY, &frame, 2.0, 1.0) };

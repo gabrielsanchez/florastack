@@ -130,10 +130,26 @@ impl<S: FrameSource + ?Sized> FrameSource for &S {
 }
 
 /// A frame whose samples are multiplied by a gain as they are read: a frame's brightness matched to the master's with
-/// the gain alignment measured.
+/// the gain alignment measured, and its color with the white balance's gains, which multiply the first three channels
+/// of a frame that has three color channels on top of `gain`.
 pub struct Gained<S> {
     pub frame: S,
     pub gain: f32,
+    /// The white balance's gains, red, green and blue; `[1.0; 3]` changes no color.
+    pub white_balance: [f32; 3],
+}
+
+impl<S> Gained<S> {
+    /// `frame` with a brightness gain alone.
+    pub fn new(frame: S, gain: f32) -> Gained<S> {
+        Gained { frame, gain, white_balance: [1.0; 3] }
+    }
+
+    /// The factor sample `c` of each pixel of a frame of `channels` is multiplied by.
+    pub fn factor(&self, c: usize, channels: usize) -> f32 {
+        let color = if channels >= 3 { self.white_balance.get(c).copied().unwrap_or(1.0) } else { 1.0 };
+        self.gain * color
+    }
 }
 
 impl<S: FrameSource> FrameSource for Gained<S> {
@@ -151,11 +167,18 @@ impl<S: FrameSource> FrameSource for Gained<S> {
 
     fn read(&self, rect: Rect) -> Result<Patch, StackError> {
         let mut patch = self.frame.read(rect)?;
-        // A gain of exactly 1 changes nothing, and is the common case (brightness correction off, or the master).
+        let c = patch.image.channels().max(1);
+        let factors: Vec<f32> = (0..c).map(|k| self.factor(k, c)).collect();
+        // Gains of exactly 1 change nothing, and are the common case (brightness correction off, or the master).
         #[allow(clippy::float_cmp)]
-        if self.gain != 1.0 {
-            let gain = self.gain;
-            patch.image.par_rows_mut().for_each(|row| row.iter_mut().for_each(|v| *v *= gain));
+        if factors.iter().any(|&f| f != 1.0) {
+            patch.image.par_rows_mut().for_each(|row| {
+                for pixel in row.chunks_exact_mut(c) {
+                    for (v, f) in pixel.iter_mut().zip(&factors) {
+                        *v *= f;
+                    }
+                }
+            });
         }
         Ok(patch)
     }

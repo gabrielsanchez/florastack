@@ -357,14 +357,34 @@ fn hostile_samples_give_a_finite_stack() {
 #[test]
 fn gains_scale_a_frame_as_it_is_read() {
     let frame = Image::from_fn(8, 4, 1, ColorSpace::LINEAR, |x, _, _| x as f32 / 8.0).unwrap();
-    let gained = Gained { frame: &frame, gain: 2.0 };
+    let gained = Gained::new(&frame, 2.0);
     let patch = gained.read(Rect::new(2, 1, 4, 2)).unwrap();
     assert_eq!(patch.image.row(0), Some(&[0.5, 0.75, 1.0, 1.25][..]));
     // A stack of the same frame, darker by half, with its gain, is the frame.
     let dark = Image::from_fn(8, 4, 1, ColorSpace::LINEAR, |x, _, _| x as f32 / 16.0).unwrap();
-    let frames = [Gained { frame: &frame, gain: 1.0 }, Gained { frame: &dark, gain: 2.0 }];
+    let frames = [Gained::new(&frame, 1.0), Gained::new(&dark, 2.0)];
     let out = average(&AverageSettings::default(), &Tiling::default(), &frames);
     assert!(out.image.as_raw().iter().zip(frame.as_raw()).all(|(a, b)| (a - b).abs() < 1e-6));
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Each sample is multiplied once, by the same factor as computed here.
+fn the_white_balance_scales_the_color_channels_alone() {
+    let wb = [1.25, 1.0, 0.8];
+    // Color: each of the three channels by its own gain, on top of the brightness gain; alpha by the brightness gain.
+    for channels in [3, 4] {
+        let frame = Image::from_fn(6, 3, channels, ColorSpace::LINEAR, |x, y, c| (x + y + c) as f32 / 16.0).unwrap();
+        let gained = Gained { frame: &frame, gain: 2.0, white_balance: wb };
+        let patch = gained.read(Rect::new(1, 1, 4, 2)).unwrap();
+        for (x, y, c) in (0..4).flat_map(|x| (0..2).flat_map(move |y| (0..channels).map(move |c| (x, y, c)))) {
+            let factor = if c < 3 { 2.0 * wb[c] } else { 2.0 };
+            assert_eq!(patch.image.get(x, y, c), frame.get(x + 1, y + 1, c).map(|v| v * factor), "{channels} channels, ({x}, {y}, {c})");
+        }
+    }
+    // Gray frames have no color: the brightness gain alone.
+    let gray = Image::from_fn(6, 3, 1, ColorSpace::LINEAR, |x, _, _| x as f32 / 8.0).unwrap();
+    let patch = Gained { frame: &gray, gain: 2.0, white_balance: wb }.read(Rect::new(0, 0, 6, 3)).unwrap();
+    assert!(patch.image.as_raw().iter().zip(gray.as_raw()).all(|(a, b)| *a == b * 2.0));
 }
 
 #[test]

@@ -149,6 +149,9 @@ pub struct WarpGeometry {
     pub feather: f64,
     /// The frame's brightness gain, multiplied into its samples.
     pub gain: f32,
+    /// The white balance's gains, red, green and blue, multiplied into the first three channels of a frame that has
+    /// three color channels, on top of `gain`, as florastack-stack's `Gained` multiplies them.
+    pub white_balance: [f32; 3],
 }
 
 /// `v` as a signed integer (sizes are far below `i64::MAX`).
@@ -232,7 +235,11 @@ impl WarpGeometry {
             .f(to_f32(by + 0.5))
             .f(to_f32(fh - 0.5 - by))
             .f(to_f32(feather))
-            .f(self.gain);
+            .f(self.gain)
+            .f(self.white_balance[0])
+            .f(self.white_balance[1])
+            .f(self.white_balance[2])
+            .f(0.0);
         batch.run(Kernel::Warp, &params, &[block.into(), dst.into(), coverage.into()], Groups::Plane { width: region.width, height: region.height })
     }
 }

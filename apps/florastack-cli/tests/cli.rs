@@ -280,7 +280,7 @@ fn slab_preset_and_explicit_options_reach_the_engine() {
             "--preset",
             "preset.toml",
             "--align",
-            "shift,brightness",
+            "shift,brightness,white-balance",
             "--crop",
             "common",
             "--raw-wb",
@@ -314,6 +314,7 @@ fn slab_preset_and_explicit_options_reach_the_engine() {
     assert_eq!(queries[0]["result"]["settings"]["rotation"], false);
     assert_eq!(queries[0]["result"]["settings"]["scale"], false);
     assert_eq!(queries[0]["result"]["settings"]["brightness"], true);
+    assert_eq!(queries[0]["result"]["settings"]["white_balance"], true);
     assert_eq!(queries[1]["result"]["settings"]["white_balance"], "as-shot");
     assert_eq!(queries[2]["result"]["settings"]["average"]["power"], 2.0);
     assert!(queries[3]["result"]["summary"].is_object());

@@ -69,6 +69,9 @@ pub struct AlignSettings {
     pub rotation: bool,
     /// Match each frame's brightness to the master's with a gain.
     pub brightness: bool,
+    /// Match each frame's color to the master's with a gain per color channel, which changes the color and not the
+    /// brightness: for JPEGs shot with automatic white balance, and light that changes color. Off by default.
+    pub white_balance: bool,
     /// After chaining each frame to its neighbor, align it again directly against the master, starting from the
     /// chained estimate, so that the small errors of a long chain don't add up. The direct estimate is kept only
     /// when it scores at least `min_score`: frames focused far from the master share little detail with it, so this
@@ -133,6 +136,7 @@ impl Default for AlignSettings {
             scale: true,
             rotation: true,
             brightness: true,
+            white_balance: false,
             refine: false,
             max_shift: 10.0,
             max_scale: 15.0,

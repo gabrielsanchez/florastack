@@ -246,7 +246,7 @@ fn slab_key(plan: &StackPlan, parameters: &serde_json::Value, develop: &str, ran
     );
     for k in range.clone() {
         let f = plan.frames.get(k).ok_or_else(|| plan.internal())?;
-        writeln!(text, "{} {:?} {}", plan.reader.frame_key(f.index)?, f.transform.m, f.gain).map_err(|_| plan.internal())?;
+        writeln!(text, "{} {:?} {} {:?}", plan.reader.frame_key(f.index)?, f.transform.m, f.gain, f.white_balance).map_err(|_| plan.internal())?;
     }
     Ok(format!("slab {}", ContentHash::of(text.as_bytes())))
 }

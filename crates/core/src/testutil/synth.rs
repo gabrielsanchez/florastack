@@ -12,7 +12,9 @@
 //!    (see [`Affine::similarity`]): focus breathing scales linearly from 1 (first frame) to `1 + breathing` (last), and
 //!    each frame gets a random sub-pixel shift and rotation. The frame samples the defocused scene at
 //!    `transform.inverse()` of each pixel with a bicubic filter, repeating the edge pixels outside the scene.
-//! 3. **Brightness**: a random gain in `[1 - brightness_jitter, 1 + brightness_jitter]`.
+//! 3. **Brightness and color**: a random gain in `[1 - brightness_jitter, 1 + brightness_jitter]`, and on top of it a
+//!    random gain per color channel in `[1 - color_jitter, 1 + color_jitter]`, a change of white balance
+//!    ([`FrameTruth::channel_gains`]), drawn from a stream of its own so that turning it on changes nothing else.
 //! 4. **Dust**: fixed spots in sensor coordinates, the same in every frame, that darken by up to their opacity.
 //! 5. **Noise**: Gaussian read noise plus shot noise whose variance grows with the signal. Samples are not clipped.
 //!
@@ -88,6 +90,9 @@ pub struct StackParams {
     pub max_rotation_deg: f32,
     /// The largest random relative brightness change.
     pub brightness_jitter: f32,
+    /// The largest random relative change of each color channel's gain, on top of the brightness: a change of white
+    /// balance. Below 1.
+    pub color_jitter: f32,
     /// Read noise: the standard deviation of Gaussian noise added to every sample (linear units, 1 = white).
     pub read_noise: f32,
     /// Shot noise: Gaussian noise with variance `shot_noise^2 * signal`.
@@ -111,6 +116,7 @@ impl StackParams {
             max_shift: 0.0,
             max_rotation_deg: 0.0,
             brightness_jitter: 0.0,
+            color_jitter: 0.0,
             read_noise: 0.0,
             shot_noise: 0.0,
             dust: Vec::new(),
@@ -154,6 +160,7 @@ impl StackParams {
             ("max_shift", self.max_shift),
             ("max_rotation_deg", self.max_rotation_deg),
             ("brightness_jitter", self.brightness_jitter),
+            ("color_jitter", self.color_jitter),
             ("read_noise", self.read_noise),
             ("shot_noise", self.shot_noise),
         ];
@@ -167,6 +174,7 @@ impl StackParams {
             ("blur_step", self.blur_step.is_finite() && self.blur_step > 0.0, self.blur_step),
             ("breathing", self.breathing.is_finite() && self.breathing.abs() <= 0.5, self.breathing),
             ("brightness_jitter", self.brightness_jitter < 1.0, self.brightness_jitter),
+            ("color_jitter", self.color_jitter < 1.0, self.color_jitter),
         ];
         if let Some(&(name, _, value)) = checks.iter().find(|(_, ok, _)| !ok) {
             return Err(SynthError::Param { name, value });
@@ -225,6 +233,8 @@ pub struct FrameTruth {
     pub shift: (f64, f64),
     /// The brightness gain applied to this frame.
     pub gain: f32,
+    /// Each color channel's gain on top of `gain` (red, green, blue; gray frames take the first).
+    pub channel_gains: [f32; 3],
 }
 
 /// Everything known about a synthetic stack.
@@ -328,6 +338,8 @@ pub(super) fn draw_truths(params: &StackParams, near: f32, far: f32, w: usize, h
     let n = params.frames;
     let progress = |i: usize| if n == 1 { 0.0 } else { i as f64 / (n - 1) as f64 };
     let mut rng = Rng::new(params.seed);
+    // The white balance's own stream, so that turning it on changes no other draw.
+    let mut colors = Rng::new(params.seed ^ 0x636f_6c6f_7200_0000);
     let center = ((w - 1) as f64 / 2.0, (h - 1) as f64 / 2.0);
     (0..n)
         .map(|i| {
@@ -338,6 +350,8 @@ pub(super) fn draw_truths(params: &StackParams, near: f32, far: f32, w: usize, h
             let jitter = f64::from(params.brightness_jitter);
             let gain = to_f32(1.0 + rng.range(-jitter, jitter));
             let scale = 1.0 + f64::from(params.breathing) * t;
+            let color = f64::from(params.color_jitter);
+            let channel_gains = [(); 3].map(|()| to_f32(1.0 + colors.range(-color, color)));
             FrameTruth {
                 focus_depth: to_f32(f64::from(near) + (f64::from(far) - f64::from(near)) * t),
                 transform: Affine::similarity(center, scale, rotation_deg.to_radians(), shift),
@@ -345,6 +359,7 @@ pub(super) fn draw_truths(params: &StackParams, near: f32, far: f32, w: usize, h
                 rotation_deg,
                 shift,
                 gain,
+                channel_gains,
             }
         })
         .collect()
@@ -380,7 +395,15 @@ pub(super) fn finish_frame(mut frame: Image<f32>, truth: &FrameTruth, params: &S
         let inverse = truth.transform.inverse().unwrap_or(Affine::IDENTITY);
         frame = warp(&frame, &inverse, Interpolation::Bicubic, Border::Clamp)?;
     }
-    if !is_one(truth.gain) {
+    if truth.channel_gains.iter().any(|&g| !is_one(g)) {
+        let c = frame.channels().max(1);
+        let gains = truth.channel_gains.map(|g| g * truth.gain);
+        for row in frame.rows_mut() {
+            for (i, v) in row.iter_mut().enumerate() {
+                *v *= gains.get(i % c).copied().unwrap_or(truth.gain);
+            }
+        }
+    } else if !is_one(truth.gain) {
         for v in frame.rows_mut().flatten() {
             *v *= truth.gain;
         }
@@ -563,6 +586,24 @@ mod tests {
         assert!((got.0 - expected.0).abs() < 1e-9 && (got.1 - expected.1).abs() < 1e-9);
         assert!((stack.truth.relative(2, 2).unwrap().apply(5.0, 6.0).0 - 5.0).abs() < 1e-9);
         assert_eq!(stack.truth.relative(4, 0), None);
+    }
+
+    #[test]
+    fn color_gains_multiply_each_channel_and_change_nothing_else() {
+        let (sharp, depth) = crate::testutil::scene::textured(64, 48, 3).unwrap();
+        let plain = generate(&sharp, &depth, &StackParams { brightness_jitter: 0.1, seed: 5, ..StackParams::identity(3) }).unwrap();
+        let colored =
+            generate(&sharp, &depth, &StackParams { brightness_jitter: 0.1, color_jitter: 0.2, seed: 5, ..StackParams::identity(3) }).unwrap();
+        for ((a, b), (ta, tb)) in plain.frames.iter().zip(&colored.frames).zip(plain.truth.frames.iter().zip(&colored.truth.frames)) {
+            assert_eq!((ta.gain, ta.transform), (tb.gain, tb.transform), "the other draws stay");
+            assert_eq!(ta.channel_gains, [1.0; 3]);
+            assert!(tb.channel_gains.iter().all(|g| (0.8..=1.2).contains(g)) && tb.channel_gains.iter().any(|g| (g - 1.0).abs() > 1e-6));
+            for (pa, pb) in a.as_raw().as_chunks::<3>().0.iter().zip(b.as_raw().as_chunks::<3>().0) {
+                for c in 0..3 {
+                    assert!((pa[c] * tb.channel_gains[c] - pb[c]).abs() < 1e-5);
+                }
+            }
+        }
     }
 
     #[test]
