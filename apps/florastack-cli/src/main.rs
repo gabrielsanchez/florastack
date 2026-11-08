@@ -115,7 +115,7 @@ fn stack(client: &mut Client, args: &StackArgs) -> Result<(), Failure> {
         align = json!({
             "shift_x": terms.contains(&AlignTerm::Shift), "shift_y": terms.contains(&AlignTerm::Shift),
             "scale": terms.contains(&AlignTerm::Scale), "rotation": terms.contains(&AlignTerm::Rotation),
-            "brightness": terms.contains(&AlignTerm::Brightness)
+            "brightness": terms.contains(&AlignTerm::Brightness), "white_balance": terms.contains(&AlignTerm::WhiteBalance)
         });
     }
     if let Some(crop) = args.crop {

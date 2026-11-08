@@ -360,6 +360,14 @@ fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64) {
             ("gain", format!("{:.3}", alignment["gain"].as_f64().unwrap_or(1.0)).into()),
         ],
     );
+    let gains: Option<Vec<f64>> = alignment["whiteBalance"].as_array().map(|g| g.iter().filter_map(Value::as_f64).collect());
+    let tip = match gains.as_deref() {
+        Some(&[red, green, blue]) => {
+            let color = |g: f64| format!("{g:.3}").into();
+            format!("{tip}\n{}", tr_args("quality-tip-white-balance", &[("red", color(red)), ("green", color(green)), ("blue", color(blue))]))
+        }
+        _ => tip,
+    };
     #[allow(clippy::cast_possible_truncation)] // A score from 0 to 1, drawn as a bar.
     let bar = egui::ProgressBar::new(score.clamp(0.0, 1.0) as f32).desired_width(60.0).desired_height(4.0);
     ui.horizontal(|ui| {

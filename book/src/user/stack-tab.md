@@ -34,6 +34,7 @@ Which corrections alignment makes:
 - **Scale**: the change of magnification as focus moves (focus breathing) or as a rail moves the camera. Leave it on for most stacks.
 - **Rotation**: frames that turned slightly. Turn it off for stacks on a rail, which can't rotate, to make alignment faster and steadier.
 - **Brightness**: matches each frame's brightness to the master's, for flickering lights or drifting exposure.
+- **White balance**: matches each frame's color to the master's with a gain per color channel, for JPEGs shot with automatic white balance or light that changes color (a cloud, mixed daylight and lamps). It changes the color, not the brightness, which **Brightness** matches. Off by default; a frame's tooltip in the frame list shows its gains.
 
 Changing these needs a new alignment: the tab says so, and **Align** runs it again.
 

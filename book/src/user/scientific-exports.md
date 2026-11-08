@@ -11,7 +11,7 @@ and watch exports also write reproducibility manifests.
 | `confidence_map` | Untagged 16-bit gray TIFF: normalized confidence, with 0.5 at the method's contrast threshold. This is not a probability or a depth uncertainty. |
 | `aligned_frames` | 16-bit TIFFs in an `aligned` folder, developed, defect-corrected, aligned and multiplied by the recorded brightness gain. |
 | `contribution_maps` | One untagged 16-bit gray TIFF per input frame, in a `contributions` folder: the normalized depth compositor weight, including feathered coverage and its nearest-covering-frame fallback. Weights sum to 1, within integer rounding, except at uncovered pixels, where all are zero. |
-| `alignment_csv` | Per-frame capture and stacking indices, input path, master-to-input translation in pixels, isotropic scale, rotation in radians, gain and alignment score. CSV fields with paths are quoted. |
+| `alignment_csv` | Per-frame capture and stacking indices, input path, master-to-input translation in pixels, isotropic scale, rotation in radians, gain, alignment score, and the white balance's gains per color channel (`wb_red`, `wb_green`, `wb_blue`; 1 when it wasn't corrected). CSV fields with paths are quoted. |
 
 Calibrated depth uses the full-precision depth retained when stacking, without the 16-bit map's quantization. Z is
 `z_origin_micrometers + capture_index * z_step_micrometers`, interpolated between the frames on either side of the
