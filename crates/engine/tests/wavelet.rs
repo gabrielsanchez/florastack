@@ -112,8 +112,8 @@ fn a_wavelet_stack_is_as_sharp_as_the_pyramid_on_occluding_layers_and_becomes_an
     assert_eq!(
         entry["parameters"],
         json!({
-            "levels": 3, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "rangeLimit": 1.0,
-            "tone": "compress", "framing": "narrow"
+            "levels": 3, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "noiseFloor": 0.4,
+            "rangeLimit": 1.0, "tone": "compress", "framing": "narrow"
         })
     );
     assert_eq!(run(&mut engine, "edit.history", "{}")["undo"].as_array().unwrap().len(), steps + 3);
@@ -123,7 +123,12 @@ fn a_wavelet_stack_is_as_sharp_as_the_pyramid_on_occluding_layers_and_becomes_an
     assert_eq!(state(&engine), before);
 
     // Settings for one stack apply to it alone; the project's apply to the next.
-    let other = run(&mut engine, "stack.wavelet", r#"{ "window": 5, "lowpass": "average", "wavelet": "db2", "consistency": false, "levels": 2 }"#);
+    let other = run(
+        &mut engine,
+        "stack.wavelet",
+        r#"{ "window": 5, "lowpass": "average", "wavelet": "db2", "consistency": false, "levels": 2, "noiseFloor": 1.5 }"#,
+    );
+    assert_eq!(other["settings"]["noise_floor"], 1.5);
     let used = &other["settings"];
     assert_eq!(
         (&used["window"], &used["lowpass"], &used["wavelet"], &used["consistency"]),
@@ -142,6 +147,8 @@ fn a_wavelet_stack_is_as_sharp_as_the_pyramid_on_occluding_layers_and_becomes_an
         r#"{ "levels": 11 }"#,
         r#"{ "lowpass": "median" }"#,
         r#"{ "wavelet": "haar" }"#,
+        r#"{ "noiseFloor": 2.5 }"#,
+        r#"{ "noiseFloor": -0.1 }"#,
         r#"{ "decisions": "channels" }"#,
         r#"{ "radius": 1 }"#,
         r#"{ "name": "" }"#,
@@ -160,7 +167,8 @@ fn the_preview_and_slabbing_take_the_wavelet_method_and_its_settings_alone() {
     let files = write(dir.path(), "stack", &frames, BitDepth::U16);
     let mut engine = aligned(dir.path(), &files);
     let before = state(&engine);
-    let previewed = run(&mut engine, "stack.preview", r#"{ "method": "wavelet", "window": 5, "grit": 0.25 }"#);
+    let previewed = run(&mut engine, "stack.preview", r#"{ "method": "wavelet", "window": 5, "grit": 0.25, "noiseFloor": 1.0 }"#);
+    assert_eq!(previewed["settings"]["noise_floor"], 1.0, "the full-size setting, which the preview divides by 4");
     assert_eq!((previewed["width"].as_u64(), previewed["height"].as_u64()), (Some(40), Some(30)), "{previewed}");
     assert_eq!(
         (&previewed["method"], &previewed["settings"]["window"], &previewed["settings"]["grit"]),
@@ -175,6 +183,8 @@ fn the_preview_and_slabbing_take_the_wavelet_method_and_its_settings_alone() {
         r#"{ "method": "wavelet", "power": 2 }"#,
         r#"{ "method": "wavelet", "window": 2 }"#,
         r#"{ "method": "pyramid", "window": 5 }"#,
+        r#"{ "method": "pyramid", "noiseFloor": 1 }"#,
+        r#"{ "method": "wavelet", "noiseFloor": 9 }"#,
         r#"{ "method": "depth-map", "lowpass": "focus" }"#,
         r#"{ "lowpass": "focus" }"#,
     ] {

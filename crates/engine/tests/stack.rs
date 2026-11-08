@@ -182,7 +182,8 @@ fn settings_merge_are_checked_and_go_into_presets() {
     let pyramid = json!({ "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" });
     let depth_map = json!({ "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 });
     let wavelet = json!({
-        "levels": 0, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "range_limit": 1.0, "tone": "compress"
+        "levels": 0, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "noise_floor": 0.4, "range_limit": 1.0,
+        "tone": "compress"
     });
     assert_eq!(
         run(&mut engine, "stack.get", "{}")["settings"],
@@ -219,6 +220,7 @@ fn settings_merge_are_checked_and_go_into_presets() {
         r#"{ "depth_map": { "smoothing": -2 } }"#,
         r#"{ "wavelet": { "window": 4 } }"#,
         r#"{ "wavelet": { "lowpass": "median" } }"#,
+        r#"{ "wavelet": { "noise_floor": 3 } }"#,
     ] {
         assert_eq!(engine.dispatch_json("stack.set", bad).unwrap_err().code(), "params", "{bad}");
     }

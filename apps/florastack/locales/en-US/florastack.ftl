@@ -197,7 +197,7 @@ method-both = Both (pyramid and depth map)
 tip-method-pyramid = Picks the sharpest detail scale by scale. The best all-rounder, and the best where near and far detail overlap, such as hair, bristles and antennae. Can raise contrast and noise a little.
 tip-method-depth-map = Takes each pixel from the frame where it is sharpest. Keeps colors and smooth backgrounds exactly as shot, and needs a contrast threshold. Best for subjects without overlapping detail; it can leave halos at edges.
 tip-method-average = Blends every frame, each weighted by its sharpness. Fast and smooth, but softer than the others. Use it for quick results or simple subjects.
-tip-method-wavelet = Picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with a little more noise. Stacks on the CPU only, several times slower than the pyramid.
+tip-method-wavelet = Picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with about as much noise. Stacks on the CPU only, several times slower than the pyramid.
 tip-method-both = Makes a pyramid and a depth-map output from the same frames, to compare them or to retouch one from the other.
 
 setting-radius = Radius
@@ -241,6 +241,8 @@ setting-decisions = Decisions
 decisions-luminance = By luminance
 decisions-channels = By channel
 tip-decisions = Whether the sharpest detail is picked once for all colors, or for each color channel on its own. By channel can help with color fringes, but may shift colors.
+setting-noise-floor = Noise floor
+tip-noise-floor = How noisy the frames are, in percent of white (0 turns it off). Fine detail weaker than this is treated as noise and blended from several frames instead of taken from the noisiest. Raise it for high-ISO frames; too high, it softens fine detail.
 setting-window = Window
 window-small = 3 px
 window-large = 5 px

@@ -84,7 +84,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      the smoothing radius and the contrast threshold: how it is chosen (`threshold`: auto, level or \
                      percentile), and its `level` and `percentile`; for the wavelet method (`wavelet`), the number of \
                      levels, the filter bank, the activity window, the consistency filter, the low-pass rule, the grit \
-                     suppression, the range limit and the tone compression.",
+                     suppression, the noise floor, the range limit and the tone compression.",
                 )
                 .requires(Requires::Project),
             get,
@@ -220,19 +220,26 @@ fn wavelet_spec() -> CommandSpec {
                 "Splits every frame by a shift-invariant wavelet transform and keeps, at every level and \
                  position, the detail of the frame with the most local activity, measured on luminance over a \
                  `window` of 3 or 5 samples: like the pyramid method, it keeps the finest detail where near and \
-                 far structure overlap, and on real stacks it keeps a little more of it, with a little more \
+                 far structure overlap, and on real stacks it keeps a little more of it, with about as much \
                  noise. `levels` (0 chooses from the canvas's size) and `wavelet` (the filter bank, `bior22` or \
                  `db2`) shape the transform, `consistency` replaces isolated choices by the choice around them, \
                  `lowpass` makes the coarsest structure from the frames in focus there (`focus`), their average \
                  (`average`, which lightens dark objects only the sharp frames show) or the frame chosen most \
-                 often (`select`), and `grit`, `rangeLimit` and `tone` work as the pyramid's do. Reads every \
+                 often (`select`), `noiseFloor` is the frames' noise in percent of white (0.4 by default, 0 off; \
+                 raise it for high-ISO frames), below which the finest level blends frames evenly rather than \
+                 picking the noisiest, and `grit`, `rangeLimit` and `tone` work as the pyramid's do. Reads every \
                  frame twice, stacks on the CPU only, and takes several times the pyramid's time and about twice \
                  its memory. Uses the project's settings (`stack.get`), or the ones given for this stack only, and \
                  the stored alignment, as `stack.average` does. Runs as a job; the output is added in one undo \
                  step when it ends, or not at all when it is cancelled.",
             )
             .undoable()
-            .examples(&["{}", r#"{ "window": 5, "name": "Wavelet, wider window" }"#, r#"{ "lowpass": "average", "tone": "keep" }"#]),
+            .examples(&[
+                "{}",
+                r#"{ "window": 5, "name": "Wavelet, wider window" }"#,
+                r#"{ "noiseFloor": 1.0, "name": "Wavelet, high ISO" }"#,
+                r#"{ "lowpass": "average", "tone": "keep" }"#,
+            ]),
         Lane::Heavy,
         wavelet,
     )
@@ -432,6 +439,7 @@ struct WaveletOverrides {
     consistency: Option<bool>,
     lowpass: Option<Lowpass>,
     grit: Option<f64>,
+    noise_floor: Option<f64>,
     range_limit: Option<f64>,
     tone: Option<Tone>,
 }
@@ -445,6 +453,7 @@ impl WaveletOverrides {
             consistency: self.consistency.unwrap_or(base.consistency),
             lowpass: self.lowpass.unwrap_or(base.lowpass),
             grit: self.grit.unwrap_or(base.grit),
+            noise_floor: self.noise_floor.unwrap_or(base.noise_floor),
             range_limit: self.range_limit.unwrap_or(base.range_limit),
             tone: self.tone.unwrap_or(base.tone),
         }
@@ -452,7 +461,14 @@ impl WaveletOverrides {
 
     fn check(&self) -> Result<(), Invalid> {
         self.settings(&WaveletSettings::default()).validate().map_err(|e| match e {
-            StackError::Setting { name, .. } => Invalid::new(if name == "range_limit" { "rangeLimit" } else { name }, e.to_string()),
+            StackError::Setting { name, .. } => Invalid::new(
+                match name {
+                    "range_limit" => "rangeLimit",
+                    "noise_floor" => "noiseFloor",
+                    other => other,
+                },
+                e.to_string(),
+            ),
             other => Invalid::new("settings", other.to_string()),
         })
     }
@@ -621,6 +637,11 @@ struct WaveletParams {
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     grit: Option<f64>,
+    /// The frames' noise in percent of white, from 0 (off) to 2, below which the finest level blends frames evenly;
+    /// the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 2.0))]
+    noise_floor: Option<f64>,
     /// How strictly each pixel is held within the frames' range there, from 0 to 1; the project's when left out.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
@@ -639,6 +660,7 @@ impl WaveletParams {
             consistency: self.consistency,
             lowpass: self.lowpass,
             grit: self.grit,
+            noise_floor: self.noise_floor,
             range_limit: self.range_limit,
             tone: self.tone,
         }
@@ -741,6 +763,11 @@ pub(super) struct MethodParams {
     /// How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out.
     #[serde(default)]
     lowpass: Option<Lowpass>,
+    /// The wavelet method's noise floor, in percent of white at full size, from 0 (off) to 2; the project's when left
+    /// out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 2.0))]
+    noise_floor: Option<f64>,
 }
 
 impl MethodParams {
@@ -771,6 +798,7 @@ impl MethodParams {
             consistency: self.consistency,
             lowpass: self.lowpass,
             grit: self.grit,
+            noise_floor: self.noise_floor,
             range_limit: self.range_limit,
             tone: self.tone,
         }
@@ -783,6 +811,7 @@ impl MethodParams {
             ("window", self.window.is_some()),
             ("consistency", self.consistency.is_some()),
             ("lowpass", self.lowpass.is_some()),
+            ("noiseFloor", self.noise_floor.is_some()),
         ]
         .into_iter()
         .find_map(|(name, given)| given.then_some(name))
@@ -989,6 +1018,7 @@ impl Chosen {
                 "consistency": s.consistency,
                 "lowpass": s.lowpass,
                 "grit": s.grit,
+                "noiseFloor": s.noise_floor,
                 "rangeLimit": s.range_limit,
                 "tone": s.tone,
                 "framing": framing,

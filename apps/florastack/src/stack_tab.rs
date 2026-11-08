@@ -315,6 +315,7 @@ fn advanced(app: &mut FloraStackApp, ui: &mut egui::Ui, free: bool) {
     if method == Method::Wavelet {
         ui.label(RichText::new(tr("method-wavelet")).strong());
         stack_slider(app, ui, ("wavelet", "grit"), 0.0..=1.0, ("setting-grit", "tip-grit", "grit"));
+        stack_slider(app, ui, ("wavelet", "noise_floor"), 0.0..=2.0, ("setting-noise-floor", "tip-noise-floor", "noise-floor"));
         stack_slider(app, ui, ("wavelet", "range_limit"), 0.0..=1.0, ("setting-range-limit", "tip-range-limit", "range-limit"));
         stack_slider(app, ui, ("wavelet", "levels"), 0.0..=10.0, ("setting-levels", "tip-levels", "levels"));
         let tones = [("compress", "tone-compress"), ("clip", "tone-clip"), ("keep", "tone-keep")];
@@ -444,7 +445,10 @@ pub fn made_with(method: &str, parameters: &Value) -> String {
         "average" => ("method-average", &[("radius", "setting-radius"), ("smoothing", "setting-smoothing"), ("power", "setting-power")]),
         "pyramid" => ("method-pyramid", &[("grit", "setting-grit"), ("rangeLimit", "setting-range-limit")]),
         "depth-map" => ("method-depth-map", &[("radius", "setting-radius"), ("smoothing", "setting-smoothing")]),
-        "wavelet" => ("method-wavelet", &[("grit", "setting-grit"), ("rangeLimit", "setting-range-limit"), ("window", "setting-window")]),
+        "wavelet" => (
+            "method-wavelet",
+            &[("grit", "setting-grit"), ("noiseFloor", "setting-noise-floor"), ("rangeLimit", "setting-range-limit"), ("window", "setting-window")],
+        ),
         other => return other.to_owned(),
     };
     let mut parts = vec![tr(label)];
@@ -527,8 +531,8 @@ mod tests {
         let depth = made_with("depth-map", &json!({ "radius": 2.5, "smoothing": 8.0, "threshold": "percentile", "percentile": 40.0 }));
         assert_eq!(depth, "Depth map · radius 2.5 · smoothing 8 · fills 40%");
         assert_eq!(made_with("pyramid", &json!({ "grit": 0.25, "rangeLimit": 1.0 })), "Pyramid · grit 0.25 · range limit 1");
-        let wavelet = made_with("wavelet", &json!({ "grit": 0.5, "rangeLimit": 1.0, "window": 3 }));
-        assert_eq!(wavelet, "Wavelet · grit 0.5 · range limit 1 · window 3");
+        let wavelet = made_with("wavelet", &json!({ "grit": 0.5, "noiseFloor": 0.4, "rangeLimit": 1.0, "window": 3 }));
+        assert_eq!(wavelet, "Wavelet · grit 0.5 · noise floor 0.4 · range limit 1 · window 3");
         assert_eq!(made_with("slab", &json!({})), "slab", "an unknown method shows as its name");
         assert!(docs_url("radius").ends_with("/blob/main/book/src/user/stack-tab.md#radius"));
     }

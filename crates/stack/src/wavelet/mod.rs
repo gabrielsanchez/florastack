@@ -31,6 +31,13 @@
 //!    (`select::majority`), which replaces isolated picks, the ones noise makes, by the choice around them.
 //! 4. **Grit** (`grit`): picking the largest of several frames' noise builds up grit at the finest level, so there, as
 //!    in the pyramid, each frame is weighted by its activity raised to `1 / grit`. 0 picks, as the other levels do.
+//!    **Noise floor** (`noise_floor`): where a frame's activity there is no more than its noise would make, it is
+//!    raised to that, so that frames whose detail is only noise share that place evenly instead of the noisiest one
+//!    winning it. The noise is `noise_floor` percent of white in gamma-encoded values, as cameras' noise roughly is,
+//!    brought into linear light at the frame's brightness there (`select::noise_floor`). On four real JPEG stacks, 0.4%
+//!    lowered the noise of flat areas by 4 to 26% and the subjects' fine detail by 0.2 to 1.8%; on synthetic stacks a
+//!    floor near their true noise raised SSIM, and 2% blurred real detail. With `grit` 0 the finest level picks, and the
+//!    floor does nothing.
 //! 5. **Low-pass** (`lowpass`): the coarsest low-pass is the frames', weighted by that same pooled activity to the
 //!    power [`FOCUS_POWER`] and by coverage. A plain average lifts what only the sharp frames show dark: measured on real
 //!    stacks, a ladybug's spot came out at 33 of 255 where its sharp frames have 15, about the frames' mean. Taking the
@@ -48,7 +55,7 @@
 //! [`Selector`] keeps the best activity and its frame per level (`select.rs`), the maps are filtered once, whole, into
 //! [`Choices`], and the compositor (`compose.rs`) reads every frame again and adds what it was chosen for. Synthesis is
 //! linear, so that sum needs no coefficient planes, and memory doesn't grow with the frames. It is more than the
-//! pyramid's all the same: on 20 MP frames the two peak at about 3.7 and 1.8 GB. Decisions need only luminance, so
+//! pyramid's all the same: on 20 MP frames the two peak at about 3.7 and 1.8 GB, with the noise floor or without. Decisions need only luminance, so
 //! pass 1 transforms one plane.
 //!
 //! # Tiles
@@ -96,6 +103,13 @@ pub(crate) fn wider(tiling: &Tiling) -> Tiling {
     Tiling { tile_size, ..tiling.clone() }
 }
 
+/// The noise floor's default, in percent: on four real JPEG stacks, 0.2 changed little and 0.4 lowered noise most for
+/// the least detail; it hasn't been tried on high-ISO or RAW stacks.
+pub const DEFAULT_NOISE_FLOOR: f64 = 0.4;
+
+/// The highest noise floor, in percent: at 2, fine detail blurred on the synthetic stacks.
+pub const MAX_NOISE_FLOOR: f64 = 2.0;
+
 /// The power of a frame's pooled activity in [`Lowpass::Focus`]'s weights. On four real stacks, 1 and 2 left dark
 /// objects lighter and 8 gained little over 4.
 pub const FOCUS_POWER: i32 = 4;
@@ -137,6 +151,11 @@ pub struct WaveletSettings {
     /// sharpest frame's coefficients are picked, as at the other levels).
     #[schemars(range(min = 0.0, max = 1.0))]
     pub grit: f64,
+    /// The noise floor of the finest level's blend, in percent of white in gamma-encoded values, from 0 (off) to 2: the
+    /// frames' noise, below which activity counts as noise. Raise it for noisy frames (high ISO); too high, it blends
+    /// away fine detail.
+    #[schemars(range(min = 0.0, max = 2.0))]
+    pub noise_floor: f64,
     /// How strictly each pixel is held within the range the frames span there, from 0 (off) to 1 (never darker or
     /// brighter than every frame).
     #[schemars(range(min = 0.0, max = 1.0))]
@@ -154,6 +173,7 @@ impl Default for WaveletSettings {
             consistency: true,
             lowpass: Lowpass::Focus,
             grit: 0.5,
+            noise_floor: DEFAULT_NOISE_FLOOR,
             range_limit: 1.0,
             tone: Tone::Compress,
         }
@@ -173,6 +193,9 @@ impl WaveletSettings {
         let grit_ok = self.grit == 0.0 || (self.grit.is_finite() && (GRIT_RANGE.0..=GRIT_RANGE.1).contains(&self.grit));
         if !grit_ok {
             return Err(StackError::Setting { name: "grit", value: self.grit, expected: "0 (off) or from 0.25 to 1" });
+        }
+        if !(self.noise_floor.is_finite() && (0.0..=MAX_NOISE_FLOOR).contains(&self.noise_floor)) {
+            return Err(StackError::Setting { name: "noise_floor", value: self.noise_floor, expected: "from 0 (off) to 2 percent" });
         }
         if !(self.range_limit.is_finite() && (0.0..=1.0).contains(&self.range_limit)) {
             return Err(StackError::Setting { name: "range_limit", value: self.range_limit, expected: "from 0 to 1" });
@@ -196,14 +219,15 @@ impl WaveletSettings {
     }
 
     /// The same settings for frames reduced by `factor` (4 for a quarter-scale preview): an explicit number of levels
-    /// loses one per halving of the frames' size; the other settings have no length.
+    /// loses one per halving of the frames' size, and the noise floor is divided by `factor`, since a reduction
+    /// averages about `factor` squared pixels into one; the other settings have no length.
     #[must_use]
     pub fn reduced(&self, factor: f64) -> WaveletSettings {
         let factor = if factor.is_finite() && factor > 1.0 { factor } else { 1.0 };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // log2 of a factor above 1, rounded, small.
         let fewer = factor.log2().round() as u32;
         let levels = if self.levels == 0 { 0 } else { self.levels.saturating_sub(fewer).max(1) };
-        WaveletSettings { levels, ..self.clone() }
+        WaveletSettings { levels, noise_floor: self.noise_floor / factor, ..self.clone() }
     }
 }
 

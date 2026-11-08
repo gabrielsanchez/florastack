@@ -20,7 +20,7 @@ use crate::error::StackError;
 use crate::method::{StackShape, Stacked, Stacker};
 use crate::pyramid::TILED_LEVELS;
 use crate::pyramid::kernel::{Pyramid, filled, pick_weight};
-use crate::pyramid::levels::{luminance, mirror, signed};
+use crate::pyramid::levels::{Span, luminance, mirror, signed};
 use crate::source::{FrameSource, Patch};
 use crate::tiled::{Share, StatePlane, TileKernel, TileView, Tiled, Tiling};
 
@@ -82,6 +82,8 @@ pub struct SelectKernel {
     peak: Option<Image<f32>>,
     frames: usize,
     spare: Spare,
+    /// The finest level's activity per unit of noise variance (`noise_gain`).
+    gain: f32,
 }
 
 /// Folds a level's `energy` into `best` and `frame`, planes of `at`'s size: a frame replaces the one before it where it
@@ -112,6 +114,7 @@ impl SelectKernel {
             peak: None,
             frames: 0,
             spare: Spare::default(),
+            gain: noise_gain(settings.wavelet.bank())?,
         })
     }
 
@@ -127,6 +130,56 @@ impl SelectKernel {
             (false, k) => 2 * k,
         }
     }
+}
+
+/// The activity white noise of variance 1 gives at the finest level of `bank`: the sum of the squares of the three
+/// subbands' responses to an impulse. Activity averages its window, so noise's expected activity is this times its
+/// variance.
+pub(super) fn noise_gain(bank: &Bank) -> Result<f32, StackError> {
+    let size = 33;
+    let impulse = Image::from_fn(size, size, 1, ColorSpace::LINEAR, |x, y, _| if x == size / 2 && y == size / 2 { 1.0 } else { 0.0 })?;
+    let spare = Spare::default();
+    let (_, details) = analyze(bank, &impulse, 1, &spare)?;
+    let square = |image: &Image<f32>| image.as_raw().iter().map(|v| v * v).sum::<f32>();
+    Ok(square(&details.horizontal) + square(&details.vertical) + square(&details.diagonal))
+}
+
+/// The finest level's noise floor on `split`'s extended plane, `None` when `settings` turn it off: the activity that
+/// noise of `noise_floor` percent of white, in gamma-encoded values, makes at each position, given the frame's light
+/// there pooled as its coverage is. Gamma-encoded `g` is about linear `L^(1 / 2.2)`, so noise `n` there is
+/// `2.2 L^0.545 n` in linear light.
+pub(super) fn noise_floor(
+    settings: &WaveletSettings,
+    gain: f32,
+    split: &Split,
+    span: Span,
+    by: usize,
+    spare: &Spare,
+) -> Result<Option<Image<f32>>, StackError> {
+    if settings.noise_floor <= 0.0 {
+        return Ok(None);
+    }
+    #[allow(clippy::cast_possible_truncation)] // A percentage from 0 to 2.
+    let noise = (settings.noise_floor / 100.0) as f32;
+    let light = extend(&luminance(split.image())?, span, by, 0, spare)?;
+    let mut floor = pool(&light, 1, spare)?;
+    spare.give(light);
+    floor.par_rows_mut().for_each(|row| {
+        for v in row {
+            let n = noise * 2.2 * v.max(0.0).powf(0.545);
+            *v = n * n * gain;
+        }
+    });
+    Ok(Some(floor))
+}
+
+/// Raises `energy` to `floor` where it is below it.
+pub(super) fn raise(energy: &mut Image<f32>, floor: &Image<f32>) {
+    energy.par_rows_mut().zip(floor.par_rows()).for_each(|(row, floor)| {
+        for (e, &f) in row.iter_mut().zip(floor) {
+            *e = e.max(f);
+        }
+    });
 }
 
 /// Folds a frame's blend weights at the finest level into `sum`, a plane of `at`'s size.
@@ -205,7 +258,7 @@ impl TileKernel for SelectKernel {
         for k in 0..layout.tiled {
             let dilation = 1 << k;
             let (low, details) = analyze(self.bank, &plane, dilation, spare)?;
-            let energy = activity(&details, self.settings.window, spare)?;
+            let mut energy = activity(&details, self.settings.window, spare)?;
             details.recycle(spare);
             if let Some(last) = coverage.take() {
                 coverage = Some(pool(&last, dilation, spare)?);
@@ -213,6 +266,10 @@ impl TileKernel for SelectKernel {
             }
             let first = self.plane(k);
             if let (Some(power), 0) = (self.power, k) {
+                if let Some(floor) = noise_floor(&self.settings, self.gain, &split, span, by, spare)? {
+                    raise(&mut energy, &floor);
+                    spare.give(floor);
+                }
                 let sum = state.get_mut(first).and_then(StatePlane::as_f32_mut).ok_or_else(bad)?;
                 blend(power, &energy, coverage.as_ref(), at, sum);
             } else {

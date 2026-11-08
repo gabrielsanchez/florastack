@@ -8,8 +8,8 @@ a depth-map output from the same frames, to compare them, or to [retouch](retouc
 |---|---|---|---|---|
 | How | The sharpest detail at every scale, from fine to coarse | Each pixel from the frame where it is sharpest | Every frame blended, each weighted by its sharpness | Like the pyramid, on detail that doesn't shift with the image |
 | Best for | Hair, bristles, antennae: near and far detail that overlap | Smooth subjects and backgrounds; exact colors and tones | Quick results; simple subjects without fine overlapping detail | The pyramid's subjects, for the last bit of fine detail |
-| Weak spots | Can raise contrast and noise a little | Halos and smears where near and far detail meet | Softer; veils around out-of-focus edges | A little noisier than the pyramid; slow |
-| Settings | Grit, range limit, tone, levels, decisions | Radius, smoothing, contrast threshold | Radius, smoothing, power | Grit, range limit, tone, levels, window, coarse tones, filter, consistency |
+| Weak spots | Can raise contrast and noise a little | Halos and smears where near and far detail meet | Softer; veils around out-of-focus edges | Slow; fine colored speckle in dark areas |
+| Settings | Grit, range limit, tone, levels, decisions | Radius, smoothing, contrast threshold | Radius, smoothing, power | Grit, noise floor, range limit, tone, levels, window, coarse tones, filter, consistency |
 | Speed | Slowest on the CPU, fast on a GPU | Reads the frames twice | Fastest | Several times the pyramid's time, on the CPU only, and reads the frames twice |
 
 **Start with the pyramid.** It is the default, and the best all-rounder. Try the depth map when the pyramid makes
@@ -38,7 +38,7 @@ In the single frame only some bristles are sharp. The pyramid has them all, cris
 between them. The depth map has them too, but where a near bristle crosses a far one it takes each pixel from one frame
 or the other, and smears appear along some of them. The weighted average is softer, and a faint veil of out-of-focus
 bristles lies over the background. The wavelet method looks like the pyramid at this size; enlarged, the tips of its
-thinnest bristles are a little crisper, and the dark background a little grainier.
+thinnest bristles are a little crisper, and the dark background very slightly grainier.
 
 ### Crossing bristles
 
@@ -115,13 +115,15 @@ doesn't change as the image shifts by a pixel, and it decides once for the layer
 detail together. It reads the frames twice: once to decide which frame each place takes at each layer, with isolated
 choices replaced by the choice around them, and once to build the result.
 
-On four real stacks of camera JPEGs it kept 3.5 to 6% more fine detail on the subjects than the pyramid, and its flat
-areas were 7 to 16% noisier. It stacks on the CPU only, even when FloraStack uses the GPU, and took 3.6 to 5.4 times as
-long as the pyramid on the CPU, with about twice its memory (3.7 GB rather than 1.8 GB for 20-megapixel frames). Its
-quarter-size previews are quick enough to follow a setting.
+Picking the frame with the most fine detail also picks the noisiest frame where there is no detail, so where a
+frame's finest detail is no stronger than its noise (the **Noise floor**), the frames are blended evenly there instead.
+On four real stacks of camera JPEGs it kept 2 to 4.5% more fine detail on the subjects than the pyramid, and its flat
+areas ranged from 14% less noisy to 7% noisier. It stacks on the CPU only, even when FloraStack uses the GPU, and took
+3.9 to 5.2 times as long as the pyramid on the CPU, with about twice its memory (3.7 GB rather than 1.8 GB for
+20-megapixel frames). Its quarter-size previews are quick enough to follow a setting.
 
 Its settings, under **Advanced**: **Grit**, **Range limit**, **Tone** and **Levels** work as the pyramid's;
-**Window**, **Coarse tones**, **Filter** and **Consistency** are its own, and [the Stack tab](stack-tab.md#window)
+**Noise floor**, **Window**, **Coarse tones**, **Filter** and **Consistency** are its own, and [the Stack tab](stack-tab.md#noise-floor)
 explains them. The defaults suit most stacks.
 
 ## Previews and outputs

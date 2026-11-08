@@ -86,4 +86,6 @@ pub use pyramid::{
 pub use settings::StackSettings;
 pub use source::{CoveredFrame, FrameSource, Gained, Patch};
 pub use tiled::{Share, StatePlane, TileKernel, TileView, Tiled, Tiling};
-pub use wavelet::{Choices, Decomposition, Lowpass, Selector, WAVELET, Wavelet, WaveletSettings, decompose, wavelet_stack};
+pub use wavelet::{
+    Choices, DEFAULT_NOISE_FLOOR, Decomposition, Lowpass, MAX_NOISE_FLOOR, Selector, WAVELET, Wavelet, WaveletSettings, decompose, wavelet_stack,
+};

@@ -231,6 +231,8 @@ fn the_method_stacks_overlapping_thin_structures_near_the_pyramid() {
                 ("wavelet, window 5", WaveletSettings { window: 5, ..defaults.clone() }),
                 ("wavelet, select low-pass", WaveletSettings { lowpass: Lowpass::Select, ..defaults.clone() }),
                 ("wavelet, average low-pass", WaveletSettings { lowpass: Lowpass::Average, ..defaults.clone() }),
+                ("wavelet, no noise floor", WaveletSettings { noise_floor: 0.0, ..defaults.clone() }),
+                ("wavelet, noise floor 1%", WaveletSettings { noise_floor: 1.0, ..defaults.clone() }),
             ] {
                 show(name, &scores(&wavelet(&settings, &synthetic.frames), truth));
             }
@@ -238,6 +240,29 @@ fn the_method_stacks_overlapping_thin_structures_near_the_pyramid() {
             assert!(ours.halo < pyr.halo * 1.25, "halo {} against the pyramid's {}", ours.halo, pyr.halo);
         }
     }
+}
+
+#[test]
+fn the_noise_floor_lowers_noise_and_keeps_the_detail() {
+    // The noisy stacks' noise (read 0.5%, shot 1% in linear light) is about 0.65% of white in gamma-encoded values.
+    for (w, h, scale, backdrop) in [(720, 540, 3.0, Backdrop::Textured), (320, 240, 1.0, Backdrop::Textured), (720, 540, 3.0, Backdrop::SmoothRight)]
+    {
+        let synthetic = layered(w, h, scale, backdrop, 12, true, 1);
+        let truth = &synthetic.truth.sharp;
+        let off = WaveletSettings { noise_floor: 0.0, ..WaveletSettings::default() };
+        let (without, with) =
+            (scores(&wavelet(&off, &synthetic.frames), truth), scores(&wavelet(&WaveletSettings::default(), &synthetic.frames), truth));
+        println!("{w}x{h} {backdrop:?}");
+        show("no noise floor", &without);
+        show("noise floor 0.4%", &with);
+        assert!(with.noise < without.noise, "noise {} against {} without the floor", with.noise, without.noise);
+        assert!(with.ssim > without.ssim - 0.002, "SSIM {} against {} without the floor", with.ssim, without.ssim);
+    }
+    // With grit 0 the finest level picks, and the floor changes nothing.
+    let synthetic = layered(160, 120, 1.0, Backdrop::Textured, 6, true, 2);
+    let picking = WaveletSettings { grit: 0.0, ..WaveletSettings::default() };
+    let unfloored = WaveletSettings { noise_floor: 0.0, ..picking.clone() };
+    assert_eq!(wavelet(&picking, &synthetic.frames).as_raw(), wavelet(&unfloored, &synthetic.frames).as_raw());
 }
 
 #[test]
@@ -495,6 +520,9 @@ fn settings_are_checked_and_scale_for_previews() {
         WaveletSettings { grit: f64::NAN, ..WaveletSettings::default() },
         WaveletSettings { range_limit: -0.1, ..WaveletSettings::default() },
         WaveletSettings { range_limit: f64::INFINITY, ..WaveletSettings::default() },
+        WaveletSettings { noise_floor: -0.1, ..WaveletSettings::default() },
+        WaveletSettings { noise_floor: 2.5, ..WaveletSettings::default() },
+        WaveletSettings { noise_floor: f64::NAN, ..WaveletSettings::default() },
     ] {
         assert!(matches!(bad.validate(), Err(StackError::Setting { .. })), "{bad:?}");
         assert!(florastack_stack::Selector::new(&bad, &Tiling::default()).is_err());
@@ -503,7 +531,10 @@ fn settings_are_checked_and_scale_for_previews() {
     assert_eq!((defaults.levels_for(720, 540), defaults.levels_for(5184, 3888), defaults.levels_for(1, 1)), (5, 7, 1));
     assert_eq!(WaveletSettings { levels: 9, ..defaults.clone() }.levels_for(100, 60), 5, "never more than the canvas allows");
     assert_eq!(WaveletSettings { levels: 6, ..defaults.clone() }.reduced(4.0).levels, 4);
-    assert_eq!(defaults.reduced(4.0), defaults, "automatic levels follow the reduced canvas");
+    assert_eq!(defaults.reduced(4.0).levels, 0, "automatic levels follow the reduced canvas");
+    assert!((defaults.reduced(4.0).noise_floor - 0.1).abs() < 1e-12, "a quarter-size frame averages 16 pixels: a quarter of the noise");
+    assert_eq!(WaveletSettings { noise_floor: 0.0, ..defaults.clone() }.reduced(4.0).noise_floor, 0.0);
+    assert_eq!(defaults.noise_floor, florastack_stack::DEFAULT_NOISE_FLOOR);
     assert_eq!(WAVELET, "wavelet");
     let partial: WaveletSettings = toml::from_str("wavelet = \"db2\"\nlowpass = \"select\"\nwindow = 3\n").unwrap();
     assert_eq!(partial, WaveletSettings { wavelet: Wavelet::Db2, lowpass: Lowpass::Select, window: 3, ..WaveletSettings::default() });
