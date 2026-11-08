@@ -269,6 +269,15 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] The weighted average's `power`: 2 scores better than the default 3 on all five synthetic stacks (SSIM 0.009 to 0.014 higher, color shift 0.13 to 0.25 lower), and worse only in two slabbed runs of the moved stack (the gate's check with a changed default found it); try it on the real stacks before changing the default
 - [ ] A slab method's final stacks run in one order, so the first (the average) carries the slabs' cost and the other two are re-runs; the report marks which, but times aren't comparable across the three
 
+### 3.6 Wavelet method *(plan first)*
+
+- [x] A fourth method in florastack-stack, not yet in the engine (`crates/stack/src/wavelet/`, branch `wavelet-method`): a shift-invariant wavelet transform by the à trous algorithm with a choice of filter bank, the image split into a part at 1/8 scale (transformed over the whole canvas) and the rest (three levels, tile by tile), in two passes over the frames. Each level takes all three detail bands from the frame with the most local activity, with a majority filter for consistency; decisions on luminance, applied to every channel. The coarsest low-pass is weighted by focus (`Lowpass::Focus`, the default), because a plain average washed out dark objects that only the sharp frames show. Memory doesn't grow with the frame count (`crates/stack/tests/memory.rs`). On four real JPEG stacks it keeps 3.5 to 6% more subject detail than the pyramid, at 3.6 to 5.4 times the CPU pyramid's time and about 3.7 GB peak against 1.8
+- [ ] Wire it in, as a CPU-only method beside the pyramid, which stays the default: a `stack.wavelet` command, previews and slabs, the CLI, batch and watch, the Stack tab, Python, the quality runner and baseline, and the book
+- [ ] A noise floor at the finest level (`noise_floor`, about 0.4% by default): the wavelet output is noisier than the pyramid's in flat areas, by 7 to 16% on the four stacks. Tested in a throwaway patch, a floor of 0.4% cut noise by 4 to 26% and detail by only 0.2 to 1.8%, leaving detail 2 to 4.5% above the pyramid's; on synthetic stacks a floor near the true noise raised SSIM, and 2% hurt. Blending the second level as well was rejected: it cost up to 4.6% of detail. Only tried on these four JPEG stacks
+- [ ] Measure the noise floor from each stack instead of a fixed value, once a high-ISO RAW stack is in the corpus to test it on
+- [ ] Fine colored speckle in dark areas (the ladybug's spot) that the pyramid doesn't show; the noise floor only reduces it
+- [ ] Speed: memory traffic, not arithmetic, limits it (4 threads run as fast as 16); filtering in cache-sized bands of rows is the next CPU speedup, and a GPU version would be a step of its own
+
 ## Phase 4 — CLI and GPU
 
 ### 4.1 Command-line tool

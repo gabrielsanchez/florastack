@@ -68,6 +68,7 @@ pub mod pyramid;
 mod settings;
 mod source;
 mod tiled;
+pub mod wavelet;
 
 pub use average::{
     AVERAGE, AverageSettings, ENERGY_CAP, ENERGY_FLOOR, ENERGY_SCALE, MAX_RADIUS, MAX_SAMPLE, MIN_COVERAGE, POWER_RANGE, WeightedAverage,
@@ -85,3 +86,4 @@ pub use pyramid::{
 pub use settings::StackSettings;
 pub use source::{CoveredFrame, FrameSource, Gained, Patch};
 pub use tiled::{Share, StatePlane, TileKernel, TileView, Tiled, Tiling};
+pub use wavelet::{Choices, Decomposition, Lowpass, Selector, WAVELET, Wavelet, WaveletSettings, decompose, wavelet_stack};
