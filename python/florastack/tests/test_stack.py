@@ -34,7 +34,7 @@ def frames(tmp_path):
     return paths
 
 
-@pytest.mark.parametrize("method", ["average", "pyramid", "depth-map"])
+@pytest.mark.parametrize("method", ["average", "pyramid", "depth-map", "wavelet"])
 def test_synthetic_stack_shape_and_array_ownership(frames, method):
     with Project() as project:
         project.load_frames(frames)

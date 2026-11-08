@@ -3,7 +3,9 @@
 //! (normalizing or collapsing, and stitching the tiles), and one frame of the quarter-scale preview (reducing the frame
 //! included); and a whole 12-frame stack of 1500x1000 frames from beginning to end. For the depth-map method, one frame
 //! of each pass (measured, then composited), the end of pass 1, and the depth map made from the focus statistics: the
-//! step a new threshold takes, at full size. Run them with `cargo xtask bench`, which writes the summary to
+//! step a new threshold takes, at full size. For the wavelet method, one frame of each pass (choosing, then
+//! composing), the end of pass 1, and a whole small stack; it has no preview benchmark, as its preview is its stack on
+//! smaller frames. Run them with `cargo xtask bench`, which writes the summary to
 //! `target/bench-summary.json`; the methods' quality on synthetic stacks is `quality.rs`.
 //!
 //! The frames are synthetic: the textured test scene, sharp and blurred (288 MB each, made once per method; the
@@ -19,8 +21,8 @@ use florastack_core::ops::gaussian_blur;
 use florastack_core::testutil::{StackParams, generate, scene};
 use florastack_core::{Image, Unmonitored};
 use florastack_stack::{
-    AverageSettings, CompositeKernel, DepthSettings, Method, PyramidSettings, StackShape, Stacker, Threshold, Tiled, Tiling, depth_stack, preview,
-    stack,
+    AverageSettings, CompositeKernel, DepthSettings, Method, PyramidSettings, Selector, StackShape, Stacker, Threshold, Tiled, Tiling,
+    WaveletSettings, depth_stack, preview, stack, wavelet_stack,
 };
 
 const WIDTH: usize = 6000;
@@ -204,5 +206,57 @@ fn depth_map(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, average, pyramid, depth_map);
+fn wavelet(c: &mut Criterion) {
+    let (sharp, _) = scene::textured(WIDTH, HEIGHT, 1).unwrap();
+    let size = format!("{WIDTH}x{HEIGHT}");
+    let pixels = (WIDTH * HEIGHT) as u64;
+    let settings = WaveletSettings::default();
+    let tiling = Tiling::default();
+    let shape = StackShape { width: WIDTH, height: HEIGHT, channels: 3 };
+
+    let mut group = c.benchmark_group("stack");
+    group.sampling_mode(SamplingMode::Flat).sample_size(10).warm_up_time(Duration::from_secs(1)).measurement_time(Duration::from_secs(60));
+    group.throughput(Throughput::Elements(pixels));
+
+    let mut selector = Selector::new(&settings, &tiling).unwrap();
+    selector.begin(shape).unwrap();
+    group.bench_function(BenchmarkId::new("wavelet/choose-frame", &size), |b| {
+        b.iter(|| selector.add_frame(&sharp, &Unmonitored).unwrap());
+    });
+    drop(selector);
+    group.bench_function(BenchmarkId::new("wavelet/finish-pass-1", &size), |b| {
+        b.iter_batched(
+            || {
+                let mut selector = Selector::new(&settings, &tiling).unwrap();
+                selector.begin(shape).unwrap();
+                selector.add_frame(&sharp, &Unmonitored).unwrap();
+                selector
+            },
+            |mut selector| selector.finish(&Unmonitored).unwrap(),
+            BatchSize::PerIteration,
+        );
+    });
+    let mut selector = Selector::new(&settings, &tiling).unwrap();
+    selector.begin(shape).unwrap();
+    selector.add_frame(&sharp, &Unmonitored).unwrap();
+    let choices = Arc::new(selector.finish(&Unmonitored).unwrap());
+    drop(selector);
+    let mut compositor = choices.compositor(&tiling).unwrap();
+    compositor.begin(shape).unwrap();
+    group.bench_function(BenchmarkId::new("wavelet/compose-frame", &size), |b| {
+        b.iter(|| compositor.add_frame(&sharp, &Unmonitored).unwrap());
+    });
+    drop(compositor);
+    drop(sharp);
+
+    let (sharp, depth) = scene::textured(1500, 1000, 2).unwrap();
+    let small = generate(&sharp, &depth, &StackParams { blur_per_depth: 8.0, max_blur: 8.0, ..StackParams::identity(12) }).unwrap().frames;
+    group.throughput(Throughput::Elements(12 * 1500 * 1000)).measurement_time(Duration::from_secs(30));
+    group.bench_function(BenchmarkId::new("wavelet/stack", "12x1500x1000"), |b| {
+        b.iter(|| wavelet_stack(&settings, &tiling, &small, &Unmonitored).unwrap());
+    });
+    group.finish();
+}
+
+criterion_group!(benches, average, pyramid, depth_map, wavelet);
 criterion_main!(benches);

@@ -245,6 +245,13 @@ fn the_pyramid_s_coarse_limit_is_stored_only_when_it_is_on() {
 }
 
 #[test]
+fn stack_settings_saved_before_the_wavelet_method_read_back_with_its_defaults() {
+    let older: florastack_engine::StackSettings = serde_json::from_value(json!({ "average": { "radius": 2.0 } })).unwrap();
+    assert_eq!((older.average.radius, &older.wavelet), (2.0, &florastack_engine::WaveletSettings::default()));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One shape after another, each pinned whole.
 fn the_shapes_stored_in_project_files_are_pinned() {
     assert_eq!(
         to_data("develop settings", &DevelopSettings::default()).unwrap(),
@@ -294,6 +301,10 @@ fn the_shapes_stored_in_project_files_are_pinned() {
             "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 },
             "pyramid": { "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" },
             "depth_map": { "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 },
+            "wavelet": {
+                "levels": 0, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "range_limit": 1.0,
+                "tone": "compress",
+            },
         })
     );
     let level = florastack_engine::DepthSettings { threshold: florastack_engine::ThresholdMode::Level, level: 0.002, ..Default::default() };

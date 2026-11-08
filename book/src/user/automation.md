@@ -119,7 +119,7 @@ import florastack
 with florastack.Project() as project:
     project.load_frames(["near.tif", "middle.tif", "far.tif"])
     project.align(rotation=False)
-    image = project.stack("pyramid")  # also "average" or "depth-map"
+    image = project.stack("pyramid")  # also "average", "depth-map" or "wavelet"
     print(image.shape, image.dtype)   # (height, width, channels), float32
     settings = project.run("stack.get")
 # image remains valid here and can be passed to NumPy/SciPy routines.

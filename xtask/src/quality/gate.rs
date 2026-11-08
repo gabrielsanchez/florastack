@@ -4,10 +4,11 @@
 //! stacks), never a local stack's, which are the user's own. Each of its runs has its metrics, its runtime and its peak
 //! memory, and the file has the tolerance of each measure: how far a measure may move the wrong way before the gate
 //! fails, the larger of an absolute amount and a share of the baseline's value. Runtime is compared only against a
-//! baseline measured on the same machine with the same build profile, since it says nothing across machines, and only
-//! a run that takes more than twice as long, and at least half a second longer, fails: one desktop's single-threaded
-//! runs of a second vary by up to half under load. Every other measure is the same on every platform within its tolerance (memory because the synthetic stacks
-//! run on one thread).
+//! baseline measured on the same machine with the same build profile, since it says nothing across machines, and only a
+//! run that takes more than three times as long, and at least two seconds longer, fails: right after `cargo xtask ci`'s
+//! tests, a laptop's single-threaded runs took up to 3.3 times as long (0.33 s against 1.07 s, 1.81 s against 4.15 s),
+//! one or two of a hundred each time, though none did when the gate ran alone. Every other measure is the same on every
+//! platform within its tolerance (memory because the synthetic stacks run on one thread).
 //!
 //! A change that makes something worse on purpose updates the baseline in the same commit
 //! (`cargo xtask quality --update-baseline`), which keeps the tolerances and replaces the runs: the gate then compares
@@ -85,7 +86,7 @@ pub const MEASURES: &[Measure] = &[
     Measure { key: "out_of_range", name: "out", better: Better::Lower, digits: 4, tolerance: Tolerance::absolute(0.001), machine: false },
     Measure { key: "align_error", name: "align px", better: Better::Lower, digits: 3, tolerance: Tolerance::absolute(0.02), machine: false },
     Measure { key: "rejected", name: "rejected", better: Better::Lower, digits: 0, tolerance: Tolerance::absolute(0.0), machine: false },
-    Measure { key: "runtime_s", name: "time s", better: Better::Lower, digits: 2, tolerance: Tolerance::relative(1.0, 0.5), machine: true },
+    Measure { key: "runtime_s", name: "time s", better: Better::Lower, digits: 2, tolerance: Tolerance::relative(2.0, 2.0), machine: true },
     Measure { key: "peak_mib", name: "peak MiB", better: Better::Lower, digits: 1, tolerance: Tolerance::relative(0.1, 0.5), machine: false },
 ];
 
@@ -491,9 +492,12 @@ mod tests {
     fn memory_is_compared_everywhere_and_runtime_on_the_same_machine_only() {
         let good = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 1.0, 20.0)])];
         let base = baseline(&good);
-        let slow_and_big = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 2.5, 23.0)])];
+        // A run held up under load, at 2.5 times the baseline's time, still passes.
+        let held_up = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 2.5, 20.0)])];
+        assert!(compare(&base, &held_up, ALL, true).passed());
+        let slow_and_big = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 3.5, 23.0)])];
         let here = compare(&base, &slow_and_big, ALL, true);
-        assert_eq!(here.failures.len(), 2, "runtime twice the baseline or 0.5 s, and memory 10%, allowed: {:?}", here.failures);
+        assert_eq!(here.failures.len(), 2, "runtime three times the baseline or 2 s, and memory 10%, allowed: {:?}", here.failures);
         let elsewhere = compare(&base, &slow_and_big, ALL, false);
         assert_eq!(elsewhere.failures.len(), 1, "{:?}", elsewhere.failures);
         assert!(elsewhere.failures[0].contains("peak MiB"), "{:?}", elsewhere.failures);

@@ -1,7 +1,8 @@
 //! The stacking methods' quality on synthetic stacks whose layers occlude one another, scored against their ground
 //! truth: SSIM, halo, flat-region noise, color shift (mean CIEDE2000), PSNR and the share of pixels outside `[0, 1]`,
 //! for the weighted average, the pyramid method with its defaults and with each of its weakness settings changed, and
-//! the depth-map method with its defaults, a higher threshold and no smoothing.
+//! the depth-map method with its defaults, a higher threshold and no smoothing, and the wavelet method with its
+//! defaults, the average low-pass and the wider window.
 //! The scores are computed once and, when `cargo xtask bench` runs this, written as JSON records into the folder that
 //! `FLORASTACK_BENCH_METRICS` names, which xtask adds to `target/bench-summary.json` and prints; criterion times one
 //! whole stack per method.
@@ -15,7 +16,8 @@ use florastack_core::testutil::{Backdrop, StackParams, SyntheticStack, generate_
 use florastack_core::{Image, Unmonitored};
 use florastack_metrics::{HaloParams, NoiseParams, color_shift, halo, noise, psnr, ssim};
 use florastack_stack::{
-    AverageSettings, Decisions, DepthSettings, Method, PyramidSettings, Threshold, Tiling, compress_range, depth_stack, out_of_range, stack,
+    AverageSettings, Decisions, DepthSettings, Lowpass, Method, PyramidSettings, Threshold, Tiling, WaveletSettings, compress_range, depth_stack,
+    out_of_range, stack, wavelet_stack,
 };
 use serde_json::{Value, json};
 
@@ -41,7 +43,7 @@ fn layered(width: usize, height: usize, scale: f64, backdrop: Backdrop, noisy: b
     generate_layered(&scene, &params).unwrap()
 }
 
-/// A method's output as the engine makes it: the stack, brought into range for the pyramid.
+/// A method's output as the engine makes it: the stack, brought into range for the pyramid and the wavelet method.
 fn output(method: &Variant, frames: &[Image<f32>]) -> Image<f32> {
     match method {
         Variant::Average(settings) => {
@@ -55,6 +57,11 @@ fn output(method: &Variant, frames: &[Image<f32>]) -> Image<f32> {
             image
         }
         Variant::DepthMap(settings) => depth_stack(settings, &Tiling::default(), frames, None, &Unmonitored).unwrap().stacked.image,
+        Variant::Wavelet(settings) => {
+            let mut image = wavelet_stack(settings, &Tiling::default(), frames, &Unmonitored).unwrap().image;
+            compress_range(&mut image, settings.tone).unwrap();
+            image
+        }
     }
 }
 
@@ -62,6 +69,7 @@ enum Variant {
     Average(AverageSettings),
     Pyramid(PyramidSettings),
     DepthMap(DepthSettings),
+    Wavelet(WaveletSettings),
 }
 
 fn record(id: &str, image: &Image<f32>, truth: &Image<f32>) -> Value {
@@ -102,6 +110,9 @@ fn metrics() -> Vec<Value> {
             ("depth-map", Variant::DepthMap(depth.clone())),
             ("depth-map-percentile-60", Variant::DepthMap(depth.with_threshold(Threshold::Percentile(60.0)))),
             ("depth-map-smoothing-0", Variant::DepthMap(DepthSettings { smoothing: 0.0, ..depth.clone() })),
+            ("wavelet", Variant::Wavelet(WaveletSettings::default())),
+            ("wavelet-lowpass-average", Variant::Wavelet(WaveletSettings { lowpass: Lowpass::Average, ..WaveletSettings::default() })),
+            ("wavelet-window-5", Variant::Wavelet(WaveletSettings { window: 5, ..WaveletSettings::default() })),
         ];
         let best = synthetic.frames.iter().map(|f| ssim(f, truth).unwrap()).fold(0.0, f64::max);
         out.push(json!({ "id": format!("stack/quality/{name}/best-frame"), "ssim": best }));
@@ -138,6 +149,9 @@ fn quality(c: &mut Criterion) {
     });
     group.bench_function(BenchmarkId::new("depth-map", "12x720x540"), |b| {
         b.iter(|| output(&Variant::DepthMap(DepthSettings::default()), &synthetic.frames));
+    });
+    group.bench_function(BenchmarkId::new("wavelet", "12x720x540"), |b| {
+        b.iter(|| output(&Variant::Wavelet(WaveletSettings::default()), &synthetic.frames));
     });
     group.finish();
 }

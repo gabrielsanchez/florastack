@@ -50,6 +50,7 @@ fn set_stack(app: &mut FloraStackApp, group: &str, key: &str, value: &Value, dra
     app.preview_method = match group {
         "depth_map" => "depth-map",
         "average" => "average",
+        "wavelet" => "wavelet",
         _ => "pyramid",
     };
 }
@@ -83,9 +84,15 @@ fn stack_slider(app: &mut FloraStackApp, ui: &mut egui::Ui, (group, key): (&str,
 }
 
 /// A choice among a stacking setting's named values, as radio buttons.
-fn stack_choice(app: &mut FloraStackApp, ui: &mut egui::Ui, (group, key): (&str, &str), options: &[(&str, &str)], texts: Texts<'_>) {
+fn stack_choice(app: &mut FloraStackApp, ui: &mut egui::Ui, setting: (&str, &str), options: &[(&str, &str)], texts: Texts<'_>) {
+    let options: Vec<(Value, &str)> = options.iter().map(|(value, option)| (json!(value), *option)).collect();
+    stack_pick(app, ui, setting, &options, texts);
+}
+
+/// A choice among a stacking setting's values, of any type, as radio buttons.
+fn stack_pick(app: &mut FloraStackApp, ui: &mut egui::Ui, (group, key): (&str, &str), options: &[(Value, &str)], texts: Texts<'_>) {
     let (label, tip, anchor) = texts;
-    let current = app.shell.stack_settings[group][key].as_str().unwrap_or("").to_owned();
+    let current = app.shell.stack_settings[group][key].clone();
     let mut picked = None;
     row(ui, tip, anchor, |ui| {
         ui.label(tr(label));
@@ -93,13 +100,24 @@ fn stack_choice(app: &mut FloraStackApp, ui: &mut egui::Ui, (group, key): (&str,
         for (value, option) in options {
             last = ui.radio(current == *value, tr(option));
             if last.clicked() && current != *value {
-                picked = Some(*value);
+                picked = Some(value.clone());
             }
         }
         last
     });
     if let Some(value) = picked {
-        set_stack(app, group, key, &json!(value), false);
+        set_stack(app, group, key, &value, false);
+        app.preview_if_aligned();
+    }
+}
+
+/// A checkbox for a stacking setting that is on or off.
+fn stack_toggle(app: &mut FloraStackApp, ui: &mut egui::Ui, (group, key): (&str, &str), texts: Texts<'_>) {
+    let (label, tip, anchor) = texts;
+    let mut on = app.shell.stack_settings[group][key].as_bool().unwrap_or(false);
+    let response = row(ui, tip, anchor, |ui| ui.checkbox(&mut on, tr(label)));
+    if response.changed() {
+        set_stack(app, group, key, &json!(on), false);
         app.preview_if_aligned();
     }
 }
@@ -147,7 +165,7 @@ fn workflow(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let frames = app.shell.frames.len();
     let aligning = app.shell.running(&["align.run"]);
-    let stacking = app.shell.running(&["stack.average", "stack.pyramid", "stack.depthMap", "stack.slabbed"]);
+    let stacking = app.shell.running(&["stack.average", "stack.pyramid", "stack.depthMap", "stack.wavelet", "stack.slabbed"]);
     egui::Grid::new("workflow").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
         ui.label(RichText::new(tr_args("step-frames", &[("count", frames.into())])).strong());
         if ui.button(Action::AddFrames.label()).clicked() {
@@ -222,6 +240,7 @@ fn settings(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             Method::Pyramid => "tip-method-pyramid",
             Method::DepthMap => "tip-method-depth-map",
             Method::Average => "tip-method-average",
+            Method::Wavelet => "tip-method-wavelet",
             Method::Both => "tip-method-both",
         };
         let response = row(ui, tip, "method", |ui| ui.radio(app.prefs.method == method, tr(method.label_key())));
@@ -232,26 +251,27 @@ fn settings(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         }
     }
     ui.add_space(6.0);
-    // Radius and smoothing are the weighted average's and the depth map's; the pyramid has none.
+    // Radius and smoothing are the weighted average's and the depth map's; the pyramid and the wavelet method have none.
     let group = match app.prefs.method {
         Method::Average => Some("average"),
         Method::DepthMap | Method::Both => Some("depth_map"),
-        Method::Pyramid => None,
+        Method::Pyramid | Method::Wavelet => None,
     };
     if let Some(group) = group {
         let smoothing = if group == "depth_map" { 256.0 } else { 64.0 };
         stack_slider(app, ui, (group, "radius"), 0.0..=64.0, ("setting-radius", "tip-radius", "radius"));
         stack_slider(app, ui, (group, "smoothing"), 0.0..=smoothing, ("setting-smoothing", "tip-smoothing", "smoothing"));
     } else {
+        let tip = if app.prefs.method == Method::Wavelet { "tip-radius-wavelet" } else { "tip-radius-pyramid" };
         ui.add_enabled_ui(false, |ui| {
             let (mut radius, mut smoothing) = (0.0, 0.0);
-            row(ui, "tip-radius-pyramid", "radius", |ui| ui.add(egui::Slider::new(&mut radius, 0.0..=64.0).text(tr("setting-radius"))));
-            row(ui, "tip-radius-pyramid", "smoothing", |ui| ui.add(egui::Slider::new(&mut smoothing, 0.0..=64.0).text(tr("setting-smoothing"))));
+            row(ui, tip, "radius", |ui| ui.add(egui::Slider::new(&mut radius, 0.0..=64.0).text(tr("setting-radius"))));
+            row(ui, tip, "smoothing", |ui| ui.add(egui::Slider::new(&mut smoothing, 0.0..=64.0).text(tr("setting-smoothing"))));
         });
     }
     ui.add_space(6.0);
     // Alignment settings can't change while alignment or a stack reads them.
-    let free = !app.shell.running(&["align.run", "stack.average", "stack.pyramid", "stack.depthMap", "stack.slabbed"]);
+    let free = !app.shell.running(&["align.run", "stack.average", "stack.pyramid", "stack.depthMap", "stack.wavelet", "stack.slabbed"]);
     ui.label(RichText::new(tr("align-terms")).strong());
     align_toggle(app, ui, &["shift_x", "shift_y"], ("align-shift", "tip-align-shift", "alignment"), free);
     align_toggle(app, ui, &["scale"], ("align-scale", "tip-align-scale", "alignment"), free);
@@ -291,6 +311,21 @@ fn advanced(app: &mut FloraStackApp, ui: &mut egui::Ui, free: bool) {
         stack_choice(app, ui, ("pyramid", "tone"), &tones, ("setting-tone", "tip-tone", "tone"));
         let decisions = [("luminance", "decisions-luminance"), ("channels", "decisions-channels")];
         stack_choice(app, ui, ("pyramid", "decisions"), &decisions, ("setting-decisions", "tip-decisions", "decisions"));
+    }
+    if method == Method::Wavelet {
+        ui.label(RichText::new(tr("method-wavelet")).strong());
+        stack_slider(app, ui, ("wavelet", "grit"), 0.0..=1.0, ("setting-grit", "tip-grit", "grit"));
+        stack_slider(app, ui, ("wavelet", "range_limit"), 0.0..=1.0, ("setting-range-limit", "tip-range-limit", "range-limit"));
+        stack_slider(app, ui, ("wavelet", "levels"), 0.0..=10.0, ("setting-levels", "tip-levels", "levels"));
+        let tones = [("compress", "tone-compress"), ("clip", "tone-clip"), ("keep", "tone-keep")];
+        stack_choice(app, ui, ("wavelet", "tone"), &tones, ("setting-tone", "tip-tone", "tone"));
+        let windows = [(json!(3), "window-small"), (json!(5), "window-large")];
+        stack_pick(app, ui, ("wavelet", "window"), &windows, ("setting-window", "tip-window", "window"));
+        let lowpass = [("focus", "lowpass-focus"), ("average", "lowpass-average"), ("select", "lowpass-select")];
+        stack_choice(app, ui, ("wavelet", "lowpass"), &lowpass, ("setting-lowpass", "tip-lowpass", "coarse-tones"));
+        let banks = [("bior22", "wavelet-bior22"), ("db2", "wavelet-db2")];
+        stack_choice(app, ui, ("wavelet", "wavelet"), &banks, ("setting-wavelet", "tip-wavelet", "filter"));
+        stack_toggle(app, ui, ("wavelet", "consistency"), ("setting-consistency", "tip-consistency", "consistency"));
     }
     if method == Method::Average {
         ui.label(RichText::new(tr("method-average")).strong());
@@ -409,6 +444,7 @@ pub fn made_with(method: &str, parameters: &Value) -> String {
         "average" => ("method-average", &[("radius", "setting-radius"), ("smoothing", "setting-smoothing"), ("power", "setting-power")]),
         "pyramid" => ("method-pyramid", &[("grit", "setting-grit"), ("rangeLimit", "setting-range-limit")]),
         "depth-map" => ("method-depth-map", &[("radius", "setting-radius"), ("smoothing", "setting-smoothing")]),
+        "wavelet" => ("method-wavelet", &[("grit", "setting-grit"), ("rangeLimit", "setting-range-limit"), ("window", "setting-window")]),
         other => return other.to_owned(),
     };
     let mut parts = vec![tr(label)];
@@ -491,6 +527,8 @@ mod tests {
         let depth = made_with("depth-map", &json!({ "radius": 2.5, "smoothing": 8.0, "threshold": "percentile", "percentile": 40.0 }));
         assert_eq!(depth, "Depth map · radius 2.5 · smoothing 8 · fills 40%");
         assert_eq!(made_with("pyramid", &json!({ "grit": 0.25, "rangeLimit": 1.0 })), "Pyramid · grit 0.25 · range limit 1");
+        let wavelet = made_with("wavelet", &json!({ "grit": 0.5, "rangeLimit": 1.0, "window": 3 }));
+        assert_eq!(wavelet, "Wavelet · grit 0.5 · range limit 1 · window 3");
         assert_eq!(made_with("slab", &json!({})), "slab", "an unknown method shows as its name");
         assert!(docs_url("radius").ends_with("/blob/main/book/src/user/stack-tab.md#radius"));
     }

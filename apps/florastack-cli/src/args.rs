@@ -161,7 +161,8 @@ fn parse_queue_method(value: &str) -> Result<Method, String> {
         "pyramid" => Ok(Method::Pyramid),
         "depthmap" => Ok(Method::Depthmap),
         "average" => Ok(Method::Average),
-        _ => Err("expected pyramid, depthmap or average".into()),
+        "wavelet" => Ok(Method::Wavelet),
+        _ => Err("expected pyramid, depthmap, average or wavelet".into()),
     }
 }
 
@@ -204,6 +205,7 @@ pub enum Method {
     Pyramid,
     Depthmap,
     Average,
+    Wavelet,
     Both,
 }
 
@@ -213,6 +215,7 @@ impl Method {
             Self::Pyramid => "pyramid",
             Self::Depthmap => "depth-map",
             Self::Average => "average",
+            Self::Wavelet => "wavelet",
             Self::Both => "both",
         }
     }
@@ -222,6 +225,7 @@ impl Method {
             Self::Pyramid | Self::Both => "stack.pyramid",
             Self::Depthmap => "stack.depthMap",
             Self::Average => "stack.average",
+            Self::Wavelet => "stack.wavelet",
         }
     }
 }

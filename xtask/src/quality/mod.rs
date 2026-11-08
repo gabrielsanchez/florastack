@@ -28,12 +28,13 @@ pub const USAGE: &str = "\
 usage: cargo xtask quality [--gate | --update-baseline] [--release | --dev] [--stack PATTERN]... [--run PATTERN]...
                            [--settings JSON] [--threads N] [--no-local] [--out DIR]
 
-Stacks every stack by every method (weighted average, pyramid, depth map) and every pair of slab and final methods,
-through the engine's commands (florastack-engine's `quality` example), scores the outputs against their truth where
-there is one (SSIM, PSNR, halo, noise, color shift, out-of-range pixels, alignment error), measures each command's
-runtime and peak heap, and writes target/quality/index.html: every run's measures against the baseline, and 100% crops
-of the same regions of every output side by side. It fails when a measure is worse than quality/baseline.json by more
-than its tolerance (runtimes only against a baseline made on this machine with this build profile).
+Stacks every stack by every method (weighted average, pyramid, depth map, wavelet) and every pair of slab and final
+methods, through the engine's commands (florastack-engine's `quality` example), scores the outputs against their
+truth where there is one (SSIM, PSNR, halo, noise, color shift, out-of-range pixels, alignment error), measures each
+command's runtime and peak heap, and writes target/quality/index.html: every run's measures against the baseline, and
+100% crops of the same regions of every output side by side. It fails when a measure is worse than
+quality/baseline.json by more than its tolerance (runtimes only against a baseline made on this machine with this
+build profile).
 
   (no mode)          every stack: the synthetic ones, the manifest's downloaded ones and the local ones in corpus/local
                      (release build)

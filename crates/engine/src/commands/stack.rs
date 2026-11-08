@@ -1,7 +1,7 @@
 //! Stacking: the stacking settings, a preference group of the project (`stack.get`, `stack.set`, `stack.reset`), the
-//! weighted average, the pyramid method and the depth-map method of the aligned frames as new outputs
-//! (`stack.average`, `stack.pyramid`, `stack.depthMap`, jobs), and a quarter-scale preview of any of them
-//! (`stack.preview`, a preview job).
+//! weighted average, the pyramid method, the depth-map method and the wavelet method of the aligned frames as new
+//! outputs (`stack.average`, `stack.pyramid`, `stack.depthMap`, `stack.wavelet`, jobs), and a quarter-scale preview of
+//! any of them (`stack.preview`, a preview job).
 //!
 //! Every job stacks the enabled frames of the stored alignment run, in the run's processing order, on the canvas of the
 //! framing the alignment settings choose, as `align.info` shows it; frames whose alignment was rejected are left out
@@ -11,25 +11,28 @@
 //! measured, and handed to florastack-stack's stacker, then dropped: memory holds one frame and the accumulators,
 //! whatever the depth of the stack.
 //!
-//! - **The full stack** (`stack.average`, `stack.pyramid`, `stack.depthMap`) warps each frame onto the canvas a tile at
-//!   a time, as the stacker reads it ([`Warped`]: florastack-align's `warp_to_canvas`, bicubic, with the frame's
-//!   coverage, so that in wide framing a frame adds nothing where it has no pixels), and RAW frames get the settings'
-//!   demosaic. Its commit adds the output (`Edit::AddOutput`, one undo step): the stacked image in the cache, linear
-//!   `f32` TIFF, with an alpha channel when some pixels are covered by no frame (only wide framing has them), and a
-//!   small JPEG preview for lists, with the method's parameters and the frames it was made from.
-//! - **Range** (the pyramid method): the stack comes out unclipped and is brought into `[0, 1]` as its `tone` setting
-//!   says (florastack-stack's `compress_range`). When that changes any pixel, the result before it is kept as the
-//!   output's `extended` map, which `output.save` writes for "retain extended range" files.
-//! - **Two passes** (the depth-map method): every frame is read twice, once to measure its focus and once to
-//!   composite, with the depth map made between them from the focus statistics. The output keeps the depth map and the
+//! - **The full stack** (`stack.average`, `stack.pyramid`, `stack.depthMap`, `stack.wavelet`) warps each frame onto the
+//!   canvas a tile at a time, as the stacker reads it ([`Warped`]: florastack-align's `warp_to_canvas`, bicubic, with
+//!   the frame's coverage, so that in wide framing a frame adds nothing where it has no pixels), and RAW frames get the
+//!   settings' demosaic. Its commit adds the output (`Edit::AddOutput`, one undo step): the stacked image in the cache,
+//!   linear `f32` TIFF, with an alpha channel when some pixels are covered by no frame (only wide framing has them),
+//!   and a small JPEG preview for lists, with the method's parameters and the frames it was made from.
+//! - **Range** (the pyramid and wavelet methods): the stack comes out unclipped and is brought into `[0, 1]` as its
+//!   `tone` setting says (florastack-stack's `compress_range`). When that changes any pixel, the result before it is
+//!   kept as the output's `extended` map, which `output.save` writes for "retain extended range" files.
+//! - **Two passes** (the depth-map and wavelet methods): every frame is read twice, once to measure its focus and once
+//!   to composite, with what the second pass needs made between them: the depth map from the focus statistics, or the
+//!   wavelet method's choices of frame at every level. The depth-map method's output keeps the depth map and the
 //!   confidence map as its `depth` and `confidence` maps, 16-bit (`output.save` with `map`).
+//! - **The CPU only** (the wavelet method, and the pyramid with a coarse limit): florastack-gpu has no kernels for
+//!   them, so they stack on the CPU even when a GPU is chosen.
 //! - **The preview** (`stack.preview`) reduces each frame to a quarter of its size as soon as it is read
 //!   (florastack-align's `thumbnail`, which the filmstrip uses too: block averages, then Lanczos3) and warps the small
 //!   copy onto the quarter-size canvas as the full stack warps the frame (tile by tile, bicubic, with its feathered
-//!   coverage), with the settings scaled to match (`Method::reduced`); RAW frames get the fast demosaic. It
-//!   runs in the preview lane, beside a full stack, and a newer call cancels an older one still running, so that a
-//!   preview follows every change of a setting. Its result is a lossless TIFF in `previews/`, which nothing in the
-//!   project refers to: no undo step, and the file goes when the project is next closed or opened.
+//!   coverage), with the settings scaled to match (`Method::reduced`); RAW frames get the fast demosaic. It runs in the
+//!   preview lane, beside a full stack, and a newer call cancels an older one still running, so that a preview follows
+//!   every change of a setting. Its result is a lossless TIFF in `previews/`, which nothing in the project refers to:
+//!   no undo step, and the file goes when the project is next closed or opened.
 //!
 //! Slabbing (`stack.slabbed`, `slab.rs`) stacks with the same plan, a method for the slabs and one for the final stack.
 
@@ -49,9 +52,9 @@ use crate::webgpu::RemoteStacker as DeviceStacker;
 use florastack_project::{Area, CacheDir, CacheRef, Edit, FrameId, Group, Input, Maps, NewOutput, OutputId, Preferences, Table};
 use florastack_raw::Quality;
 use florastack_stack::{
-    AVERAGE, AverageSettings, DEPTH_MAP, Decisions, DepthMap, DepthSettings, FocusStats, FrameProgress, FrameSource, Gained, MAX_RADIUS, Method,
-    PREVIEW_FACTOR, PYRAMID, Patch, PyramidSettings, StackError, StackSettings, StackShape, Stacked, Stacker, ThresholdMode, Tiling, Tone,
-    compress_range, out_of_range,
+    AVERAGE, AverageSettings, DEPTH_MAP, Decisions, DepthMap, DepthSettings, FocusStats, FrameProgress, FrameSource, Gained, Lowpass, MAX_RADIUS,
+    Method, PREVIEW_FACTOR, PYRAMID, Patch, PyramidSettings, Selector, StackError, StackSettings, StackShape, Stacked, Stacker, ThresholdMode,
+    Tiling, Tone, WAVELET, Wavelet, WaveletSettings, compress_range, out_of_range,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -79,7 +82,9 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      levels, the grit suppression, the decisions (luminance or channels), the range limit, the tone \
                      compression and the coarse limit; for the depth-map method (`depth_map`), the estimation radius, \
                      the smoothing radius and the contrast threshold: how it is chosen (`threshold`: auto, level or \
-                     percentile), and its `level` and `percentile`.",
+                     percentile), and its `level` and `percentile`; for the wavelet method (`wavelet`), the number of \
+                     levels, the filter bank, the activity window, the consistency filter, the low-pass rule, the grit \
+                     suppression, the range limit and the tone compression.",
                 )
                 .requires(Requires::Project),
             get,
@@ -96,6 +101,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                     r#"{ "average": { "radius": 2.0 } }"#,
                     r#"{ "pyramid": { "grit": 0.25, "tone": "clip" } }"#,
                     r#"{ "depth_map": { "threshold": "percentile", "percentile": 40 } }"#,
+                    r#"{ "wavelet": { "lowpass": "average", "window": 5 } }"#,
                 ]),
             set,
         ),
@@ -179,13 +185,14 @@ fn stacking() -> Vec<CommandSpec> {
             Lane::Heavy,
             depth,
         ),
+        wavelet_spec(),
         CommandSpec::job(
             Meta::new("stack.preview", "Preview stack", "Stacks the aligned frames at a quarter of their size, as a quick preview.")
                 .help(
-                    "The weighted average of `stack.average`, or with `method` \"pyramid\" or \"depth-map\" the \
-                     method of `stack.pyramid` or `stack.depthMap`, on frames reduced to a quarter of their size on \
-                     each side with the settings scaled to match, so that it shows in seconds what the full stack will \
-                     look like. Takes the same settings as that method's command. The result is a linear 32-bit float \
+                    "The weighted average of `stack.average`, or with `method` \"pyramid\", \"depth-map\" or \
+                     \"wavelet\" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames \
+                     reduced to a quarter of their size on each side with the settings scaled to match, so that it \
+                     shows in seconds what the full stack will look like. Takes the same settings as that method's command. The result is a linear 32-bit float \
                      TIFF in the project's `previews/` folder, as a path, kept until the project is closed: no output, \
                      no undo step. Runs beside other jobs as a preview; a newer call replaces an older one still \
                      running, so call it after every change of a setting.",
@@ -197,11 +204,38 @@ fn stacking() -> Vec<CommandSpec> {
                     r#"{ "smoothing": 3.0 }"#,
                     r#"{ "method": "pyramid", "grit": 0.25 }"#,
                     r#"{ "method": "depth-map", "threshold": "level", "level": 0.002 }"#,
+                    r#"{ "method": "wavelet", "window": 5 }"#,
                 ]),
             Lane::Preview,
             preview,
         ),
     ]
+}
+
+/// `stack.wavelet`.
+fn wavelet_spec() -> CommandSpec {
+    CommandSpec::job(
+        Meta::new("stack.wavelet", "Stack by wavelet", "Stacks the aligned frames by the wavelet method into a new output.")
+            .help(
+                "Splits every frame by a shift-invariant wavelet transform and keeps, at every level and \
+                 position, the detail of the frame with the most local activity, measured on luminance over a \
+                 `window` of 3 or 5 samples: like the pyramid method, it keeps the finest detail where near and \
+                 far structure overlap, and on real stacks it keeps a little more of it, with a little more \
+                 noise. `levels` (0 chooses from the canvas's size) and `wavelet` (the filter bank, `bior22` or \
+                 `db2`) shape the transform, `consistency` replaces isolated choices by the choice around them, \
+                 `lowpass` makes the coarsest structure from the frames in focus there (`focus`), their average \
+                 (`average`, which lightens dark objects only the sharp frames show) or the frame chosen most \
+                 often (`select`), and `grit`, `rangeLimit` and `tone` work as the pyramid's do. Reads every \
+                 frame twice, stacks on the CPU only, and takes several times the pyramid's time and about twice \
+                 its memory. Uses the project's settings (`stack.get`), or the ones given for this stack only, and \
+                 the stored alignment, as `stack.average` does. Runs as a job; the output is added in one undo \
+                 step when it ends, or not at all when it is cancelled.",
+            )
+            .undoable()
+            .examples(&["{}", r#"{ "window": 5, "name": "Wavelet, wider window" }"#, r#"{ "lowpass": "average", "tone": "keep" }"#]),
+        Lane::Heavy,
+        wavelet,
+    )
 }
 
 /// The stacking settings.
@@ -389,6 +423,41 @@ impl DepthOverrides {
     }
 }
 
+/// The wavelet method's settings for one stack, on top of the project's: each one left out is the project's.
+#[derive(Debug, Default)]
+struct WaveletOverrides {
+    levels: Option<u32>,
+    wavelet: Option<Wavelet>,
+    window: Option<u32>,
+    consistency: Option<bool>,
+    lowpass: Option<Lowpass>,
+    grit: Option<f64>,
+    range_limit: Option<f64>,
+    tone: Option<Tone>,
+}
+
+impl WaveletOverrides {
+    fn settings(&self, base: &WaveletSettings) -> WaveletSettings {
+        WaveletSettings {
+            levels: self.levels.unwrap_or(base.levels),
+            wavelet: self.wavelet.unwrap_or(base.wavelet),
+            window: self.window.unwrap_or(base.window),
+            consistency: self.consistency.unwrap_or(base.consistency),
+            lowpass: self.lowpass.unwrap_or(base.lowpass),
+            grit: self.grit.unwrap_or(base.grit),
+            range_limit: self.range_limit.unwrap_or(base.range_limit),
+            tone: self.tone.unwrap_or(base.tone),
+        }
+    }
+
+    fn check(&self) -> Result<(), Invalid> {
+        self.settings(&WaveletSettings::default()).validate().map_err(|e| match e {
+            StackError::Setting { name, .. } => Invalid::new(if name == "range_limit" { "rangeLimit" } else { name }, e.to_string()),
+            other => Invalid::new("settings", other.to_string()),
+        })
+    }
+}
+
 /// A present value, even `null`: tells `"coarseLimit": null` (off for this stack) from a missing key (the project's).
 fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
@@ -523,6 +592,68 @@ impl Params for DepthParams {
     }
 }
 
+/// A stack by the wavelet method into a new output.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WaveletParams {
+    /// The output's name; "Wavelet" when left out.
+    #[serde(default)]
+    name: Option<String>,
+    /// The number of levels, 1 to 10, or 0 to choose from the canvas's size; the project's (`stack.get`) when left
+    /// out.
+    #[serde(default)]
+    #[schemars(range(max = 10))]
+    levels: Option<u32>,
+    /// The filter bank: `bior22` (symmetric) or `db2`; the project's when left out.
+    #[serde(default)]
+    wavelet: Option<Wavelet>,
+    /// The side of the window activity is measured over, 3 or 5 samples; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 3, max = 5))]
+    window: Option<u32>,
+    /// Whether a majority filter replaces isolated choices at each level; the project's when left out.
+    #[serde(default)]
+    consistency: Option<bool>,
+    /// How the coarsest low-pass is made: focus, average or select; the project's when left out.
+    #[serde(default)]
+    lowpass: Option<Lowpass>,
+    /// Grit suppression at the finest level, 0 (off) or from 0.25 to 1; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    grit: Option<f64>,
+    /// How strictly each pixel is held within the frames' range there, from 0 to 1; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    range_limit: Option<f64>,
+    /// How the result is brought into [0, 1]: compress, clip or keep; the project's when left out.
+    #[serde(default)]
+    tone: Option<Tone>,
+}
+
+impl WaveletParams {
+    fn overrides(&self) -> WaveletOverrides {
+        WaveletOverrides {
+            levels: self.levels,
+            wavelet: self.wavelet,
+            window: self.window,
+            consistency: self.consistency,
+            lowpass: self.lowpass,
+            grit: self.grit,
+            range_limit: self.range_limit,
+            tone: self.tone,
+        }
+    }
+}
+
+impl Params for WaveletParams {
+    fn check(&self) -> Result<(), Invalid> {
+        if let Some(name) = &self.name {
+            check_name("name", name)?;
+        }
+        self.overrides().check()
+    }
+}
+
 /// A stacking method, by its name in outputs and commands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -535,6 +666,8 @@ pub(super) enum MethodName {
     /// The depth-map method of `stack.depthMap`.
     #[serde(rename = "depth-map")]
     DepthMap,
+    /// The wavelet method of `stack.wavelet`.
+    Wavelet,
 }
 
 /// A stacking method and its settings for one stack, on top of the project's: what `stack.preview` takes, and each
@@ -542,7 +675,7 @@ pub(super) enum MethodName {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct MethodParams {
-    /// The method, "average", "pyramid" or "depth-map"; the settings below are that method's. Left out, the command's
+    /// The method, "average", "pyramid", "depth-map" or "wavelet"; the settings below are that method's. Left out, the command's
     /// own: "average" for `stack.preview`, "pyramid" for the slabs of `stack.slabbed` and for its final
     /// stack.
     #[serde(default)]
@@ -561,22 +694,22 @@ pub(super) struct MethodParams {
     #[serde(default)]
     #[schemars(range(min = 0.5, max = 4.0))]
     power: Option<f64>,
-    /// The pyramid's levels at full size, 0 to 10 (0 chooses); the project's when left out.
+    /// The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out.
     #[serde(default)]
     #[schemars(range(max = 10))]
     levels: Option<u32>,
-    /// The pyramid's grit suppression, 0 or from 0.25 to 1; the project's when left out.
+    /// The pyramid's or the wavelet method's grit suppression, 0 or from 0.25 to 1; the project's when left out.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     grit: Option<f64>,
     /// The pyramid's decisions, luminance or channels; the project's when left out.
     #[serde(default)]
     decisions: Option<Decisions>,
-    /// The pyramid's range limit, from 0 to 1; the project's when left out.
+    /// The pyramid's or the wavelet method's range limit, from 0 to 1; the project's when left out.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     range_limit: Option<f64>,
-    /// The pyramid's tone compression: compress, clip or keep; the project's when left out.
+    /// The pyramid's or the wavelet method's tone compression: compress, clip or keep; the project's when left out.
     #[serde(default)]
     tone: Option<Tone>,
     /// The pyramid's coarse limit in frames, or `null` for off; the project's when left out.
@@ -595,6 +728,19 @@ pub(super) struct MethodParams {
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 100.0))]
     percentile: Option<f64>,
+    /// The wavelet method's filter bank: `bior22` or `db2`; the project's when left out.
+    #[serde(default)]
+    wavelet: Option<Wavelet>,
+    /// The wavelet method's activity window, 3 or 5 samples; the project's when left out.
+    #[serde(default)]
+    #[schemars(range(min = 3, max = 5))]
+    window: Option<u32>,
+    /// Whether the wavelet method's consistency filter is on; the project's when left out.
+    #[serde(default)]
+    consistency: Option<bool>,
+    /// How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out.
+    #[serde(default)]
+    lowpass: Option<Lowpass>,
 }
 
 impl MethodParams {
@@ -617,18 +763,52 @@ impl MethodParams {
         DepthOverrides { radius: self.radius, smoothing: self.smoothing, threshold: self.threshold, level: self.level, percentile: self.percentile }
     }
 
+    fn wavelet(&self) -> WaveletOverrides {
+        WaveletOverrides {
+            levels: self.levels,
+            wavelet: self.wavelet,
+            window: self.window,
+            consistency: self.consistency,
+            lowpass: self.lowpass,
+            grit: self.grit,
+            range_limit: self.range_limit,
+            tone: self.tone,
+        }
+    }
+
+    /// The first setting given that only the wavelet method has, if any.
+    fn wavelet_only(&self) -> Option<&'static str> {
+        [
+            ("wavelet", self.wavelet.is_some()),
+            ("window", self.window.is_some()),
+            ("consistency", self.consistency.is_some()),
+            ("lowpass", self.lowpass.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(name, given)| given.then_some(name))
+    }
+
+    /// The first setting given that only the pyramid method has, if any.
+    fn pyramid_only(&self) -> Option<&'static str> {
+        [("decisions", self.decisions.is_some()), ("coarseLimit", self.coarse_limit.is_some())]
+            .into_iter()
+            .find_map(|(name, given)| given.then_some(name))
+    }
+
     /// The method these parameters name, or `default`, with their settings on top of the project's `settings`.
     pub(super) fn chosen(&self, default: MethodName, settings: &StackSettings) -> Chosen {
         match self.method.unwrap_or(default) {
             MethodName::Average => Chosen::Average(self.average().settings(&settings.average)),
             MethodName::Pyramid => Chosen::Pyramid(self.pyramid().settings(&settings.pyramid)),
             MethodName::DepthMap => Chosen::DepthMap(self.depth().settings(&settings.depth_map)),
+            MethodName::Wavelet => Chosen::Wavelet(self.wavelet().settings(&settings.wavelet)),
         }
     }
 
     /// Checks the parameters for the method they name, or `default`: settings of another method are errors.
     pub(super) fn check_for(&self, default: MethodName) -> Result<(), Invalid> {
         let threshold = self.depth().given_threshold();
+        let wavelet_only = self.wavelet_only();
         match self.method.unwrap_or(default) {
             MethodName::Average => {
                 if let Some(name) = self.pyramid().given() {
@@ -637,19 +817,28 @@ impl MethodParams {
                 if let Some(name) = threshold {
                     return Err(Invalid::new(name, "is a setting of the depth-map method: pass `\"method\": \"depth-map\"`"));
                 }
+                if let Some(name) = wavelet_only {
+                    return Err(Invalid::new(name, "is a setting of the wavelet method: pass `\"method\": \"wavelet\"`"));
+                }
                 self.average().check()
             }
             MethodName::Pyramid => {
-                if let Some(name) = self.average().given().or(threshold) {
+                if let Some(name) = self.average().given().or(threshold).or(wavelet_only) {
                     return Err(Invalid::new(name, "is a setting of another method, not of the pyramid method"));
                 }
                 self.pyramid().check()
             }
             MethodName::DepthMap => {
-                if let Some(name) = self.pyramid().given().or(self.power.map(|_| "power")) {
+                if let Some(name) = self.pyramid().given().or(self.power.map(|_| "power")).or(wavelet_only) {
                     return Err(Invalid::new(name, "is a setting of another method, not of the depth-map method"));
                 }
                 self.depth().check()
+            }
+            MethodName::Wavelet => {
+                if let Some(name) = self.average().given().or(threshold).or(self.pyramid_only()) {
+                    return Err(Invalid::new(name, "is a setting of another method, not of the wavelet method"));
+                }
+                self.wavelet().check()
             }
         }
     }
@@ -667,6 +856,7 @@ pub(super) enum Chosen {
     Average(AverageSettings),
     Pyramid(PyramidSettings),
     DepthMap(DepthSettings),
+    Wavelet(WaveletSettings),
 }
 
 /// The settings a stack was made with, as its result reports them.
@@ -676,6 +866,7 @@ pub(super) enum UsedSettings {
     Average(AverageSettings),
     Pyramid(PyramidSettings),
     DepthMap(DepthSettings),
+    Wavelet(WaveletSettings),
 }
 
 impl Chosen {
@@ -684,6 +875,7 @@ impl Chosen {
             Chosen::Average(_) => AVERAGE,
             Chosen::Pyramid(_) => PYRAMID,
             Chosen::DepthMap(_) => DEPTH_MAP,
+            Chosen::Wavelet(_) => WAVELET,
         }
     }
 
@@ -693,12 +885,13 @@ impl Chosen {
             Chosen::Average(_) => "Weighted average",
             Chosen::Pyramid(_) => "Pyramid",
             Chosen::DepthMap(_) => "Depth map",
+            Chosen::Wavelet(_) => "Wavelet",
         }
     }
 
     /// How many times the method reads every frame.
     pub(super) fn passes(&self) -> usize {
-        if matches!(self, Chosen::DepthMap(_)) { 2 } else { 1 }
+        if matches!(self, Chosen::DepthMap(_) | Chosen::Wavelet(_)) { 2 } else { 1 }
     }
 
     pub(super) fn validate(&self) -> Result<(), StackError> {
@@ -706,6 +899,7 @@ impl Chosen {
             Chosen::Average(s) => s.validate(),
             Chosen::Pyramid(s) => s.validate(),
             Chosen::DepthMap(s) => s.validate(),
+            Chosen::Wavelet(s) => s.validate(),
         }
     }
 
@@ -716,6 +910,7 @@ impl Chosen {
             Chosen::Average(s) => Chosen::Average(s.reduced(factor)),
             Chosen::Pyramid(s) => Chosen::Pyramid(s.reduced(factor)),
             Chosen::DepthMap(s) => Chosen::DepthMap(s.reduced(factor)),
+            Chosen::Wavelet(s) => Chosen::Wavelet(s.reduced(factor)),
         }
     }
 
@@ -724,6 +919,7 @@ impl Chosen {
             Chosen::Average(s) => UsedSettings::Average(s.clone()),
             Chosen::Pyramid(s) => UsedSettings::Pyramid(s.clone()),
             Chosen::DepthMap(s) => UsedSettings::DepthMap(s.clone()),
+            Chosen::Wavelet(s) => UsedSettings::Wavelet(s.clone()),
         }
     }
 
@@ -733,22 +929,35 @@ impl Chosen {
         match self {
             Chosen::Average(_) | Chosen::DepthMap(_) => Tone::Keep,
             Chosen::Pyramid(s) => s.tone,
+            Chosen::Wavelet(s) => s.tone,
         }
     }
 
-    /// The tone compression a stack is stored with ([`store`]): the pyramid's, `None` for the other methods.
+    /// The tone compression a stack is stored with ([`store`]): the pyramid's or the wavelet method's, `None` for the
+    /// other methods.
     pub(super) fn ranged(&self) -> Option<Tone> {
         match self {
             Chosen::Pyramid(s) => Some(s.tone),
+            Chosen::Wavelet(s) => Some(s.tone),
             Chosen::Average(_) | Chosen::DepthMap(_) => None,
         }
     }
 
-    /// The pyramid's levels on a `width` x `height` canvas.
+    /// The pyramid's or the wavelet method's levels on a `width` x `height` canvas.
     pub(super) fn levels(&self, width: usize, height: usize) -> Option<usize> {
         match self {
             Chosen::Average(_) | Chosen::DepthMap(_) => None,
             Chosen::Pyramid(s) => Some(s.levels_for(width, height)),
+            Chosen::Wavelet(s) => Some(s.levels_for(width, height)),
+        }
+    }
+
+    /// The names of a stacking job's stages: one pass over the frames and the end, or two passes and the end.
+    fn stages(&self) -> &'static [(&'static str, f32)] {
+        match self {
+            Chosen::DepthMap(_) => &[("Measuring focus", 0.45), ("Compositing", 0.5), ("Finishing", 0.05)],
+            Chosen::Wavelet(_) => &[("Choosing detail", 0.45), ("Compositing", 0.5), ("Finishing", 0.05)],
+            Chosen::Average(_) | Chosen::Pyramid(_) => &[("Stacking frames", 0.95), ("Finishing", 0.05)],
         }
     }
 
@@ -771,6 +980,17 @@ impl Chosen {
                 "threshold": s.threshold,
                 "level": s.level,
                 "percentile": s.percentile,
+                "framing": framing,
+            }),
+            Chosen::Wavelet(s) => serde_json::json!({
+                "levels": s.levels_for(width, height),
+                "wavelet": s.wavelet,
+                "window": s.window,
+                "consistency": s.consistency,
+                "lowpass": s.lowpass,
+                "grit": s.grit,
+                "rangeLimit": s.range_limit,
+                "tone": s.tone,
                 "framing": framing,
             }),
         }
@@ -997,6 +1217,9 @@ impl StackPlan {
         // A preview is smaller: counted at half the sides, which is more than it takes.
         let scale = |(w, h): (usize, usize)| if reduced { (w.div_ceil(2), h.div_ceil(2)) } else { (w, h) };
         let needed = crate::compute::stack_memory(scale(self.size), scale((self.canvas.width, self.canvas.height)), self.tiling.budget);
+        // The wavelet method's transforms take about twice the other methods' memory: 3.7 GB against the pyramid's
+        // 1.8 GB on 20 MP frames.
+        let needed = if matches!(self.settings, Chosen::Wavelet(_)) { needed.saturating_mul(2) } else { needed };
         crate::compute::check_memory(self.command, needed)?;
         self.reader.load_mask()?;
         let n = self.frames.len();
@@ -1170,8 +1393,9 @@ where
     Ok(())
 }
 
-/// Stacks `feed` with `settings`, in one pass, or in two for the depth-map method: its focus, then the composite,
-/// with the depth map made between them. `stage(i, units)` comes before pass `i` and, with `i` the number of passes,
+/// Stacks `feed` with `settings`, in one pass, or in two for the depth-map and wavelet methods: the depth-map
+/// method's focus, then the composite, with the depth map made between them; the wavelet method's choices, then the
+/// composite. `stage(i, units)` comes before pass `i` and, with `i` the number of passes,
 /// before the end, whose progress goes to `finishing`. On the GPU when `compute` resolves to one; when the GPU fails
 /// part way, the stack starts again on the CPU. The stack and, for the depth-map method, its depth map.
 #[allow(clippy::too_many_arguments)] // The stack's inputs and the three ways its progress is reported.
@@ -1209,6 +1433,7 @@ pub(super) fn stack_feed(
 fn cpu_only(settings: &Chosen) -> Option<&'static str> {
     match settings {
         Chosen::Pyramid(s) if s.coarse_limit.is_some() => Some("the pyramid's coarse limit isn't done on the GPU"),
+        Chosen::Wavelet(_) => Some("the wavelet method isn't done on the GPU"),
         _ => None,
     }
 }
@@ -1254,6 +1479,32 @@ fn stack_cpu(
             })?;
             stage(2, units);
             return Ok((compositor.finish(finishing)?, Some(map)));
+        }
+        Chosen::Wavelet(wavelet) => {
+            let mut selector = Selector::new(wavelet, tiling)?;
+            each(feed, ctx, units, |loaded, progress, first| {
+                loaded.source(|source| {
+                    if first {
+                        selector.begin(StackShape::of(source))?;
+                    }
+                    Ok::<_, CommandError>(selector.add_frame(source, progress)?)
+                })
+            })?;
+            let choices = std::sync::Arc::new(selector.finish(finishing)?);
+            drop(selector);
+            ctx.checkpoint()?;
+            stage(1, units);
+            let mut compositor = choices.compositor(tiling)?;
+            each(feed, ctx, units, |loaded, progress, first| {
+                loaded.source(|source| {
+                    if first {
+                        compositor.begin(StackShape::of(source))?;
+                    }
+                    Ok::<_, CommandError>(compositor.add_frame(source, progress)?)
+                })
+            })?;
+            stage(2, units);
+            return Ok((compositor.finish(finishing)?, None));
         }
     };
     each(feed, ctx, units, |loaded, progress, first| {
@@ -1324,7 +1575,8 @@ fn gpu_pass(stacker: &mut DeviceStacker, feed: &mut dyn Feed, ctx: &dyn Monitor,
 }
 
 /// [`stack_feed`] on the GPU (florastack-gpu's stackers, with the depth map between the depth-map method's passes
-/// made on the CPU).
+/// made on the CPU). Never called for the methods [`cpu_only`] names, which have no stacker there: the wavelet method
+/// is a GPU error, so that it would stack again on the CPU.
 #[allow(clippy::too_many_arguments)] // As stack_feed's.
 fn stack_gpu(
     feed: &mut dyn Feed,
@@ -1359,6 +1611,7 @@ fn stack_gpu(
             stage(2, units);
             return Ok((stacked(compositor.finish(finishing)?), Some(map)));
         }
+        Chosen::Wavelet(_) => return Err(Failed::Gpu(GpuError::Unsupported { what: "the wavelet method" })),
     };
     let mut stacker = DeviceStacker::new(gpu, method, tiling.clone())?;
     gpu_pass(&mut stacker, feed, ctx, units)?;
@@ -1416,10 +1669,10 @@ struct StackSummary {
     /// The settings it was stacked with, and the framing.
     settings: UsedSettings,
     framing: Framing,
-    /// The pyramid's number of levels.
+    /// The pyramid's or the wavelet method's number of levels.
     #[serde(skip_serializing_if = "Option::is_none")]
     levels: Option<usize>,
-    /// How the pyramid's result was brought into range.
+    /// How the pyramid's or the wavelet method's result was brought into range.
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<RangeSummary>,
     /// The depth-map method's threshold and the pixels it filled.
@@ -1451,7 +1704,7 @@ pub(super) struct Stored {
     pub(super) width: usize,
     pub(super) height: usize,
     pub(super) uncovered: usize,
-    /// How a pyramid's result was brought into range.
+    /// How a pyramid's or a wavelet stack's result was brought into range.
     pub(super) range: Option<RangeSummary>,
     /// What the depth-map method's threshold did.
     pub(super) depth: Option<DepthSummary>,
@@ -1465,8 +1718,8 @@ pub(super) fn unclipped<'a>(image: &'a CacheRef, maps: &'a Maps) -> &'a CacheRef
 
 /// Stores a stack in the cache under `stem`, with `key` on its image: the image, linear `f32`, with an alpha channel
 /// when some pixels are covered by no frame; a small JPEG preview for lists; the depth-map method's depth and
-/// confidence maps, 16-bit; and, when `tone` (a pyramid's: `None` for the methods whose blends never leave their
-/// frames' range) changes any pixel, the result before it as the `extended` map.
+/// confidence maps, 16-bit; and, when `tone` (a pyramid's or a wavelet stack's: `None` for the methods whose blends
+/// never leave their frames' range) changes any pixel, the result before it as the `extended` map.
 pub(super) fn store(
     cache: &CacheDir,
     command: &str,
@@ -1529,11 +1782,16 @@ fn depth(session: &Session, p: DepthParams) -> Result<JobPlan<StackSummary>, Com
     stack_job(session, "stack.depthMap", settings, p.name.clone().unwrap_or_else(|| "Depth map".to_owned()))
 }
 
+fn wavelet(session: &Session, p: WaveletParams) -> Result<JobPlan<StackSummary>, CommandError> {
+    let settings = Chosen::Wavelet(p.overrides().settings(&stack_settings(session.project()?)?.wavelet));
+    stack_job(session, "stack.wavelet", settings, p.name.clone().unwrap_or_else(|| "Wavelet".to_owned()))
+}
+
 /// A full stack with `settings` into a new output named `name`.
 fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: String) -> Result<JobPlan<StackSummary>, CommandError> {
     let mut plan = StackPlan::new(session, command, settings, Quality::Output)?;
     let mut source = super::scientific::snapshot(session)?;
-    let passes = plan.settings.passes();
+    let stages = plan.settings.stages();
     let job = JobPlan::new(move |ctx| {
         let (stacked, depth) = plan.stack_any(ctx, false)?;
         ctx.checkpoint()?;
@@ -1577,16 +1835,7 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
             Ok(StackSummary { output, width, height, frames: ids, skipped, uncovered, settings, framing, levels, range, depth })
         }))
     });
-    Ok(job.stages(stages(passes)).locks(locks()))
-}
-
-/// A stacking job's stages: one pass over the frames and the end, or the depth-map method's two passes.
-fn stages(passes: usize) -> &'static [(&'static str, f32)] {
-    if passes == 2 {
-        &[("Measuring focus", 0.45), ("Compositing", 0.5), ("Finishing", 0.05)]
-    } else {
-        &[("Stacking frames", 0.95), ("Finishing", 0.05)]
-    }
+    Ok(job.stages(stages).locks(locks()))
 }
 
 /// A stack's preview.
@@ -1604,7 +1853,7 @@ struct Previewed {
     skipped: Vec<FrameId>,
     /// How many pixels no frame covers.
     uncovered: usize,
-    /// The method, "average", "pyramid" or "depth-map".
+    /// The method, "average", "pyramid", "depth-map" or "wavelet".
     method: &'static str,
     /// The settings at full scale, and the framing.
     settings: UsedSettings,
@@ -1614,7 +1863,7 @@ struct Previewed {
 fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, CommandError> {
     let settings = p.chosen(MethodName::Average, &stack_settings(session.project()?)?);
     let mut plan = StackPlan::new(session, "stack.preview", settings, Quality::Preview)?;
-    let passes = plan.settings.passes();
+    let stages = plan.settings.stages();
     let job = JobPlan::new(move |ctx| {
         let (Stacked { mut image, alpha, uncovered, .. }, _) = plan.stack_any(ctx, true)?;
         ctx.checkpoint()?;
@@ -1636,5 +1885,5 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
         };
         Ok(commit(move |_: &mut Session| Ok(previewed)))
     });
-    Ok(job.stages(stages(passes)))
+    Ok(job.stages(stages))
 }

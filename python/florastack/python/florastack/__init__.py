@@ -33,13 +33,18 @@ class Project:
     def stack(self, method="pyramid", **settings):
         """Stack aligned frames and return an owned (H, W, C) float32 array.
 
-        Methods are average, pyramid and depth-map. Channels are RGB (RGBA for
+        Methods are average, pyramid, depth-map and wavelet. Channels are RGB (RGBA for
         wide framing with uncovered pixels). Values are linear in the output's
         recorded primaries; no display curve or clipping is applied.
         """
-        commands = {"average": "stack.average", "pyramid": "stack.pyramid", "depth-map": "stack.depthMap"}
+        commands = {
+            "average": "stack.average",
+            "pyramid": "stack.pyramid",
+            "depth-map": "stack.depthMap",
+            "wavelet": "stack.wavelet",
+        }
         if method not in commands:
-            raise ValueError("method must be average, pyramid or depth-map")
+            raise ValueError("method must be average, pyramid, depth-map or wavelet")
         result = self.run(commands[method], settings)
         return self.output(result["output"])
 

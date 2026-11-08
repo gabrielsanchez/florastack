@@ -8,6 +8,7 @@ use crate::average::AverageSettings;
 use crate::depth::DepthSettings;
 use crate::error::StackError;
 use crate::pyramid::PyramidSettings;
+use crate::wavelet::WaveletSettings;
 
 /// Every stacking method's settings. Every field has a default, so that a preset can name only some.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -19,6 +20,8 @@ pub struct StackSettings {
     pub pyramid: PyramidSettings,
     /// The depth-map method's: `radius`, `smoothing`, `threshold`, `level` and `percentile`.
     pub depth_map: DepthSettings,
+    /// The wavelet method's: `levels`, `wavelet`, `window`, `consistency`, `lowpass`, `grit`, `range_limit` and `tone`.
+    pub wavelet: WaveletSettings,
 }
 
 impl StackSettings {
@@ -26,6 +29,7 @@ impl StackSettings {
     pub fn validate(&self) -> Result<(), StackError> {
         self.average.validate()?;
         self.pyramid.validate()?;
-        self.depth_map.validate()
+        self.depth_map.validate()?;
+        self.wavelet.validate()
     }
 }

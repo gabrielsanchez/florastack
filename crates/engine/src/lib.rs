@@ -80,7 +80,9 @@ pub use florastack_codecs::{
 // The alignment settings, and what alignment reports about frames and stacks.
 pub use florastack_align::{AlignSettings, End, Flag, Framing, Term};
 // The stacking settings.
-pub use florastack_stack::{AverageSettings, Decisions, DepthSettings, PyramidSettings, StackSettings, ThresholdMode, Tiling, Tone};
+pub use florastack_stack::{
+    AverageSettings, Decisions, DepthSettings, Lowpass, PyramidSettings, StackSettings, ThresholdMode, Tiling, Tone, Wavelet, WaveletSettings,
+};
 // The RAW develop settings.
 pub use florastack_raw::{ChromaticAberration, Demosaic, DevelopSettings, Highlights, NoiseReduction, Quality, RawDevelop, Resolved, WhiteBalance};
 

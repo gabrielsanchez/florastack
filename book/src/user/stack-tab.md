@@ -15,15 +15,16 @@ Changing a stacking setting renders a quarter-size preview in a few seconds, onc
 - **Pyramid** picks the sharpest detail scale by scale. It is the best all-rounder, and the best where near and far detail overlap, such as hair, bristles and antennae. It can raise contrast and noise a little.
 - **Depth map** takes each pixel from the frame where it is sharpest. Colors and smooth backgrounds stay exactly as shot, but edges between near and far parts can show halos. It asks for its [contrast threshold](#contrast-threshold) before stacking.
 - **Weighted average** blends every frame, each weighted by its sharpness: fast and smooth, but softer than the others.
+- **Wavelet** picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with a little more noise. It stacks on the CPU only and takes several times as long as the pyramid, so it suits a final stack more than trying settings.
 - **Both** makes a pyramid output and a depth-map output from the same frames, to compare them, or to retouch one from the other later.
 
 ## Radius
 
-How large an area, in pixels of the full-size frames, sharpness is measured over (weighted average and depth map). A larger radius ignores noise but blurs the boundary between frames; a smaller one follows fine detail such as thin hairs. Raise it when noise is mistaken for detail. The pyramid method has no radius.
+How large an area, in pixels of the full-size frames, sharpness is measured over (weighted average and depth map). A larger radius ignores noise but blurs the boundary between frames; a smaller one follows fine detail such as thin hairs. Raise it when noise is mistaken for detail. The pyramid and wavelet methods have no radius.
 
 ## Smoothing
 
-How gradually the result moves from one frame to the next, in pixels. Raise it to hide seams and halos where the sharp frame changes; lower it when fine detail looks smeared. The pyramid method has no smoothing.
+How gradually the result moves from one frame to the next, in pixels. Raise it to hide seams and halos where the sharp frame changes; lower it when fine detail looks smeared. The pyramid and wavelet methods have no smoothing.
 
 ## Alignment
 
@@ -58,23 +59,43 @@ The first picture takes as long as a quarter-size preview, since every frame is 
 
 ## Grit
 
-The pyramid's finest detail can favor the single sharpest frame or a blend of the sharpest ones. Raise grit for crisper fine texture; lower it to reduce speckled noise in smooth areas.
+The finest detail of the pyramid and wavelet methods can favor the single sharpest frame or a blend of the sharpest ones. Raise grit for crisper fine texture; lower it to reduce speckled noise in smooth areas.
 
 ## Range limit
 
-Keeps each pixel of a pyramid stack within the brightness its frames have there, which stops the halos and overshoot the method can otherwise make around edges. Lower it only to let local contrast rise.
+Keeps each pixel of a pyramid or wavelet stack within the brightness its frames have there, which stops the halos and overshoot the method can otherwise make around edges. Lower it only to let local contrast rise.
 
 ## Levels
 
-How many detail scales the pyramid has; 0 chooses from the image's size. It rarely needs changing.
+How many detail scales the pyramid or the wavelet method has; 0 chooses from the image's size. It rarely needs changing.
 
 ## Tone
 
-What happens to the few values the pyramid pushes beyond white or black: **Compress** brings them back smoothly, **Clip** cuts them off, and **Keep** leaves them, for editing later in a 32-bit file.
+What happens to the few values the pyramid or the wavelet method pushes beyond white or black: **Compress** brings them back smoothly, **Clip** cuts them off, and **Keep** leaves them, for editing later in a 32-bit file.
 
 ## Decisions
 
 Whether the pyramid picks the sharpest detail once for all colors (**By luminance**, the default) or for each color channel on its own (**By channel**), which can help with color fringes but may shift colors.
+
+## Window
+
+How many pixels across the wavelet method measures detail over before it picks a frame: **3 px** (the default) follows fine detail most closely, and **5 px** ignores more noise but can take a thin hair from a frame where it is a little soft.
+
+## Coarse tones
+
+Where the wavelet method takes the broad tones, below the finest detail, from:
+
+- **From sharp frames** (the default) takes them from the frames in focus at each place, so a dark spot that only the sharp frames show stays as dark as they show it.
+- **Average** takes the average of every frame. Smooth, but dark objects that only the sharp frames show dark come out lighter, as the blurred frames' mean.
+- **Most chosen frame** takes them from the frame picked most often at each place. Dark objects stay dark, but smooth backgrounds can show blotches where the choice changes.
+
+## Filter
+
+The wavelet the method splits frames with. **Bior 2.2** (the default) is symmetric, so detail stays where it was measured; **Daubechies 2** is there to compare.
+
+## Consistency
+
+Replaces a frame picked at a single place, as noise does, by the frame chosen around it, at every scale (the wavelet method). Leave it on; off, smooth areas gain speckle.
 
 ## Power
 

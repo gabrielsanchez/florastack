@@ -102,6 +102,8 @@ fn every_stacking_command_gives_on_the_gpu_what_it_gives_on_the_cpu() {
         ("stack.pyramid", r#"{ "grit": 0, "decisions": "channels" }"#),
         ("stack.depthMap", r#"{ "radius": 1.5, "smoothing": 4.0 }"#),
         ("stack.slabbed", r#"{ "slabSize": 4, "overlap": 1, "final": { "method": "depth-map" } }"#),
+        // The wavelet method has no GPU kernels: with a GPU chosen, it stacks on the CPU, the same.
+        ("stack.wavelet", "{}"),
     ];
     for (command, params) in commands {
         let (stacked, reference) = (run(&mut gpu, command, params), run(&mut cpu, command, params));

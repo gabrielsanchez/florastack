@@ -1,8 +1,9 @@
 """Make the user guide's before/after crops from a real stack, through the CLI.
 
-Stacks the frames by every method (pyramid, depth map, weighted average) in a temporary project, exports the outputs
-and the frames aligned onto the outputs' canvas, then crops each output at the regions where the methods differ most,
-beside the frame that is sharpest there: what one photo shows against what each method makes of the stack.
+Stacks the frames by every method (pyramid, depth map, weighted average, wavelet) in a temporary project, exports the
+outputs and the frames aligned onto the outputs' canvas, then crops each output at the regions where the methods
+differ most, beside the frame that is sharpest there: what one photo shows against what each method makes of the
+stack.
 
 Run after cargo build -p florastack-cli --release (a debug build works, more slowly):
     python scripts/method_crops.py corpus/local/mosquito-jpg --out book/src/images/methods
@@ -21,7 +22,7 @@ import tempfile
 import numpy as np
 from PIL import Image
 
-METHODS = (("pyramid", "stack.pyramid"), ("depth-map", "stack.depthMap"), ("average", "stack.average"))
+METHODS = (("pyramid", "stack.pyramid"), ("depth-map", "stack.depthMap"), ("average", "stack.average"), ("wavelet", "stack.wavelet"))
 
 
 def cli(app, temporary, *args):

@@ -116,6 +116,11 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             params: r#"{ "threshold": "percentile", "percentile": 40 }"#.into(),
         },
         Case {
+            name: "stack.wavelet",
+            setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
+            params: r#"{ "lowpass": "average" }"#.into(),
+        },
+        Case {
             name: "stack.slabbed",
             setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
             params: r#"{ "slabSize": 3, "overlap": 1, "final": { "method": "average" } }"#.into(),

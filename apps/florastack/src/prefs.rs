@@ -63,12 +63,14 @@ pub enum Method {
     #[default]
     Pyramid,
     DepthMap,
+    /// The wavelet method, on the CPU only.
+    Wavelet,
     /// The pyramid and the depth map, two outputs.
     Both,
 }
 
 impl Method {
-    pub const ALL: [Method; 4] = [Method::Pyramid, Method::DepthMap, Method::Average, Method::Both];
+    pub const ALL: [Method; 5] = [Method::Pyramid, Method::DepthMap, Method::Average, Method::Wavelet, Method::Both];
 
     /// The commands that stack by it, in order.
     pub fn commands(self) -> &'static [&'static str] {
@@ -76,6 +78,7 @@ impl Method {
             Method::Average => &["stack.average"],
             Method::Pyramid => &["stack.pyramid"],
             Method::DepthMap => &["stack.depthMap"],
+            Method::Wavelet => &["stack.wavelet"],
             Method::Both => &["stack.pyramid", "stack.depthMap"],
         }
     }
@@ -86,6 +89,7 @@ impl Method {
             Method::Average => "average",
             Method::Pyramid | Method::Both => "pyramid",
             Method::DepthMap => "depth-map",
+            Method::Wavelet => "wavelet",
         }
     }
 
@@ -99,6 +103,7 @@ impl Method {
             Method::Average => "method-average",
             Method::Pyramid => "method-pyramid",
             Method::DepthMap => "method-depth-map",
+            Method::Wavelet => "method-wavelet",
             Method::Both => "method-both",
         }
     }

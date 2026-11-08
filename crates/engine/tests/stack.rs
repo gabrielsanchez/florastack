@@ -181,13 +181,19 @@ fn settings_merge_are_checked_and_go_into_presets() {
     run(&mut engine, "project.new", &format!(r#"{{ "name": "Settings", "folder": {} }}"#, quoted(dir.path())));
     let pyramid = json!({ "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" });
     let depth_map = json!({ "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 });
+    let wavelet = json!({
+        "levels": 0, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "range_limit": 1.0, "tone": "compress"
+    });
     assert_eq!(
         run(&mut engine, "stack.get", "{}")["settings"],
-        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 }, "pyramid": pyramid, "depth_map": depth_map })
+        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 3.0 }, "pyramid": pyramid, "depth_map": depth_map, "wavelet": wavelet })
     );
     run(&mut engine, "stack.set", r#"{ "average": { "radius": 3.0 } }"#);
     let s = run(&mut engine, "stack.set", r#"{ "average": { "power": 1.5 } }"#)["settings"].clone();
-    assert_eq!(s, json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 1.5 }, "pyramid": pyramid, "depth_map": depth_map }));
+    assert_eq!(
+        s,
+        json!({ "average": { "radius": 3.0, "smoothing": 8.0, "power": 1.5 }, "pyramid": pyramid, "depth_map": depth_map, "wavelet": wavelet })
+    );
     let s = run(&mut engine, "stack.set", r#"{ "depth_map": { "threshold": "level", "level": 0.003 } }"#)["settings"].clone();
     assert_eq!((&s["depth_map"]["threshold"], &s["depth_map"]["level"], &s["depth_map"]["radius"]), (&json!("level"), &json!(0.003), &json!(2.0)));
     // Regression: the threshold changes kind over the stored one, key by key, as presets layer.
@@ -211,6 +217,8 @@ fn settings_merge_are_checked_and_go_into_presets() {
         r#"{ "depth_map": { "threshold": { "level": 1 } } }"#,
         r#"{ "depth_map": { "level": -1 } }"#,
         r#"{ "depth_map": { "smoothing": -2 } }"#,
+        r#"{ "wavelet": { "window": 4 } }"#,
+        r#"{ "wavelet": { "lowpass": "median" } }"#,
     ] {
         assert_eq!(engine.dispatch_json("stack.set", bad).unwrap_err().code(), "params", "{bad}");
     }
@@ -219,6 +227,10 @@ fn settings_merge_are_checked_and_go_into_presets() {
     std::fs::write(&preset, "[stack.average]\nsmoothing = 4.0\n").unwrap();
     assert_eq!(run(&mut engine, "preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset)))["groups"], json!(["stack"]));
     assert_eq!(run(&mut engine, "stack.get", "{}")["settings"]["average"]["smoothing"], 4.0);
+    std::fs::write(&preset, "[stack.wavelet]\nwindow = 5\nlowpass = \"average\"\n").unwrap();
+    run(&mut engine, "preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset)));
+    let s = run(&mut engine, "stack.get", "{}")["settings"].clone();
+    assert_eq!((&s["wavelet"]["window"], &s["wavelet"]["lowpass"], &s["wavelet"]["grit"]), (&json!(5), &json!("average"), &json!(0.5)));
     std::fs::write(&preset, "[stack.average]\npower = 40.0\n").unwrap();
     assert_eq!(engine.dispatch_json("preset.apply", &format!(r#"{{ "path": {} }}"#, quoted(&preset))).unwrap_err().code(), "params");
     assert_eq!(run(&mut engine, "stack.reset", "{}")["settings"], serde_json::to_value(florastack_engine::StackSettings::default()).unwrap());

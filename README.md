@@ -14,9 +14,9 @@ single exposure allows, for macro, microscopy, product and landscape photography
 [`scripts/readme_screenshots.py`](scripts/readme_screenshots.py). The photos are the maintainer's, under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).*
 
-- **Three stacking methods**: the pyramid for hair, bristles and overlapping detail, the depth map for smooth subjects
-  and exact tones, and a fast weighted average, with quarter-size previews in seconds and slabbing for stacks of
-  hundreds of frames.
+- **Four stacking methods**: the pyramid for hair, bristles and overlapping detail, the depth map for smooth subjects
+  and exact tones, a fast weighted average, and a slower wavelet method for the last bit of fine detail, with
+  quarter-size previews in seconds and slabbing for stacks of hundreds of frames.
 - **Alignment** of shift, scale, rotation and brightness, with each frame's match shown, frames that moved or are out
   of focus flagged, sensor dust and hot pixels painted out, and stacks that were shot out of order sorted.
 - **Non-destructive retouching**: paint from any frame onto the result, with brushes that match brightness and color,

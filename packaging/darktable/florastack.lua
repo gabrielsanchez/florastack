@@ -7,7 +7,7 @@ local windows = dt.configuration.running_os == "windows"
 
 dt.preferences.register(namespace, "executable", "file", branding.name .. " CLI", "Absolute path to " .. branding.cli, "")
 dt.preferences.register(namespace, "preset", "string", branding.name .. " preset", "builtin:<id> or an absolute TOML path", "builtin:insect-macro")
-dt.preferences.register(namespace, "method", "string", branding.name .. " method", "pyramid, depthmap or average", "pyramid")
+dt.preferences.register(namespace, "method", "string", branding.name .. " method", "pyramid, depthmap, average or wavelet", "pyramid")
 
 local function exists(path)
     local file = io.open(path, "rb")

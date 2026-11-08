@@ -89,4 +89,5 @@ stack.reset
 stack.set
 stack.slabbed
 stack.threshold
+stack.wavelet
 watch.run
