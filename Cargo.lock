@@ -1497,7 +1497,7 @@ dependencies = [
 
 [[package]]
 name = "florastack"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "clap",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-align"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "florastack-core",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-capture"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "florastack-core",
  "libloading 0.9.0",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-codecs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "exr",
  "florastack-core",
@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "florastack-core",
@@ -1627,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "florastack-align",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-gpu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-metrics"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "florastack-core",
@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-project"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "florastack-core",
  "proptest",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "florastack-engine",
  "numpy",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-raw"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "florastack-core",
  "florastack-testkit",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-retouch"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "florastack-core",
  "florastack-project",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-stack"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "dhat",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-testkit"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "fluent-bundle"
@@ -6277,7 +6277,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "png",
  "serde",

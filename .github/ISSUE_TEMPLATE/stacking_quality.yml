@@ -25,7 +25,7 @@ body:
     id: version
     attributes:
       label: FloraStack version and operating system
-      placeholder: 0.1.0 on Windows 11
+      placeholder: 0.2.0 on Windows 11
     validations:
       required: true
   - type: input
