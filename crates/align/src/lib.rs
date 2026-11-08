@@ -22,6 +22,8 @@
 //!    are composed back to the master; optionally each frame is then refined directly against the master.
 //! 5. **Brightness**: the median ratio of the master's to the frame's strongly low-passed luminance, which defocus
 //!    barely changes, since a blur keeps local averages.
+//! 6. **White balance**, when asked for: the same on each color channel, balanced so that it changes the color and
+//!    not the brightness (`white_balance.rs`).
 //!
 //! Each frame's [`FrameAlignment`] says how well it matched (its score) and carries [`Flag`]s for what needs a look:
 //! a term at its limit, a low score, no match, or an ambiguous match on a repeating pattern. Frames that hit a limit,
@@ -90,6 +92,7 @@ mod settings;
 mod sort;
 mod split;
 mod stack;
+mod white_balance;
 
 pub use coverage::{Coverage, Covered, DEFAULT_FEATHER, coverage_count, warp_to_canvas};
 pub use defects::{

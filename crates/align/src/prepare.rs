@@ -32,6 +32,7 @@ use rayon::prelude::*;
 
 use crate::error::AlignError;
 use crate::focus::FocusMap;
+use crate::white_balance::Colors;
 
 /// The smallest side, in pixels, of a frame that can be aligned.
 pub const MIN_SIDE: usize = 16;
@@ -50,7 +51,7 @@ const PYRAMID_SIGMA: f64 = 1.0;
 const FINE_SIGMA: f64 = 1.0;
 const COARSE_SIGMA: f64 = 4.0;
 /// Rec. 709 luminance weights.
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+pub(crate) const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// How the pixels of a level map to the frame's: `X = scale.0 x + offset.0` and `Y = scale.1 y + offset.1`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -123,6 +124,9 @@ pub(crate) struct Prepared {
     pub brightness: Option<(Mapping, Image<f32>)>,
     /// The frame's focus map, from its finest level (`focus.rs`).
     pub focus: FocusMap,
+    /// The planes its white balance is measured on (`white_balance.rs`), when that is asked for and the frame has
+    /// color.
+    pub colors: Option<Colors>,
 }
 
 impl Prepared {
@@ -151,7 +155,7 @@ impl Prepared {
             planes.iter().map(|(plane, mapping)| Ok(Level { mapping: *mapping, field: field(plane)? })).collect::<Result<Vec<_>, AlignError>>()?;
         let finest = levels.first().ok_or(AlignError::NoFrames)?;
         let focus = FocusMap::new(&finest.field, finest.mapping)?;
-        Ok(Prepared { levels, correlation_level, brightness, focus })
+        Ok(Prepared { levels, correlation_level, brightness, focus, colors: None })
     }
 }
 
