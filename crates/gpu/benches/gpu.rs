@@ -51,7 +51,7 @@ fn stackers(c: &mut Criterion) {
     let mut stacker = GpuStacker::new(&gpu, Method::Average { radius: 3.0, smoothing: 8.0, power: 3.0 }, GpuTiling::default()).unwrap();
     stacker.begin(WIDTH, HEIGHT, 3).unwrap();
     let to_frame = Affine::similarity((3000.0, 2000.0), 1.002, 0.001, (0.4, -0.3));
-    let geometry = WarpGeometry { to_frame, frame_width: WIDTH, frame_height: HEIGHT, feather: 2.0, gain: 1.0 };
+    let geometry = WarpGeometry { to_frame, frame_width: WIDTH, frame_height: HEIGHT, feather: 2.0, gain: 1.0, white_balance: [1.0; 3] };
     let mut next = 0;
     group.bench_function(BenchmarkId::new("average/add-warped-frame", &size), |b| {
         b.iter(|| {

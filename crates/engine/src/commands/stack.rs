@@ -1328,7 +1328,7 @@ impl Loaded {
     pub(super) fn source<R>(&self, f: impl FnOnce(&dyn FrameSource) -> R) -> R {
         match self {
             Loaded::Warp { image, transform, canvas, feather, gain } => {
-                f(&Gained { frame: Warped { frame: image, transform: *transform, canvas: *canvas, feather: *feather }, gain: *gain })
+                f(&Gained::new(Warped { frame: image, transform: *transform, canvas: *canvas, feather: *feather }, *gain))
             }
             Loaded::Canvas { image, coverage: Some(coverage) } => f(&OnCanvas { image, coverage }),
             Loaded::Canvas { image, coverage: None } => f(image),
@@ -1346,6 +1346,7 @@ impl Loaded {
                     frame_height: image.height(),
                     feather: *feather,
                     gain: *gain,
+                    white_balance: [1.0; 3],
                 },
             },
             Loaded::Canvas { image, coverage } => GpuFrame::Canvas { image, coverage: coverage.as_ref() },

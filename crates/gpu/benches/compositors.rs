@@ -83,7 +83,7 @@ fn alignment(i: usize, n: usize) -> (Affine, f32) {
 fn cpu_pass(stacker: &mut dyn Stacker, frame: &Image<f32>, n: usize, canvas: &Canvas) -> Stacked {
     for i in 0..n {
         let (transform, gain) = alignment(i, n);
-        let source = Gained { frame: Warped { frame, transform, canvas: *canvas }, gain };
+        let source = Gained::new(Warped { frame, transform, canvas: *canvas }, gain);
         if i == 0 {
             stacker.begin(StackShape::of(&source)).unwrap();
         }
@@ -96,7 +96,14 @@ fn gpu_pass(stacker: &mut GpuStacker, frame: &Image<f32>, n: usize, canvas: &Can
     stacker.begin(canvas.width, canvas.height, frame.channels()).unwrap();
     for i in 0..n {
         let (transform, gain) = alignment(i, n);
-        let geometry = WarpGeometry { to_frame: canvas.to_frame(&transform), frame_width: WIDTH, frame_height: HEIGHT, feather: 2.0, gain };
+        let geometry = WarpGeometry {
+            to_frame: canvas.to_frame(&transform),
+            frame_width: WIDTH,
+            frame_height: HEIGHT,
+            feather: 2.0,
+            gain,
+            white_balance: [1.0; 3],
+        };
         stacker.add_frame(&Frame::Warp { image: frame, geometry }, &Unmonitored).unwrap();
     }
     stacker.finish(&Unmonitored).unwrap()
@@ -145,7 +152,7 @@ fn run(method: &str, gpu: &Gpu, frame: &Image<f32>, n: usize, canvas: &Canvas) -
             let mut estimator = s.estimator(&Tiling::default()).unwrap();
             for i in 0..n {
                 let (transform, gain) = alignment(i, n);
-                let source = Gained { frame: Warped { frame, transform, canvas: *canvas }, gain };
+                let source = Gained::new(Warped { frame, transform, canvas: *canvas }, gain);
                 if i == 0 {
                     estimator.begin(StackShape::of(&source)).unwrap();
                 }
