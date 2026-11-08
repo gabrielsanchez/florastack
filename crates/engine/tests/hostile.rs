@@ -142,6 +142,8 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("develop.set", json!({ "exposure": null })),
         ("align.set", json!({ "max_shift": 500 })),
         ("align.set", json!({ "framing": "widest" })),
+        ("align.set", json!({ "white_balance": "yes" })),
+        ("align.set", json!({ "white_balance": [1.0, 1.0, 1.0] })),
         ("align.set", json!({ "min_sharp_fraction": 2 })),
         ("align.set", json!({ "resolution": 1e30 })),
         ("align.set", json!({ "reverse_order": "yes" })),

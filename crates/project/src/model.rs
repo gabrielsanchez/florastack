@@ -148,8 +148,22 @@ pub struct Alignment {
     pub transform: Affine,
     /// The gain that matches this frame's brightness to the master's.
     pub brightness_gain: f64,
+    /// The gains, red, green and blue, that match this frame's color to the master's on top of `brightness_gain`,
+    /// when white balance was corrected (version 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub white_balance: Option<[f64; 3]>,
     /// How well the frame matched, from 0 (not at all) to 1 (perfectly).
     pub quality: f64,
+}
+
+impl Alignment {
+    /// Whether every number is finite, and the white balance's gains positive.
+    pub fn is_finite(&self) -> bool {
+        self.transform.m.iter().flatten().all(|v| v.is_finite())
+            && self.brightness_gain.is_finite()
+            && self.quality.is_finite()
+            && self.white_balance.is_none_or(|g| g.iter().all(|v| v.is_finite() && *v > 0.0))
+    }
 }
 
 /// An input frame: a file of the stack, as it was when it was added, and what has been worked out for it.
@@ -598,11 +612,10 @@ impl Project {
         for f in &self.frames {
             id(f.id.0)?;
             check_frame_path(&f.path)?;
-            if let Some(a) = &f.alignment {
-                let finite = a.transform.m.iter().flatten().all(|v| v.is_finite()) && a.brightness_gain.is_finite() && a.quality.is_finite();
-                if !finite {
-                    return Err(Problem::NotFinite { what: "frame alignment" });
-                }
+            if let Some(a) = &f.alignment
+                && !a.is_finite()
+            {
+                return Err(Problem::NotFinite { what: "frame alignment" });
             }
         }
         for o in &self.outputs {
@@ -697,7 +710,8 @@ mod tests {
         p.frames.push(p.frames[0].clone());
         assert_eq!(p.validate(), Err(Problem::DuplicateId { id: a.get() }));
         p.frames.pop();
-        p.frame_mut(a).unwrap().alignment = Some(Alignment { transform: Affine::IDENTITY, brightness_gain: f64::NAN, quality: 1.0 });
+        p.frame_mut(a).unwrap().alignment =
+            Some(Alignment { transform: Affine::IDENTITY, brightness_gain: f64::NAN, white_balance: None, quality: 1.0 });
         assert_eq!(p.validate(), Err(Problem::NotFinite { what: "frame alignment" }));
         p.frame_mut(a).unwrap().alignment = None;
         p.next_id = 1;

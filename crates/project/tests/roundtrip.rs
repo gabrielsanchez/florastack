@@ -56,7 +56,8 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         let preview = folder.store(Area::Previews, &format!("frame-{}", id.get()), "jpg", b"small jpeg", None).unwrap();
         let motion = folder.store(Area::Cache, &format!("frame-{}-motion", id.get()), "tiff", b"motion map", None).unwrap();
         let frame = project.frame_mut(id).unwrap();
-        frame.alignment = Some(Alignment { transform: if id == a { Affine::IDENTITY } else { transform }, brightness_gain: gain, quality });
+        let (transform, white_balance) = if id == a { (Affine::IDENTITY, None) } else { (transform, Some([1.0625, 0.96875, 1.125])) };
+        frame.alignment = Some(Alignment { transform, brightness_gain: gain, white_balance, quality });
         frame.report = Some(json!({ "status": "aligned", "flags": ["repeating-pattern"], "sharp_fraction": 0.125 }));
         frame.aligned = Some(aligned);
         frame.preview = Some(preview);
@@ -120,6 +121,8 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
     assert_eq!(reopened, project, "everything comes back");
     assert_eq!(reopened.frame(c).unwrap().alignment.unwrap().transform, transform, "bit for bit");
     assert_eq!(reopened.frame(c).unwrap().alignment.unwrap().quality.to_bits(), (0.1_f64 + 0.2).to_bits());
+    assert_eq!(reopened.frame(c).unwrap().alignment.unwrap().white_balance, Some([1.0625, 0.96875, 1.125]));
+    assert_eq!(reopened.frame(a).unwrap().alignment.unwrap().white_balance, None, "the master's is left out");
     assert_eq!(folder.migrated_from(), None);
 
     // Retouching resumes without computing anything: the target's pixels, its depth map (to find the sharpest
@@ -170,10 +173,16 @@ fn saves_are_atomic_and_refuse_an_inconsistent_project() {
 
     let id = project.add_frame(FrameFile { path: "/a.tif".into(), size: 1, modified: None, hash: florastack_project::ContentHash::of(b"a") }, None);
     project.frame_mut(id).unwrap().alignment =
-        Some(Alignment { transform: Affine::translation(f64::INFINITY, 0.0), brightness_gain: 1.0, quality: 1.0 });
+        Some(Alignment { transform: Affine::translation(f64::INFINITY, 0.0), brightness_gain: 1.0, white_balance: None, quality: 1.0 });
     let e = folder.save(&mut project).unwrap_err();
     assert!(matches!(e, ProjectError::Invalid { .. }), "{e}");
     assert_eq!(std::fs::read(folder.project_file()).unwrap(), before, "the last good save stays");
+    // A white balance's gains must be finite and positive.
+    for gains in [[0.0, 1.0, 1.0], [1.0, f64::NAN, 1.0], [1.0, 1.0, -0.5]] {
+        project.frame_mut(id).unwrap().alignment =
+            Some(Alignment { transform: Affine::IDENTITY, brightness_gain: 1.0, white_balance: Some(gains), quality: 1.0 });
+        assert!(matches!(folder.save(&mut project), Err(ProjectError::Invalid { .. })), "{gains:?}");
+    }
 
     project.frame_mut(id).unwrap().alignment = None;
     project.preferences.set(Group::Output, &json!({ "format": "tiff" })).unwrap();

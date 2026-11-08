@@ -44,6 +44,7 @@ fn a_v0_project_is_upgraded_and_reopens_without_recomputation() {
     let third = project.frames[2].alignment.unwrap();
     assert_eq!(third.transform, Affine { m: [[1.0021, -0.0004, -1.25], [0.0004, 1.0021, 0.75]] });
     assert_eq!((third.brightness_gain, third.quality), (0.985, 0.931));
+    assert_eq!(third.white_balance, None, "an alignment from before version 5 changes no color");
 
     // The develop settings are now a preference group.
     assert_eq!(serde_json::Value::Object(project.preferences.group(Group::Develop).clone()), json!({ "white_balance": "auto", "exposure": 0.5 }));

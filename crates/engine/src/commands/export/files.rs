@@ -205,7 +205,8 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
 
 fn alignment_csv(project: &Project, frames: &[FrameId], direct: &[FrameId]) -> Result<Vec<u8>, CommandError> {
     use std::fmt::Write as _;
-    let mut csv = String::from("frame_id,capture_index,stack_index,path,shift_x_px,shift_y_px,scale,rotation_rad,gain,score\r\n");
+    let mut csv =
+        String::from("frame_id,capture_index,stack_index,path,shift_x_px,shift_y_px,scale,rotation_rad,gain,score,wb_red,wb_green,wb_blue\r\n");
     for frame in frames {
         let f = project.frame(*frame).ok_or(CommandError::NotFound { what: frame.to_string() })?;
         let a = f.alignment.ok_or_else(|| scientific::unavailable(format!("{frame} has no alignment parameters")))?;
@@ -214,7 +215,14 @@ fn alignment_csv(project: &Project, frames: &[FrameId], direct: &[FrameId]) -> R
         let capture = project.frames.iter().position(|f| f.id() == *frame).unwrap_or(0);
         let stack = direct.iter().position(|f| f == frame).map(|i| i.to_string()).unwrap_or_default();
         let path = f.path.replace('"', "\"\"");
-        let _ = writeln!(csv, "{},{capture},{stack},\"{path}\",{x},{y},{scale},{rotation},{},{}\r", frame.get(), a.brightness_gain, a.quality);
+        let [red, green, blue] = a.white_balance.unwrap_or([1.0; 3]);
+        let _ = writeln!(
+            csv,
+            "{},{capture},{stack},\"{path}\",{x},{y},{scale},{rotation},{},{},{red},{green},{blue}\r",
+            frame.get(),
+            a.brightness_gain,
+            a.quality
+        );
     }
     Ok(csv.into_bytes())
 }

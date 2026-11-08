@@ -116,7 +116,7 @@ fn focus_key(plan: &StackPlan, depth: &DepthSettings) -> Result<String, CommandE
     let mut text =
         format!("focus, FloraStack {}\nradius {}\ncanvas {} {} {:?}\n", env!("CARGO_PKG_VERSION"), depth.radius, c.width, c.height, c.to_master.m);
     for f in &plan.frames {
-        writeln!(text, "{} {:?} {}", plan.reader.frame_key(f.index)?, f.transform.m, f.gain).map_err(|_| plan.internal())?;
+        writeln!(text, "{} {:?} {} {:?}", plan.reader.frame_key(f.index)?, f.transform.m, f.gain, f.white_balance).map_err(|_| plan.internal())?;
     }
     Ok(format!("focus {}", ContentHash::of(text.as_bytes())))
 }
