@@ -302,8 +302,8 @@ fn the_shapes_stored_in_project_files_are_pinned() {
             "pyramid": { "levels": 0, "grit": 0.5, "decisions": "luminance", "range_limit": 1.0, "tone": "compress" },
             "depth_map": { "radius": 2.0, "smoothing": 8.0, "threshold": "auto", "level": 0.001, "percentile": 30.0 },
             "wavelet": {
-                "levels": 0, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "range_limit": 1.0,
-                "tone": "compress",
+                "levels": 0, "wavelet": "bior22", "window": 3, "consistency": true, "lowpass": "focus", "grit": 0.5, "noise_floor": 0.4,
+                "range_limit": 1.0, "tone": "compress",
             },
         })
     );

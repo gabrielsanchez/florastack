@@ -2709,7 +2709,7 @@ Examples:
 
 **Stacking settings.** The stacking methods' settings.
 
-Every setting, with the keys the preferences don't set at their defaults: for the weighted average (`average`), the radius sharpness is measured over, the smoothing of the blend and the power that sets how strongly the sharpest frame wins; for the pyramid method (`pyramid`), the number of levels, the grit suppression, the decisions (luminance or channels), the range limit, the tone compression and the coarse limit; for the depth-map method (`depth_map`), the estimation radius, the smoothing radius and the contrast threshold: how it is chosen (`threshold`: auto, level or percentile), and its `level` and `percentile`; for the wavelet method (`wavelet`), the number of levels, the filter bank, the activity window, the consistency filter, the low-pass rule, the grit suppression, the range limit and the tone compression.
+Every setting, with the keys the preferences don't set at their defaults: for the weighted average (`average`), the radius sharpness is measured over, the smoothing of the blend and the power that sets how strongly the sharpest frame wins; for the pyramid method (`pyramid`), the number of levels, the grit suppression, the decisions (luminance or channels), the range limit, the tone compression and the coarse limit; for the depth-map method (`depth_map`), the estimation radius, the smoothing radius and the contrast threshold: how it is chosen (`threshold`: auto, level or percentile), and its `level` and `percentile`; for the wavelet method (`wavelet`), the number of levels, the filter bank, the activity window, the consistency filter, the low-pass rule, the grit suppression, the noise floor, the range limit and the tone compression.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -2751,6 +2751,7 @@ Parameters:
 | `levels` | integer, from 0 to 10 | The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out. |
 | `lowpass` | `"focus"` \| `"average"` \| `"select"` | How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out. |
 | `method` | `"average"` \| `"pyramid"` \| `"depth-map"` \| `"wavelet"` | The method, "average", "pyramid", "depth-map" or "wavelet"; the settings below are that method's. Left out, the command's own: "average" for `stack.preview`, "pyramid" for the slabs of `stack.slabbed` and for its final stack. |
+| `noiseFloor` | number, from 0.0 to 2.0 | The wavelet method's noise floor, in percent of white at full size, from 0 (off) to 2; the project's when left out. |
 | `percentile` | number, from 0.0 to 100.0 | The depth-map method's threshold percentile, from 0 to 100; the project's when left out. |
 | `power` | number, from 0.5 to 4.0 | The weighted average's power, from 0.5 to 4; the project's when left out. |
 | `radius` | number, from 0.0 to 64.0 | The weighted average's or the depth-map method's radius, in pixels of the full-size frames, from 0 to 64; the project's (`stack.get`) when left out. |
@@ -2884,11 +2885,12 @@ Parameters:
 | `pyramid.levels` | integer, from 0 to 10 | The number of pyramid levels, from 1 to 10; 0 chooses from the canvas's size (about 16 samples on the short side of the coarsest level: 5 for 720x540, 7 for 20 MP). More levels decide coarser structure by selection rather than by averaging the frames. Default: `0`. |
 | `pyramid.range_limit` | number, from 0.0 to 1.0 | How strictly each pixel is held within the range the frames span there, from 0 (off) to 1 (never darker or brighter than every frame): removes the inversion halos and color casts of selection. Default: `1.0`. |
 | `pyramid.tone` | `"compress"` \| `"clip"` \| `"keep"` | How the result is brought into `[0, 1]`: `compress` (a local shoulder for highlights, negatives to 0), `clip` or `keep` (values outside stay, for those who tone-map themselves). Default: `"compress"`. |
-| `wavelet` | object | The wavelet method's: `levels`, `wavelet`, `window`, `consistency`, `lowpass`, `grit`, `range_limit` and `tone`. Default: `{"consistency":true,"grit":0.5,"levels":0,"lowpass":"focus","range_limit":1.0,"tone":"compress","wavelet":"bior22","window":3}`. |
+| `wavelet` | object | The wavelet method's: `levels`, `wavelet`, `window`, `consistency`, `lowpass`, `grit`, `range_limit` and `tone`. Default: `{"consistency":true,"grit":0.5,"levels":0,"lowpass":"focus","noise_floor":0.4,"range_limit":1.0,"tone":"compress","wavelet":"bior22","window":3}`. |
 | `wavelet.consistency` | boolean | Whether a majority filter replaces isolated picks in each level's choices. Default: `true`. |
 | `wavelet.grit` | number, from 0.0 to 1.0 | Grit suppression at the finest level, from 0.25 (closest to picking) to 1 (blends most), or 0 (off: the sharpest frame's coefficients are picked, as at the other levels). Default: `0.5`. |
 | `wavelet.levels` | integer, from 0 to 10 | The number of levels, from 1 to 10; 0 chooses from the canvas's size, as the pyramid does (5 for 720x540, 7 for 20 MP). More levels decide coarser structure by selection rather than by averaging the frames. Default: `0`. |
 | `wavelet.lowpass` | `"focus"` \| `"average"` \| `"select"` | How the coarsest low-pass is made: `focus`, `average` or `select`. Default: `"focus"`. |
+| `wavelet.noise_floor` | number, from 0.0 to 2.0 | The noise floor of the finest level's blend, in percent of white in gamma-encoded values, from 0 (off) to 2: the frames' noise, below which activity counts as noise. Raise it for noisy frames (high ISO); too high, it blends away fine detail. Default: `0.4`. |
 | `wavelet.range_limit` | number, from 0.0 to 1.0 | How strictly each pixel is held within the range the frames span there, from 0 (off) to 1 (never darker or brighter than every frame). Default: `1.0`. |
 | `wavelet.tone` | `"compress"` \| `"clip"` \| `"keep"` | How the result is brought into `[0, 1]`: `compress`, `clip` or `keep`. Default: `"compress"`. |
 | `wavelet.wavelet` | `"bior22"` \| `"db2"` | The filter bank: `bior22`, symmetric, or `db2`. Default: `"bior22"`. |
@@ -2932,6 +2934,7 @@ Parameters:
 | `final.levels` | integer, from 0 to 10 | The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out. |
 | `final.lowpass` | `"focus"` \| `"average"` \| `"select"` | How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out. |
 | `final.method` | `"average"` \| `"pyramid"` \| `"depth-map"` \| `"wavelet"` | The method, "average", "pyramid", "depth-map" or "wavelet"; the settings below are that method's. Left out, the command's own: "average" for `stack.preview`, "pyramid" for the slabs of `stack.slabbed` and for its final stack. |
+| `final.noiseFloor` | number, from 0.0 to 2.0 | The wavelet method's noise floor, in percent of white at full size, from 0 (off) to 2; the project's when left out. |
 | `final.percentile` | number, from 0.0 to 100.0 | The depth-map method's threshold percentile, from 0 to 100; the project's when left out. |
 | `final.power` | number, from 0.5 to 4.0 | The weighted average's power, from 0.5 to 4; the project's when left out. |
 | `final.radius` | number, from 0.0 to 64.0 | The weighted average's or the depth-map method's radius, in pixels of the full-size frames, from 0 to 64; the project's (`stack.get`) when left out. |
@@ -2954,6 +2957,7 @@ Parameters:
 | `slabs.levels` | integer, from 0 to 10 | The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out. |
 | `slabs.lowpass` | `"focus"` \| `"average"` \| `"select"` | How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out. |
 | `slabs.method` | `"average"` \| `"pyramid"` \| `"depth-map"` \| `"wavelet"` | The method, "average", "pyramid", "depth-map" or "wavelet"; the settings below are that method's. Left out, the command's own: "average" for `stack.preview`, "pyramid" for the slabs of `stack.slabbed` and for its final stack. |
+| `slabs.noiseFloor` | number, from 0.0 to 2.0 | The wavelet method's noise floor, in percent of white at full size, from 0 (off) to 2; the project's when left out. |
 | `slabs.percentile` | number, from 0.0 to 100.0 | The depth-map method's threshold percentile, from 0 to 100; the project's when left out. |
 | `slabs.power` | number, from 0.5 to 4.0 | The weighted average's power, from 0.5 to 4; the project's when left out. |
 | `slabs.radius` | number, from 0.0 to 64.0 | The weighted average's or the depth-map method's radius, in pixels of the full-size frames, from 0 to 64; the project's (`stack.get`) when left out. |
@@ -3033,7 +3037,7 @@ Examples:
 
 **Stack by wavelet.** Stacks the aligned frames by the wavelet method into a new output.
 
-Splits every frame by a shift-invariant wavelet transform and keeps, at every level and position, the detail of the frame with the most local activity, measured on luminance over a `window` of 3 or 5 samples: like the pyramid method, it keeps the finest detail where near and far structure overlap, and on real stacks it keeps a little more of it, with a little more noise. `levels` (0 chooses from the canvas's size) and `wavelet` (the filter bank, `bior22` or `db2`) shape the transform, `consistency` replaces isolated choices by the choice around them, `lowpass` makes the coarsest structure from the frames in focus there (`focus`), their average (`average`, which lightens dark objects only the sharp frames show) or the frame chosen most often (`select`), and `grit`, `rangeLimit` and `tone` work as the pyramid's do. Reads every frame twice, stacks on the CPU only, and takes several times the pyramid's time and about twice its memory. Uses the project's settings (`stack.get`), or the ones given for this stack only, and the stored alignment, as `stack.average` does. Runs as a job; the output is added in one undo step when it ends, or not at all when it is cancelled.
+Splits every frame by a shift-invariant wavelet transform and keeps, at every level and position, the detail of the frame with the most local activity, measured on luminance over a `window` of 3 or 5 samples: like the pyramid method, it keeps the finest detail where near and far structure overlap, and on real stacks it keeps a little more of it, with about as much noise. `levels` (0 chooses from the canvas's size) and `wavelet` (the filter bank, `bior22` or `db2`) shape the transform, `consistency` replaces isolated choices by the choice around them, `lowpass` makes the coarsest structure from the frames in focus there (`focus`), their average (`average`, which lightens dark objects only the sharp frames show) or the frame chosen most often (`select`), `noiseFloor` is the frames' noise in percent of white (0.4 by default, 0 off; raise it for high-ISO frames), below which the finest level blends frames evenly rather than picking the noisiest, and `grit`, `rangeLimit` and `tone` work as the pyramid's do. Reads every frame twice, stacks on the CPU only, and takes several times the pyramid's time and about twice its memory. Uses the project's settings (`stack.get`), or the ones given for this stack only, and the stored alignment, as `stack.average` does. Runs as a job; the output is added in one undo step when it ends, or not at all when it is cancelled.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3048,6 +3052,7 @@ Parameters:
 | `levels` | integer, from 0 to 10 | The number of levels, 1 to 10, or 0 to choose from the canvas's size; the project's (`stack.get`) when left out. |
 | `lowpass` | `"focus"` \| `"average"` \| `"select"` | How the coarsest low-pass is made: focus, average or select; the project's when left out. |
 | `name` | string | The output's name; "Wavelet" when left out. |
+| `noiseFloor` | number, from 0.0 to 2.0 | The frames' noise in percent of white, from 0 (off) to 2, below which the finest level blends frames evenly; the project's when left out. |
 | `rangeLimit` | number, from 0.0 to 1.0 | How strictly each pixel is held within the frames' range there, from 0 to 1; the project's when left out. |
 | `tone` | `"compress"` \| `"clip"` \| `"keep"` | How the result is brought into [0, 1]: compress, clip or keep; the project's when left out. |
 | `wavelet` | `"bior22"` \| `"db2"` | The filter bank: `bior22` (symmetric) or `db2`; the project's when left out. |
@@ -3074,6 +3079,7 @@ Examples:
 ```json
 {}
 {"name":"Wavelet, wider window","window":5}
+{"name":"Wavelet, high ISO","noiseFloor":1.0}
 {"lowpass":"average","tone":"keep"}
 ```
 

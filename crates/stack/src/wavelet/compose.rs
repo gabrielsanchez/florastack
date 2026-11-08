@@ -13,7 +13,7 @@ use florastack_core::{ColorSpace, Image, Monitor, Rect, Tile};
 use rayon::prelude::*;
 
 use super::frame::{Layout, Split, context, gather, read_region, tile_extension};
-use super::select::{Choices, blend_weight, deciding};
+use super::select::{Choices, blend_weight, deciding, noise_floor, noise_gain, raise};
 use super::transform::{Bank, Details, Spare, activity, analyze, extend, extension, multiply, pool, synthesize};
 use super::{FOCUS_POWER, WAVELET};
 use crate::average::MIN_COVERAGE;
@@ -51,6 +51,8 @@ pub struct ComposeKernel {
     fused: Option<Image<f32>>,
     added: usize,
     spare: Spare,
+    /// The finest level's activity per unit of noise variance, as pass 1 had it.
+    gain: f32,
 }
 
 /// The samples of `map`, a plane of the whole level, around `span` extended by `by`, through `f`. Beyond the level,
@@ -97,14 +99,16 @@ impl ComposeKernel {
         let (bank, power) = (settings.wavelet.bank(), settings.power());
         #[allow(clippy::cast_possible_truncation)] // From 0 to 1.
         let limit = settings.range_limit as f32;
-        Ok(ComposeKernel { choices, bank, power, limit, coarse: None, fused: None, added: 0, spare: Spare::default() })
+        let gain = noise_gain(bank)?;
+        Ok(ComposeKernel { choices, bank, power, limit, coarse: None, fused: None, added: 0, spare: Spare::default(), gain })
     }
 
     fn layout(&self) -> Layout {
         self.choices.layout
     }
 
-    /// Each frame's share of the finest level: its blend weight over the sum of the frames', on the extended plane.
+    /// Each frame's share of the finest level: its blend weight over the sum of the frames', on the extended plane, with
+    /// its activity raised to the noise floor as pass 1 raised it.
     fn blend_mask(&self, power: f32, split: &Split, span: Span, by: usize) -> Result<Option<Image<f32>>, StackError> {
         let Some(total) = self.choices.fine.first() else { return Ok(None) };
         let spare = &self.spare;
@@ -112,8 +116,12 @@ impl ComposeKernel {
         let (low, details) = analyze(self.bank, &plane, 1, spare)?;
         spare.give(plane);
         spare.give(low);
-        let energy = activity(&details, self.choices.settings.window, spare)?;
+        let mut energy = activity(&details, self.choices.settings.window, spare)?;
         details.recycle(spare);
+        if let Some(floor) = noise_floor(&self.choices.settings, self.gain, split, span, by, spare)? {
+            raise(&mut energy, &floor);
+            spare.give(floor);
+        }
         let coverage = split.coverage().map(|k| extend(k, span, by, 0, spare)).transpose()?.map(|k| pool(&k, 1, spare)).transpose()?;
         let sums = window(total, span, by, spare, |v| v)?;
         let mut mask = energy;

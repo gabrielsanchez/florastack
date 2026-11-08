@@ -15,7 +15,7 @@ Changing a stacking setting renders a quarter-size preview in a few seconds, onc
 - **Pyramid** picks the sharpest detail scale by scale. It is the best all-rounder, and the best where near and far detail overlap, such as hair, bristles and antennae. It can raise contrast and noise a little.
 - **Depth map** takes each pixel from the frame where it is sharpest. Colors and smooth backgrounds stay exactly as shot, but edges between near and far parts can show halos. It asks for its [contrast threshold](#contrast-threshold) before stacking.
 - **Weighted average** blends every frame, each weighted by its sharpness: fast and smooth, but softer than the others.
-- **Wavelet** picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with a little more noise. It stacks on the CPU only and takes several times as long as the pyramid, so it suits a final stack more than trying settings.
+- **Wavelet** picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with about as much noise. It stacks on the CPU only and takes several times as long as the pyramid, so it suits a final stack more than trying settings.
 - **Both** makes a pyramid output and a depth-map output from the same frames, to compare them, or to retouch one from the other later.
 
 ## Radius
@@ -76,6 +76,10 @@ What happens to the few values the pyramid or the wavelet method pushes beyond w
 ## Decisions
 
 Whether the pyramid picks the sharpest detail once for all colors (**By luminance**, the default) or for each color channel on its own (**By channel**), which can help with color fringes but may shift colors.
+
+## Noise floor
+
+How noisy the frames are, in percent of white, for the wavelet method's finest detail. Where a frame's fine detail is no stronger than this, it is treated as noise, and that place blends the frames evenly instead of taking the noisiest one, which keeps flat areas smooth. The default, 0.4, suits camera JPEGs at low ISO; raise it (to 1 or more) for high-ISO frames whose flat areas look grainy, and lower it, or set 0 to turn it off, when fine texture looks softened. It only acts with **Grit** above 0. The preview divides it by four, as a quarter-size frame has about a quarter of the noise.
 
 ## Window
 
