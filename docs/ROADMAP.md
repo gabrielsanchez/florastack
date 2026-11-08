@@ -178,6 +178,23 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] Defects and movement checked on the real corpus stacks once they are in
 - [x] Stacking (3.1) reads the frames developed and inpainted the same way (`align::Plan::read`, with the settings' demosaic for a full stack)
 
+### 2.4 Alignment corrections *(plan first)*
+
+Each frame's color and tone matched to the master's, and the geometry beyond a similarity, in rough order of value for the effort. Every color and tone correction is measured on broad tones only, as the brightness gain is: a blurred frame has less local contrast than a sharp one, and that difference is what stacking picks frames by.
+
+- [ ] White balance: one gain per color channel instead of one for all, measured as the brightness gain is (the median ratio on a strongly low-passed plane, against the master), for JPEG stacks shot with automatic white balance and light that changes color
+- [ ] Contrast: a gain and an offset, for haze, flare and shadows lifted differently from frame to frame
+- [ ] Tone curve: a smooth, increasing curve from each frame's broad tones to the master's, for JPEGs, whose tone curve makes a change of exposure nonlinear (RAW frames, developed linear, need only the gains)
+- [ ] Vignetting that changes with focus: a smooth brightness map per frame (a low-order polynomial over the frame), so that the corners don't blotch
+- [ ] Transforms smoothed along the stack: on a rail or a steady focus ramp, shift and scale change smoothly from frame to frame; fit a curve through them and flag the frames far from it
+- [ ] Less drift along the chain: match each frame against frames two or three away as well as its neighbor, and solve every transform together (the synthetic stacks drift 0.5 to 2.5 px, 3.5)
+- [ ] Lateral chromatic aberration that changes with focus: a scale of the red and blue channels against green per frame, for JPEG stacks (RAW frames get the develop step's correction)
+- [ ] Distortion that changes with focus: one radial term per frame, for wide-angle stacks
+- [ ] Perspective: a homography for handheld stacks whose camera tilts, and microscope stages that aren't level, with care not to fit noise
+- [ ] The region to align on: the user marks the subject, or leaves out a moving background or sky
+- [ ] The master frame chosen by hand
+- [ ] Local movement corrected rather than flagged: a smooth warp from the motion maps, for a swaying flower or a moving antenna, without mistaking a change of blur for movement
+
 ## Phase 3 — Stacking engines
 
 ### 3.1 Streaming framework and weighted average
