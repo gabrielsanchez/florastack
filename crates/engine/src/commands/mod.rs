@@ -14,9 +14,9 @@
 //! - [`defects`]: the stack's defect mask, the dust and hot pixels that alignment inpaints (`defects.detect` and
 //!   `defects.import`, jobs, `defects.export`, a job, `defects.clear`, `defects.info`);
 //! - [`stack`]: the stacking settings (`stack.get`, `stack.set`, `stack.reset`), stacking the aligned frames by
-//!   weighted average, the pyramid method and the depth-map method into new outputs (`stack.average`,
-//!   `stack.pyramid`, `stack.depthMap`, jobs) and a quarter-scale preview of any of them (`stack.preview`, a preview
-//!   job);
+//!   weighted average, the pyramid method, the depth-map method and the wavelet method into new outputs
+//!   (`stack.average`, `stack.pyramid`, `stack.depthMap`, `stack.wavelet`, jobs) and a quarter-scale preview of any of
+//!   them (`stack.preview`, a preview job);
 //! - [`retouch`]: retouching an output (`retouch.open` and `retouch.mapFocus`, jobs, `retouch.setSource`, a preview
 //!   job, `retouch.sharpest`, `retouch.paint`, `retouch.cancelPaint`, `retouch.stroke`, `retouch.close`, and the
 //!   output's layers, `retouch.addLayer`, `retouch.removeLayer`, `retouch.setLayerVisible`);

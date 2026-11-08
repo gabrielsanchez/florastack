@@ -53,6 +53,8 @@ pub(super) enum Method {
     DepthMap,
     /// Sharpness-weighted average.
     Average,
+    /// Shift-invariant wavelet fusion, on the CPU only.
+    Wavelet,
 }
 
 impl Method {
@@ -61,6 +63,7 @@ impl Method {
             Self::Pyramid => "pyramid",
             Self::DepthMap => "depth-map",
             Self::Average => "average",
+            Self::Wavelet => "wavelet",
         }
     }
     fn command(self) -> &'static str {
@@ -68,6 +71,7 @@ impl Method {
             Self::Pyramid => "stack.pyramid",
             Self::DepthMap => "stack.depthMap",
             Self::Average => "stack.average",
+            Self::Wavelet => "stack.wavelet",
         }
     }
     fn key(self) -> &'static str {

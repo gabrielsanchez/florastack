@@ -55,6 +55,7 @@ function Provider.sectionsForTopOfDialog(factory, properties)
                 {title = "Pyramid", value = "pyramid"},
                 {title = "Depth map", value = "depthmap"},
                 {title = "Weighted average", value = "average"},
+                {title = "Wavelet", value = "wavelet"},
             }},
             factory:static_text {title = "Inputs and logs are retained beside the result. See book/src/user/integrations.md."},
         },

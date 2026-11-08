@@ -6,19 +6,19 @@
 //! - **Stacks.** A synthetic stack (`synthetic.rs`), generated here and written as 16-bit TIFF frames, scored against
 //!   its ground truth brought onto the output's canvas; or a real one, frame files in focus order, scored against its
 //!   reference image when it has one of the output's size.
-//! - **Runs.** Alignment (scored by its transforms' error on synthetic stacks), then the weighted average, the pyramid
-//!   and the depth map, then slabs by each method stacked by each method (`stack.slabbed`), all at the defaults or at
-//!   the settings the plan gives (`stack.set`). One slab method's three final stacks run in a row: the first stacks
-//!   the slabs, the other two reuse them, as exploring the final stack's settings does.
+//! - **Runs.** Alignment (scored by its transforms' error on synthetic stacks), then the weighted average, the pyramid,
+//!   the depth map and the wavelet method, then slabs by each method stacked by each method (`stack.slabbed`), all at
+//!   the defaults or at the settings the plan gives (`stack.set`). One slab method's four final stacks run in a row:
+//!   the first stacks the slabs, the other three reuse them, as exploring the final stack's settings does.
 //! - **Measures.** The runtime is the command's wall time, from its dispatch to the end of its job. The peak memory is
 //!   the most heap the command held at once beyond what was allocated when it started, counted by `peak_alloc`'s
 //!   global allocator (every allocation, on every thread). On one thread, as the synthetic stacks run, it is the same on
 //!   every platform and run, as florastack-stack's memory test measures it; on several, it varies a little with the
 //!   order the threads happen to run in.
-//! - **Crops.** The regions (`regions.rs`) are chosen on the three methods' outputs, which are then cut there; every
+//! - **Crops.** The regions (`regions.rs`) are chosen on the four methods' outputs, which are then cut there; every
 //!   later output is cut as soon as it is scored. An output's files are deleted once it is cut (a slab's once its slab
-//!   method's final stacks are done), so that the disk holds one slab method's outputs at a time: a 20 MP stack's 30
-//!   outputs would take 7 GB.
+//!   method's final stacks are done), so that the disk holds one slab method's outputs at a time: with three methods, a
+//!   20 MP stack's 30 outputs took 7 GB.
 //!
 //! `quality list` prints the synthetic stacks as JSON; `quality PLAN.json` runs the plan xtask wrote and writes the
 //! result to `<out>/results/<stack>.json` and the crops to `<out>/crops/<stack>/`, both named by the stack's id with `/`
@@ -49,8 +49,12 @@ static HEAP: peak_alloc::PeakAlloc = peak_alloc::PeakAlloc;
 const USAGE: &str = "usage: quality list | quality PLAN.json (written by `cargo xtask quality`)";
 
 /// The stacking methods: their names in `stack.slabbed`'s parameters, their commands and their titles.
-const METHODS: [(&str, &str, &str); 3] =
-    [("average", "stack.average", "Weighted average"), ("pyramid", "stack.pyramid", "Pyramid"), ("depth-map", "stack.depthMap", "Depth map")];
+const METHODS: [(&str, &str, &str); 4] = [
+    ("average", "stack.average", "Weighted average"),
+    ("pyramid", "stack.pyramid", "Pyramid"),
+    ("depth-map", "stack.depthMap", "Depth map"),
+    ("wavelet", "stack.wavelet", "Wavelet"),
+];
 
 /// What xtask asks for: one stack.
 #[derive(Deserialize)]
@@ -224,7 +228,7 @@ struct First {
 /// A run's place in the stack: its name, its title, its command and the command's parameters.
 type Planned = (String, String, &'static str, Value);
 
-/// The runs after alignment, in groups: the three methods, then each slab method's three final stacks.
+/// The runs after alignment, in groups: the four methods, then each slab method's four final stacks.
 fn groups() -> Vec<Vec<Planned>> {
     let mut groups = vec![METHODS.iter().map(|&(name, command, title)| (name.to_owned(), title.to_owned(), command, json!({}))).collect()];
     for (slabs, _, slab_title) in METHODS {

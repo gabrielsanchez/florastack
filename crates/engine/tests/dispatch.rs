@@ -246,6 +246,11 @@ fn every_command_dispatches_from_json() {
     let last = outputs["outputs"].as_array().unwrap().last().unwrap().clone();
     assert_eq!((&last["method"], last["outputs"].as_array().unwrap().len()), (&json!("average"), 3), "{last}");
     assert_eq!(outputs["outputs"][3]["method"], "pyramid");
+    // The wavelet method, on the CPU only, with a setting of its own.
+    let wavelet = calls.run("stack.wavelet", r#"{ "window": 5 }"#);
+    assert_eq!((wavelet["frames"].as_array().unwrap().len(), &wavelet["settings"]["window"]), (6, &json!(5)), "{wavelet}");
+    let outputs = calls.run("output.list", "{}");
+    assert_eq!(outputs["outputs"].as_array().unwrap().last().unwrap()["method"], "wavelet");
     assert_eq!(calls.run("stack.reset", "{}")["settings"]["average"]["smoothing"], 8.0);
     assert_eq!(calls.run("align.reset", "{}")["settings"]["framing"], "narrow");
     calls.run("project.close", r#"{ "discardChanges": true }"#);

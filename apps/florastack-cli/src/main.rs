@@ -152,6 +152,7 @@ fn stack(client: &mut Client, args: &StackArgs) -> Result<(), Failure> {
         Method::Pyramid => &[Method::Pyramid],
         Method::Depthmap => &[Method::Depthmap],
         Method::Average => &[Method::Average],
+        Method::Wavelet => &[Method::Wavelet],
     };
     let mut written = Vec::new();
     for &method in methods {

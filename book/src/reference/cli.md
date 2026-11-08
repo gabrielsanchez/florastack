@@ -44,7 +44,7 @@ duplicate input stops it with a diagnostic.
 | Option | |
 |---|---|
 | `--out FILE` | The TIFF to write; an existing file is refused |
-| `--method` | `pyramid` (the default), `depthmap`, `average`, or `both`, which writes `<name>-pyramid.tif` and `<name>-depthmap.tif` |
+| `--method` | `pyramid` (the default), `depthmap`, `average`, `wavelet` (on the CPU only, and several times slower), or `both`, which writes `<name>-pyramid.tif` and `<name>-depthmap.tif` |
 | `--depth 16\|32f` | 16-bit (the default) or 32-bit float samples |
 | `--preset PRESET` | A preset file, or a built-in one as `builtin:insect-macro` (`product-shot`, `landscape`, `microscope`), applied first; the options below override it |
 | `--align TERMS` | The terms to correct, from `shift`, `scale`, `rotation`, `brightness` |
@@ -67,7 +67,7 @@ florastack-cli watch capture --out results --preset macro.toml --idle 10 --json-
 | Option | |
 |---|---|
 | `--preset PRESET` | Required: a preset file or `builtin:<id>`, whose output settings say what is written |
-| `--method` | `pyramid` (the default), `depthmap` or `average` |
+| `--method` | `pyramid` (the default), `depthmap`, `average` or `wavelet` |
 | `--template` | The output file's name: `{stack}`, `{method}`, `{range}`, `{first}`, `{last}`, `{date}` (UTC), `{params}` (default `{stack}-{method}-{range}.tif`) |
 | `--in FOLDER` (batch) | A folder of stack folders, or one folder of frames to split into stacks |
 | `--out FOLDER` | Where the outputs, projects and `summary.csv` go; outside the input, and new (`watch` defaults to `<folder>-stacked`) |

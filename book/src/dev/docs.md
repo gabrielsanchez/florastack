@@ -65,7 +65,9 @@ python scripts/method_crops.py corpus/local/mosquito-jpg --out book/src/images/m
 ```
 
 It needs NumPy and Pillow. `--region X,Y` crops at chosen places instead. It writes `regions.json` beside the crops,
-which records where each crop is and which frame it shows.
+which records where each crop is and which frame it shows. The book's crops are at the regions chosen before the
+wavelet method was added, which its text describes: to make them again, pass those regions with
+`--region 1840,2080 --region 2000,2400 --region 2720,1360`.
 
 ## Photos
 

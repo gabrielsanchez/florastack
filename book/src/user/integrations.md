@@ -4,7 +4,7 @@ The Lightroom Classic plugin and darktable script render the selected photos wit
 their edits, stack the rendered TIFFs through the CLI, and import one result beside
 the originals. Other editors can pass files to the desktop app or use the CLI recipe
 below. A saved preset controls alignment and stack parameters; the integration's
-method selector chooses pyramid, depth map or weighted average.
+method selector chooses pyramid, depth map, weighted average or wavelet.
 
 ## Build and install
 

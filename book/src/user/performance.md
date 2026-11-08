@@ -23,7 +23,7 @@ does the same, and `compute.info` says which device was chosen, and why the CPU 
 
 How much faster the GPU is depends on the card and the method. On a laptop RTX 3060 against 16 CPU threads, 100 frames
 of 24 megapixels took 17 s rather than 94 s by weighted average, 19 s rather than 238 s by pyramid, and 31 s rather
-than 112 s by depth map.
+than 112 s by depth map. The wavelet method has no GPU version: it stacks on the CPU whatever the setting.
 
 ## Memory
 

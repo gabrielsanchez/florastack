@@ -362,6 +362,7 @@ fn rebuild(session: &Session, output: &florastack_project::Output, ctx: &crate::
         "average" => MethodName::Average,
         "pyramid" => MethodName::Pyramid,
         "depth-map" => MethodName::DepthMap,
+        "wavelet" => MethodName::Wavelet,
         _ => return Err(super::scientific::unavailable("the sidecar names an unknown stacking method")),
     };
     let params: MethodParams = florastack_project::from_data("stack parameters", &params)?;
