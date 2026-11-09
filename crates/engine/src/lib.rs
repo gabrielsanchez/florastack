@@ -22,6 +22,7 @@
 //!   (JPEG: the filmstrip's, as shot and aligned), which it stores as bytes.
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod adjust;
 pub mod automation;
 pub mod commands;
 pub mod compute;

@@ -302,17 +302,19 @@ enum Retouched {
 }
 
 /// What a file of an output is written from: one of its maps, its result from before tone compression (extended
-/// range), or its result, retouched when it has visible strokes. Chosen when the job is planned, read when it runs.
-pub(super) struct Pixels {
+/// range), or its result, retouched when it has visible strokes and adjusted when it has adjustments (`crate::adjust`).
+/// Chosen when the job is planned, read when it runs.
+pub(crate) struct Pixels {
     image: florastack_project::CacheRef,
     base: florastack_project::CacheRef,
     retouched: Option<Retouched>,
+    adjust: Option<florastack_edit::Adjustments>,
 }
 
 impl Pixels {
     /// The pixels of output `id` for a file with `spec`: `map`, or the result (see [`Pixels`]); what the choice
     /// leaves out goes into `notes`.
-    pub(super) fn of(session: &Session, id: OutputId, map: Option<&str>, spec: OutputSpec, notes: &mut Vec<String>) -> Result<Pixels, CommandError> {
+    pub(crate) fn of(session: &Session, id: OutputId, map: Option<&str>, spec: OutputSpec, notes: &mut Vec<String>) -> Result<Pixels, CommandError> {
         let output = find(session, id)?;
         // "Retain extended range": the output's result from before its tone compression, when it has one.
         let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();
@@ -355,12 +357,24 @@ impl Pixels {
         } else {
             None
         };
-        Ok(Pixels { image, base: output.image.clone(), retouched })
+        let adjust = if map.is_none() { crate::adjust::to_apply(output)? } else { None };
+        if adjust.is_some() && image != output.image {
+            notes.push("an adjusted output is written as adjusted, brought into [0, 1]: its extended range isn't adjusted".to_owned());
+        }
+        Ok(Pixels { image, base: output.image.clone(), retouched, adjust })
+    }
+
+    /// Output `id`'s result with its visible strokes and without its adjustments: what adjusting starts from.
+    pub(crate) fn base(session: &Session, id: OutputId, notes: &mut Vec<String>) -> Result<Pixels, CommandError> {
+        let spec = OutputSpec::new(florastack_codecs::Format::Tiff)?;
+        let mut pixels = Pixels::of(session, id, None, OutputSpec { extended_range: false, ..spec }, notes)?;
+        pixels.adjust = None;
+        Ok(pixels)
     }
 
     /// Reads the pixels (painting the strokes again when they must be); what goes wrong on the way goes into `notes`.
-    pub(super) fn read(self, cache: &florastack_project::CacheDir, notes: &mut Vec<String>) -> Result<AnyImage, CommandError> {
-        Ok(match self.retouched {
+    pub(crate) fn read(self, cache: &florastack_project::CacheDir, notes: &mut Vec<String>) -> Result<AnyImage, CommandError> {
+        let image = match self.retouched {
             None => crate::project::read_image(cache, &self.image)?,
             Some(Retouched::Painted(canvas)) => AnyImage::F32(canvas),
             Some(Retouched::Cached(reference)) => crate::project::read_image(cache, &reference)?,
@@ -375,7 +389,11 @@ impl Pixels {
                 }
                 AnyImage::F32(florastack_retouch::render(&base, &crate::retouch::painted(&usable, &base, &sources))?)
             }
-        })
+        };
+        match &self.adjust {
+            Some(adjustments) => crate::adjust::apply(image, adjustments),
+            None => Ok(image),
+        }
     }
 }
 

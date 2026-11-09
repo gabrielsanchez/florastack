@@ -1,3 +1,14 @@
+adjust.addMask
+adjust.close
+adjust.get
+adjust.moveMask
+adjust.open
+adjust.preview
+adjust.removeMask
+adjust.reset
+adjust.sampleColor
+adjust.set
+adjust.setMask
 align.get
 align.info
 align.reset

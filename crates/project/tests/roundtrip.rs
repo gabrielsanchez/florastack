@@ -27,6 +27,7 @@ fn frame_file(dir: &Path, name: &str, bytes: &[u8]) -> FrameFile {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One project with every kind of data a project holds, saved and read back.
 fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
     let dir = TempDir::new("roundtrip");
     let photos = dir.path().join("photos");
@@ -102,6 +103,8 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         json!({ "brush": "darken", "size": 12.0, "source": { "frame": a.get() }, "points": [[50.0, 60.0, 0.5]] }),
     ];
     project.output_mut(pyramid).unwrap().layer_mut(layer).unwrap().strokes.clone_from(&strokes);
+    let adjustments = json!({"global": {"exposure": 0.5}, "masks": [{"id": 1, "components": [{"shape": {"kind": "subject"}}]}]});
+    project.output_mut(pyramid).unwrap().adjustments = Some(adjustments.clone());
     let final_image = folder.store(Area::Cache, "output-2", "tiff", b"final pixels", None).unwrap();
     let slabbed = project.add_output(NewOutput {
         name: "Slabbed depth map".into(),
@@ -132,6 +135,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
     assert_eq!(folder.read(&output.maps[&MapName::new("depth").unwrap()]).unwrap(), b"depth map");
     assert_eq!(folder.read(reopened.frame(c).unwrap().aligned.as_ref().unwrap()).unwrap(), format!("aligned {c}").as_bytes());
     assert_eq!(output.layer(layer).unwrap().strokes, strokes);
+    assert_eq!(output.adjustments, Some(adjustments));
     assert!(folder.check_cache(&reopened, true).is_empty(), "every cache file is present and intact");
     assert_eq!(reopened.output(slabbed).unwrap().inputs, [Input::Output(pyramid)]);
     assert_eq!(reopened.preferences.group(Group::Stack)["pyramid"]["grit"], json!(0.5));

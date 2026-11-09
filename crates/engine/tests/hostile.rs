@@ -65,6 +65,26 @@ fn hostile_values_are_refused_with_what_is_wrong() {
             "annotation.set",
             json!({"output":fixture.output,"layers":[{"name":"A","visible":true,"white":true,"textSize":8,"annotation":{"kind":"text","text":"A","position":[1e300,0]}}]}),
         ),
+        ("adjust.set", json!({"output":fixture.output,"adjustments":{"global":{"exposure":6}}})),
+        ("adjust.set", json!({"output":fixture.output,"adjustments":{"global":{"contrast":1e300}}})),
+        ("adjust.set", json!({"output":fixture.output,"adjustments":{"masks":[{"id":1},{"id":1}]}})),
+        (
+            "adjust.addMask",
+            json!({"output":fixture.output,"mask":{"components":[{"shape":{"kind":"radial","center":[0.5,0.5],"radius_x":-1,"radius_y":0.1,"angle":0,"feather":0}}]}}),
+        ),
+        ("adjust.addMask", json!({"output":fixture.output,"mask":{"name":long.clone(),"components":[]}})),
+        (
+            "adjust.addMask",
+            json!({"output":fixture.output,"mask":{"components":[{"shape":{"kind":"luminance","low":0.9,"high":0.1,"low_feather":0,"high_feather":0}}]}}),
+        ),
+        (
+            "adjust.addMask",
+            json!({"output":fixture.output,"mask":{"components":[{"shape":{"kind":"brush","strokes":[{"points":[[0.5,0.5]],"size":0}]}}]}}),
+        ),
+        ("adjust.setMask", json!({"output":fixture.output,"mask":{"id":1,"adjust":{"amount":-1}}})),
+        ("adjust.preview", json!({"width":0,"height":10})),
+        ("adjust.preview", json!({"width":10,"height":usize::MAX})),
+        ("adjust.sampleColor", json!({"x":f64::MAX,"y":0.5})),
         ("capture.calculate", json!({"magnification":0,"aperture":4,"pixelPitch":4})),
         ("capture.calculate", json!({"magnification":1,"aperture":1e300,"pixelPitch":4})),
         ("capture.calculate", json!({"magnification":1,"aperture":4,"pixelPitch":-1})),
@@ -269,6 +289,8 @@ fn hostile_values_are_refused_with_what_is_wrong() {
     for (name, params) in [
         ("project.removeFrames", json!({ "frames": [frame, 9999] })),
         ("output.rename", json!({ "output": 9999, "name": "x" })),
+        ("adjust.removeMask", json!({ "output": fixture.output, "mask": 99 })),
+        ("adjust.get", json!({ "output": 9999 })),
         ("project.moveFrames", json!({ "frames": [9999], "to": 0 })),
     ] {
         assert_eq!(engine.dispatch(name, params).unwrap_err().code(), "notFound", "{name}");

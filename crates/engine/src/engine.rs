@@ -264,6 +264,19 @@ impl Engine {
         self.session.retouch.as_ref().map(|session| crate::retouch::RetouchView { session })
     }
 
+    /// The output open for adjusting, as an app draws it (`adjust.open`).
+    pub fn adjust(&self) -> Option<crate::adjust::AdjustView<'_>> {
+        self.session.adjust.as_ref().map(|session| crate::adjust::AdjustView { session })
+    }
+
+    /// What changed in the adjust session since the last call, for an app to draw again; `None` when nothing did.
+    pub fn take_adjust_changes(&mut self) -> Option<crate::adjust::AdjustChanges> {
+        let closed = std::mem::take(&mut self.session.adjust_closed);
+        let mut changes = self.session.adjust.as_mut().map(|s| std::mem::take(&mut s.changes)).unwrap_or_default();
+        changes.closed |= closed;
+        (changes != crate::adjust::AdjustChanges::default()).then_some(changes)
+    }
+
     /// What changed in the retouch session since the last call, for an app to draw again; `None` when nothing did.
     pub fn take_retouch_changes(&mut self) -> Option<crate::retouch::RetouchChanges> {
         let closed = std::mem::take(&mut self.session.retouch_closed);

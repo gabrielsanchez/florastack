@@ -135,6 +135,53 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             ),
         },
         Case { name: "retouch.addLayer", setup: none(), params: format!(r#"{{ "output": {output}, "name": "Antennae" }}"#) },
+        Case {
+            name: "adjust.set",
+            setup: none(),
+            params: format!(r#"{{ "output": {output}, "adjustments": {{ "global": {{ "exposure": 0.5, "vibrance": 20 }} }} }}"#),
+        },
+        Case {
+            name: "adjust.reset",
+            setup: vec![
+                ("adjust.set", format!(r#"{{ "output": {output}, "adjustments": {{ "global": {{ "contrast": 30 }} }} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: format!(r#"{{ "output": {output} }}"#),
+        },
+        Case {
+            name: "adjust.addMask",
+            setup: none(),
+            params: format!(
+                r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ], "adjust": {{ "clarity": 40 }} }} }}"#
+            ),
+        },
+        Case {
+            name: "adjust.setMask",
+            setup: vec![
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ] }} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: format!(
+                r#"{{ "output": {output}, "mask": {{ "id": 1, "invert": true, "components": [ {{ "shape": {{ "kind": "linear", "start": [0, 0], "end": [1, 1] }} }} ], "adjust": {{ "exposure": -1 }} }} }}"#
+            ),
+        },
+        Case {
+            name: "adjust.removeMask",
+            setup: vec![
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ] }} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: format!(r#"{{ "output": {output}, "mask": 1 }}"#),
+        },
+        Case {
+            name: "adjust.moveMask",
+            setup: vec![
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ] }} }}"#)),
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "subject" }} }} ] }} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: format!(r#"{{ "output": {output}, "mask": 2, "index": 0 }}"#),
+        },
         Case { name: "retouch.removeLayer", setup: none(), params: format!(r#"{{ "output": {output}, "layer": {layer} }}"#) },
         Case { name: "retouch.setLayerVisible", setup: none(), params: format!(r#"{{ "output": {output}, "layer": {layer}, "visible": false }}"#) },
         Case {
