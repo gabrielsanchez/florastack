@@ -6,7 +6,7 @@
 
 use florastack_core::testutil::scene;
 use florastack_core::{ColorSpace, Image};
-use florastack_edit::{Adjustments, Component, EditError, Focus, Global, Local, Mask, Op, Renderer, Request, Shape, Size, Stroke};
+use florastack_edit::{Adjustments, Component, EditError, Global, Local, Mask, Op, Renderer, Request, Shape, Size, Stroke};
 
 const W: usize = 192;
 const H: usize = 128;
@@ -303,10 +303,15 @@ fn a_luminance_range_selects_by_brightness() {
     assert!((mean_luma(&out, dark) / mean_luma(&image, dark) - 1.0).abs() < 0.05, "{}", mean_luma(&out, dark) / mean_luma(&image, dark));
 }
 
-/// The scene's depth as the focus maps: every pixel of the subject, at its depth.
-fn focus(depth: &Image<f32>) -> Focus {
-    let subject = Image::from_vec(W, H, 1, ColorSpace::LINEAR, vec![1.0; W * H]).unwrap();
-    Focus { subject, depth: depth.clone() }
+/// The scene with fine detail everywhere, a 2-pixel checker of 20% over it, so that all of it is subject (its discs are
+/// flat), and a renderer of it with its depth map.
+fn detailed_scene() -> (Image<f32>, Image<f32>, Renderer) {
+    let (image, depth) = scene();
+    let data =
+        image.as_raw().iter().enumerate().map(|(i, v)| v * if ((i / 3) % W / 2 + (i / 3) / W / 2).is_multiple_of(2) { 1.1 } else { 0.9 }).collect();
+    let image = Image::from_vec(W, H, 3, ColorSpace::LINEAR, data).unwrap();
+    let r = Renderer::new(&image).unwrap().with_depth(&depth).unwrap();
+    (image, depth, r)
 }
 
 /// Whether the pixel at `(x, y)` lies within two pixels of a change of `inside`.
@@ -317,11 +322,10 @@ fn near_edge(inside: impl Fn(usize, usize) -> bool, x: usize, y: usize) -> bool 
 
 #[test]
 fn a_depth_range_selects_what_lies_in_it() {
-    let (image, depth) = scene();
-    let r = Renderer::new(&image).unwrap().with_focus(&focus(&depth)).unwrap();
+    let (image, depth, r) = detailed_scene();
     // The scene's discs lie at depths 0.3 to 0.5, its background at 0.6 to 1 and its bristles at 0 to 0.2.
     // Darkened: much of the discs is bright, where brightening would meet the highlights' shoulder.
-    let out = render(&r, &masked(Shape::Depth { near: 0.28, far: 0.52, feather: 0.0 }, Local { exposure: -1.0, ..Local::default() }));
+    let out = render(&r, &masked(Shape::Depth { from: 0.28, to: 0.52, feather: 0.0 }, Local { exposure: -1.0, ..Local::default() }));
     let d = |x, y| depth.get(x, y, 0).unwrap();
     // Away from the discs' edges, which the mask's matte (8 bits, bilinearly sampled) softens.
     let range = |x, y| (0.28..=0.52).contains(&d(x, y));
@@ -334,12 +338,21 @@ fn a_depth_range_selects_what_lies_in_it() {
 }
 
 #[test]
-fn subject_and_background_follow_the_focus() {
-    let (image, depth) = scene();
-    // The subject is the left half.
-    let subject = Image::from_fn(W, H, 1, ColorSpace::LINEAR, |x, _, _| if x < W / 2 { 1.0 } else { 0.0 }).unwrap();
-    let r = Renderer::new(&image).unwrap().with_focus(&Focus { subject, depth }).unwrap();
-    let (left, right) = (|x: usize, _| x < W / 2 - 3, |x: usize, _| x > W / 2 + 3);
+fn subject_and_background_follow_the_detail() {
+    // The scene's detail on the left half, a soft gradient on the right: the subject is the left half, found with no
+    // map at all.
+    let (scene, _) = scene();
+    let noise = |x: usize, y: usize| ((x * 7919 + y * 104_729) % 97) as f32 / 97.0 * 0.004;
+    let image = Image::from_fn(W, H, 3, ColorSpace::LINEAR, |x, y, c| {
+        if x < W / 2 { scene.get(x, y, c).unwrap() } else { 0.2 + 0.1 * y as f32 / H as f32 + noise(x, y) }
+    })
+    .unwrap();
+    let r = Renderer::new(&image).unwrap();
+    let subject = r.subject().unwrap();
+    let (on, off) = (subject.get(W / 4, H / 2, 0).unwrap(), subject.get(W * 3 / 4, H / 2, 0).unwrap());
+    assert!(on > 0.9 && off < 0.1, "{on} {off}");
+    // Beyond the edge, which the averaged detail spreads over a few pixels (a mask's `refine` makes it follow the image's).
+    let (left, right) = (|x: usize, _| x < W / 2 - 12, |x: usize, _| x > W / 2 + 12);
     let out = render(&r, &masked(Shape::Subject, brighter()));
     assert!(mean_luma(&out, left) > 1.6 * mean_luma(&image, left));
     assert!((mean_luma(&out, right) / mean_luma(&image, right) - 1.0).abs() < 0.01);
@@ -350,8 +363,7 @@ fn subject_and_background_follow_the_focus() {
 
 #[test]
 fn several_depth_ranges_each_select_their_own() {
-    let (image, depth) = scene();
-    let r = Renderer::new(&image).unwrap().with_focus(&focus(&depth)).unwrap();
+    let (image, depth, r) = detailed_scene();
     // Five ranges, the most an output may have, each darkening by another amount: the discs and four bands of the
     // receding background.
     let ranges = [(0.28, 0.52), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0)];
@@ -362,7 +374,7 @@ fn several_depth_ranges_each_select_their_own() {
             .enumerate()
             .map(|(i, &(near, far))| Mask {
                 id: u32::try_from(i).unwrap() + 1,
-                components: vec![Component { op: Op::Add, invert: false, shape: Shape::Depth { near, far, feather: 0.0 } }],
+                components: vec![Component { op: Op::Add, invert: false, shape: Shape::Depth { from: near, to: far, feather: 0.0 } }],
                 adjust: Local { exposure: stops[i], ..Local::default() },
                 ..Mask::default()
             })
@@ -383,26 +395,29 @@ fn several_depth_ranges_each_select_their_own() {
     let mut six = a.clone();
     six.masks.push(Mask {
         id: 9,
-        components: vec![Component { op: Op::Add, invert: false, shape: Shape::Depth { near: 0.1, far: 0.15, feather: 0.0 } }],
+        components: vec![Component { op: Op::Add, invert: false, shape: Shape::Depth { from: 0.1, to: 0.15, feather: 0.0 } }],
         ..Mask::default()
     });
     assert!(matches!(r.render(&six, &Request::FULL), Err(EditError::Invalid { .. })));
 }
 
 #[test]
-fn focus_masks_need_the_focus() {
+fn depth_masks_need_the_depth_map() {
     let r = renderer();
-    let e = r.render(&masked(Shape::Subject, brighter()), &Request::FULL).unwrap_err();
-    assert!(matches!(e, EditError::NoFocus { shape: "subject" }), "{e}");
+    assert!(!r.has_depth());
+    // The subject needs none.
+    r.render(&masked(Shape::Subject, brighter()), &Request::FULL).unwrap();
+    let e = r.render(&masked(Shape::Depth { from: 0.0, to: 0.5, feather: 0.1 }, brighter()), &Request::FULL).unwrap_err();
+    assert!(matches!(e, EditError::NoDepth), "{e}");
     // A hidden one doesn't.
-    let mut a = masked(Shape::Depth { near: 0.0, far: 0.5, feather: 0.1 }, brighter());
+    let mut a = masked(Shape::Depth { from: 0.0, to: 0.5, feather: 0.1 }, brighter());
     a.masks[0].visible = false;
     r.render(&a, &Request::FULL).unwrap();
-    // Maps of another aspect ratio are refused.
-    let (image, depth) = scene();
+    // A map of another aspect ratio is refused; a smaller one of the same is taken.
     let small = Image::from_vec(10, 10, 1, ColorSpace::LINEAR, vec![0.5; 100]).unwrap();
-    let e = Renderer::new(&image).unwrap().with_focus(&Focus { subject: small, depth }).unwrap_err();
-    assert!(matches!(e, EditError::Guide { .. }), "{e}");
+    assert!(matches!(r.with_depth(&small).unwrap_err(), EditError::Guide { .. }));
+    let quarter = Image::from_vec(W / 4, H / 4, 1, ColorSpace::LINEAR, vec![0.5; W * H / 16]).unwrap();
+    assert!(r.with_depth(&quarter).unwrap().has_depth());
 }
 
 #[test]

@@ -272,6 +272,7 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("adjust.get", &format!(r#"{{ "output": {target} }}"#))["adjustments"]["masks"].as_array().unwrap().len(), 1);
     let opened = calls.run("adjust.open", &format!(r#"{{ "output": {target} }}"#));
     assert!(opened["width"].as_u64().unwrap() > 0, "{opened}");
+    assert_eq!(calls.run("adjust.mapDepth", "{}")["measured"], true);
     let previewed = calls.run("adjust.preview", r#"{ "width": 64, "height": 64, "draft": true }"#);
     assert!(previewed["width"].as_u64().unwrap() <= 64, "{previewed}");
     assert!(calls.engine.adjust().unwrap().preview().is_some());

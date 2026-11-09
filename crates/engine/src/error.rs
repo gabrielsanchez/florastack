@@ -174,7 +174,7 @@ impl CommandError {
             CommandError::Retouch(_) => "retouch",
             CommandError::Adjust(e) => match &**e {
                 florastack_edit::EditError::Invalid { .. } => "params",
-                florastack_edit::EditError::NoFocus { .. } => "unavailable",
+                florastack_edit::EditError::NoDepth => "unavailable",
                 _ => "adjust",
             },
             CommandError::Spawn { .. } | CommandError::Internal { .. } => "internal",

@@ -1,6 +1,7 @@
 adjust.addMask
 adjust.close
 adjust.get
+adjust.mapDepth
 adjust.moveMask
 adjust.open
 adjust.preview

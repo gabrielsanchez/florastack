@@ -309,6 +309,8 @@ pub(crate) struct Pixels {
     base: florastack_project::CacheRef,
     retouched: Option<Retouched>,
     adjust: Option<florastack_edit::Adjustments>,
+    /// Where the stack's depth map comes from, when the adjustments' masks need it.
+    depth: Option<super::adjust::DepthSource>,
 }
 
 impl Pixels {
@@ -361,7 +363,11 @@ impl Pixels {
         if adjust.is_some() && image != output.image {
             notes.push("an adjusted output is written as adjusted, brought into [0, 1]: its extended range isn't adjusted".to_owned());
         }
-        Ok(Pixels { image, base: output.image.clone(), retouched, adjust })
+        let depth = match &adjust {
+            Some(a) if a.needs_depth() => Some(super::adjust::DepthSource::of(session, output, "output.save")?),
+            _ => None,
+        };
+        Ok(Pixels { image, base: output.image.clone(), retouched, adjust, depth })
     }
 
     /// Output `id`'s result with its visible strokes and without its adjustments: what adjusting starts from.
@@ -369,6 +375,7 @@ impl Pixels {
         let spec = OutputSpec::new(florastack_codecs::Format::Tiff)?;
         let mut pixels = Pixels::of(session, id, None, OutputSpec { extended_range: false, ..spec }, notes)?;
         pixels.adjust = None;
+        pixels.depth = None;
         Ok(pixels)
     }
 
@@ -390,10 +397,16 @@ impl Pixels {
                 AnyImage::F32(florastack_retouch::render(&base, &crate::retouch::painted(&usable, &base, &sources))?)
             }
         };
-        match &self.adjust {
-            Some(adjustments) => crate::adjust::apply(image, adjustments),
-            None => Ok(image),
-        }
+        let Some(adjustments) = &self.adjust else { return Ok(image) };
+        let depth = match self.depth {
+            Some(source) => {
+                let size = (image.width(), image.height());
+                let (map, _) = source.read(cache, &florastack_core::Unmonitored, size)?;
+                Some(crate::adjust::depth(&map)?)
+            }
+            None => None,
+        };
+        crate::adjust::apply(image, adjustments, depth.as_ref())
     }
 }
 

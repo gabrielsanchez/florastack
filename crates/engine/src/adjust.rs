@@ -12,6 +12,11 @@
 //!   reusing what the last render left alone. Apps draw its last preview through [`AdjustView`] and learn what changed
 //!   with [`crate::Engine::take_adjust_changes`].
 //!
+//! The subject and background masks find the subject in the output itself (florastack-edit's `subject`). The depth
+//! masks need the stack's depth map ([`depth`]): a depth-map output's own (its `depth` map), or, for the other methods,
+//! the frames' focus measured at a quarter of their size and kept as the output's `focus-depth` map
+//! (`adjust.mapDepth`; an export that needs it and finds none measures it for itself).
+//!
 //! The renderer works in linear Rec. 2020 primaries: an output is converted from its own primaries (its ICC profile's,
 //! or sRGB's without one) and back, keeping its color-space tag, so that an adjusted output is written as the output
 //! is.
@@ -81,12 +86,26 @@ pub(crate) fn renderer(result: AnyImage) -> Result<(Renderer, Working), CommandE
     Ok((renderer, working))
 }
 
-/// `result` with `adjustments` applied at full size, as files are written.
-pub(crate) fn apply(result: AnyImage, adjustments: &Adjustments) -> Result<AnyImage, CommandError> {
+/// `result` with `adjustments` applied at full size, as files are written, with the stack's `depth` map when its masks
+/// need it.
+pub(crate) fn apply(result: AnyImage, adjustments: &Adjustments, depth: Option<&Image<f32>>) -> Result<AnyImage, CommandError> {
     let (renderer, working) = renderer(result)?;
+    let renderer = match depth {
+        Some(depth) => renderer.with_depth(depth)?,
+        None => renderer,
+    };
     let mut image = renderer.render(adjustments, &Request::FULL)?;
     working.back(&mut image)?;
     Ok(AnyImage::F32(image))
+}
+
+/// The output map that keeps the stack's depth map of an output that isn't a depth map.
+pub(crate) const FOCUS_DEPTH: &str = "focus-depth";
+
+/// A depth map's 16-bit samples (0 for the first frame to 65535 for the last) as fractions, for the renderer.
+pub(crate) fn depth(map: &Image<u16>) -> Result<Image<f32>, CommandError> {
+    let data = map.rows().flat_map(|row| row.iter().map(|&v| f32::from(v) / 65535.0)).collect();
+    Ok(Image::from_vec(map.width(), map.height(), 1, ColorSpace::LINEAR, data).map_err(florastack_stack::StackError::from)?)
 }
 
 /// See the module documentation.
@@ -132,9 +151,9 @@ impl AdjustView<'_> {
         self.session.preview.as_deref()
     }
 
-    /// Whether the session has the stack's focus, which the subject, background and depth masks need.
-    pub fn has_focus(&self) -> bool {
-        self.session.renderer.has_focus()
+    /// Whether the session has the stack's depth map, which the depth masks need.
+    pub fn has_depth(&self) -> bool {
+        self.session.renderer.has_depth()
     }
 }
 

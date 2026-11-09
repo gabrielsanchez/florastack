@@ -2,12 +2,14 @@
 //! neutral adjustments write the output as it is, undo brings the unadjusted file back, the adjust session previews
 //! what is set, and a reproducibility sidecar replays the adjustments.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Test scenes in fractions and pixels, all small: f32 holds them as exactly as the checks need.
+#![allow(clippy::cast_possible_truncation)]
 
 mod common;
 
 use std::path::Path;
 
-use common::{TempDir, breathing, config, path_list, run, synthetic_frames};
+use common::{MARGIN, TempDir, breathing, config, path_list, run, scene_frames, synthetic_frames};
 use florastack_engine::{Engine, json};
 
 fn quoted(path: &Path) -> String {
@@ -142,24 +144,6 @@ fn half_to_f32(bits: u16) -> f32 {
 }
 
 #[test]
-fn masks_of_the_focus_say_what_they_need() {
-    let dir = TempDir::new("adjust-focus");
-    let (mut engine, output) = stacked(dir.path());
-    run(
-        &mut engine,
-        "adjust.addMask",
-        &json!({"output": output, "mask": {"components": [{"shape": {"kind": "subject"}}], "adjust": {"exposure": 0.5}}}).to_string(),
-    );
-    let params = json!({"output": output, "path": dir.path().join("subject.tif"), "spec": {"format": {"format": "tiff", "compression": "none"}, "depth": "u16"}});
-    let e = match engine.dispatch("output.save", params) {
-        Ok(florastack_engine::Dispatched::Started(job)) => engine.wait(job).unwrap_err(),
-        Ok(florastack_engine::Dispatched::Done(v)) => panic!("written: {v}"),
-        Err(e) => e,
-    };
-    assert!(e.to_string().contains("focus"), "{e}");
-}
-
-#[test]
 fn a_sidecar_replays_the_adjustments() {
     let dir = TempDir::new("adjust-reproduce");
     let (mut engine, output) = stacked(dir.path());
@@ -258,4 +242,161 @@ fn every_shape_selects_its_region_through_the_commands() {
     let out = darkened(&mut engine, "color", json!({"kind": "color", "samples": [color], "refine": 50}));
     let center = |x: usize, y: usize| x.abs_diff(w / 2) <= 1 && y.abs_diff(h / 2) <= 1;
     assert!(ratio(&out, &center) < ratio(&out, &|_, _| true), "{} {}", ratio(&out, &center), ratio(&out, &|_, _| true));
+}
+
+/// The subject scene: a textured ellipse whose depth runs from 0 at its left end to 0.5 at its right one, over a smooth
+/// background at depth 1 that no frame brings into focus. The frames are 160 x 120; `inside(x, y)` is where a point of
+/// a frame lies across the ellipse, from 0 at its center to 1 on its outline, and `across(x)` where it lies from its
+/// left end (0) to its right one (1).
+const SUBJECT: (f64, f64, f64, f64) = (80.0, 60.0, 55.0, 40.0);
+
+fn inside(x: usize, y: usize) -> f64 {
+    let (cx, cy, rx, ry) = SUBJECT;
+    ((x as f64 + 0.5 - cx) / rx).hypot((y as f64 + 0.5 - cy) / ry)
+}
+
+fn across(x: usize) -> f64 {
+    let (cx, _, rx, _) = SUBJECT;
+    (x as f64 + 0.5 - (cx - rx)) / (2.0 * rx)
+}
+
+/// A project in `dir` with a stack of the subject scene, focused from depth 0 to 0.5, aligned.
+fn subject_stack(dir: &Path) -> Engine {
+    use florastack_engine::{ColorSpace, Image};
+    let (w, h) = (160 + 2 * MARGIN, 120 + 2 * MARGIN);
+    let hash = |x: usize, y: usize, c: usize| {
+        let mut v = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+            ^ (c as u64).wrapping_mul(0x1656_67B1_9E37_79F9);
+        v ^= v >> 29;
+        v = v.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        v ^= v >> 32;
+        (v % 1000) as f32 / 1000.0
+    };
+    let frame = |x: usize, y: usize| (x.saturating_sub(MARGIN), y.saturating_sub(MARGIN));
+    let sharp = Image::from_fn(w, h, 3, ColorSpace::LINEAR, |x, y, c| {
+        let (fx, fy) = frame(x, y);
+        if inside(fx, fy) <= 1.0 { 0.15 + 0.6 * hash(x / 2, y / 2, c) } else { 0.3 + 0.05 * (y as f32 / h as f32) }
+    })
+    .unwrap();
+    let depth = Image::from_fn(w, h, 1, ColorSpace::LINEAR, |x, y, _| {
+        let (fx, fy) = frame(x, y);
+        if inside(fx, fy) <= 1.0 { (0.5 * across(fx)).clamp(0.0, 0.5) as f32 } else { 1.0 }
+    })
+    .unwrap();
+    // With a camera's noise: on frames without any, the smooth background's least contrast stands out too.
+    // Defocus that grows fast enough with depth that neighboring frames differ by 2 px of blur.
+    let params = florastack_core::testutil::StackParams {
+        read_noise: 0.005,
+        shot_noise: 0.01,
+        blur_per_depth: 30.0,
+        ..breathing(8, 0.0, Some((0.0, 0.5)), 23)
+    };
+    let files = scene_frames(dir, "subject", &sharp, &depth, &params);
+    let mut engine = Engine::new(config(dir));
+    run(&mut engine, "project.new", &format!(r#"{{ "name": "Focus", "folder": {} }}"#, quoted(dir)));
+    run(&mut engine, "project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, path_list(&files)));
+    run(&mut engine, "align.run", "{}");
+    engine
+}
+
+/// The output with only a mask of `shape` darkening it by a stop, against the output without it: the ratio where
+/// `keep` selects.
+fn darkened_by(
+    engine: &mut Engine,
+    dir: &Path,
+    output: u64,
+    shape: &florastack_engine::Value,
+) -> impl Fn(&dyn Fn(usize, usize) -> bool) -> f64 + use<> {
+    run(engine, "adjust.reset", &json!({"output": output}).to_string());
+    let plain = saved(engine, output, &dir.join("plain.tif"));
+    run(engine, "adjust.addMask", &json!({"output": output, "mask": {"components": [{"shape": shape}], "adjust": {"exposure": -1}}}).to_string());
+    let out = saved(engine, output, &dir.join("masked.tif"));
+    move |keep: &dyn Fn(usize, usize) -> bool| mean_where(&out, keep) / mean_where(&plain, keep)
+}
+
+#[test]
+fn focus_masks_select_the_subject_and_its_depths() {
+    let dir = TempDir::new("adjust-focus-masks");
+    let mut engine = subject_stack(dir.path());
+    let pyramid = run(&mut engine, "stack.pyramid", "{}")["output"].as_u64().unwrap();
+    let depth_map = run(&mut engine, "stack.depthMap", "{}")["output"].as_u64().unwrap();
+    // The subject's inside and the background, away from the outline the masks soften.
+    let subject = |x: usize, y: usize| inside(x, y) < 0.75;
+    let background = |x: usize, y: usize| inside(x, y) > 1.35;
+    let near = |x: usize, y: usize| inside(x, y) < 0.8 && across(x) < 0.25;
+    let far = |x: usize, y: usize| inside(x, y) < 0.8 && across(x) > 0.75;
+    // The session: the pyramid's depth is measured once and kept as its map; the depth map's output needs none.
+    let opened = run(&mut engine, "adjust.open", &json!({"output": depth_map}).to_string());
+    assert_eq!(opened["depth"], true);
+    let opened = run(&mut engine, "adjust.open", &json!({"output": pyramid}).to_string());
+    assert_eq!(opened["depth"], false);
+    assert!(!engine.adjust().unwrap().has_depth());
+    run(
+        &mut engine,
+        "adjust.addMask",
+        &json!({"output": pyramid, "mask": {"components": [{"shape": {"kind": "depth", "from": 0, "to": 0.5, "feather": 0.1}}], "adjust": {"exposure": -1}}})
+            .to_string(),
+    );
+    let e = engine.dispatch("adjust.preview", json!({"width": 80, "height": 60})).and_then(|d| match d {
+        florastack_engine::Dispatched::Started(job) => engine.wait(job),
+        florastack_engine::Dispatched::Done(v) => Ok(v),
+    });
+    assert_eq!(e.unwrap_err().code(), "unavailable", "the depth mask waits for the depth map");
+    let mapped = run(&mut engine, "adjust.mapDepth", "{}");
+    assert_eq!((&mapped["measured"], &mapped["width"]), (&json!(true), &json!(40)), "a quarter of the output: {mapped}");
+    assert!(engine.adjust().unwrap().has_depth());
+    assert_eq!(run(&mut engine, "adjust.mapDepth", "{}")["measured"], false, "kept as the output's map");
+    let opened = run(&mut engine, "adjust.open", &json!({"output": pyramid}).to_string());
+    assert_eq!(opened["depth"], true, "read back from its map");
+    run(&mut engine, "adjust.preview", r#"{ "width": 80, "height": 60 }"#);
+    for (name, output) in [("depth map", depth_map), ("pyramid", pyramid)] {
+        // The subject is found in the output itself. The pyramid's export measures its depth from the frames itself; the
+        // depth map has its own.
+        let ratio = darkened_by(&mut engine, dir.path(), output, &json!({"kind": "subject"}));
+        let (s, b) = (ratio(&subject), ratio(&background));
+        println!("{name}: subject {s:.3}, background {b:.3}");
+        assert!(s < 0.6 && (b - 1.0).abs() < 0.03, "{name}: subject {s}, background {b}");
+        let ratio = darkened_by(&mut engine, dir.path(), output, &json!({"kind": "background"}));
+        let (s, b) = (ratio(&subject), ratio(&background));
+        assert!(b < 0.6 && (s - 1.0).abs() < 0.05, "{name}: background mask: subject {s}, background {b}");
+        // A range around the depth of the subject's left end, which the depth map tells (the stack's first frame may be
+        // its nearest or its farthest): the left end darkens, the right end and the background don't.
+        let map = if output == depth_map { "depth" } else { "focus-depth" };
+        if output == pyramid {
+            run(&mut engine, "adjust.open", &json!({"output": pyramid}).to_string());
+            run(&mut engine, "adjust.mapDepth", "{}");
+        }
+        let (left, right) = (depth_where(&engine, output, map, &near), depth_where(&engine, output, map, &far));
+        assert!((left - right).abs() > 0.3, "{name}: the depth runs across the subject: {left} to {right}");
+        let range = json!({"kind": "depth", "from": (left - 0.15).max(0.0), "to": (left + 0.15).min(1.0), "feather": 0.05});
+        let ratio = darkened_by(&mut engine, dir.path(), output, &range);
+        let (n, f, b) = (ratio(&near), ratio(&far), ratio(&background));
+        println!("{name}: depth {left:.2} (left) to {right:.2} (right), a range around the left: left {n:.3}, right {f:.3}, background {b:.3}");
+        assert!(n < 0.65 && (f - 1.0).abs() < 0.05 && (b - 1.0).abs() < 0.03, "{name}: left {n}, right {f}, background {b}");
+    }
+}
+
+/// The mean of output `id`'s 16-bit map `name` where `keep` selects (output pixels; the map may be smaller), as a
+/// fraction.
+fn depth_where(engine: &Engine, id: u64, name: &str, keep: &dyn Fn(usize, usize) -> bool) -> f64 {
+    let folder = engine.project_path().unwrap();
+    let project = engine.project().unwrap();
+    let output = project.outputs.iter().find(|o| o.id().get() == id).unwrap();
+    let reference = output.maps.iter().find(|(n, _)| n.as_str() == name).unwrap().1;
+    let decoded = florastack_codecs::read_file(&reference.path.resolve(folder), &florastack_engine::ReadOptions::default()).unwrap();
+    let florastack_engine::AnyImage::U16(map) = decoded.image else { panic!("a 16-bit map") };
+    let (scale_x, scale_y) = (map.width() as f64 / 160.0, map.height() as f64 / 120.0);
+    let (mut sum, mut n) = (0.0, 0.0);
+    for y in 0..120 {
+        for x in 0..160 {
+            if keep(x, y) {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Within the map.
+                let (mx, my) = ((x as f64 * scale_x) as usize, (y as f64 * scale_y) as usize);
+                sum += f64::from(map.get(mx, my, 0).unwrap()) / 65535.0;
+                n += 1.0;
+            }
+        }
+    }
+    sum / n
 }

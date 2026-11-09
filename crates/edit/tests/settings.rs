@@ -3,7 +3,7 @@
 //! render without a panic.
 
 use florastack_core::{ColorSpace, Image};
-use florastack_edit::{Adjustments, Component, Focus, Global, Local, Mask, Op, Renderer, Request, Shape, Size, Stroke};
+use florastack_edit::{Adjustments, Component, Global, Local, Mask, Op, Renderer, Request, Shape, Size, Stroke};
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -23,8 +23,8 @@ fn defaults_are_neutral_and_partial_json_takes_them() {
     ]}))
     .unwrap();
     assert!(a.is_neutral());
-    // The visible mask's subject still needs the focus: its overlay shows it.
-    assert!(a.needs_focus());
+    // The visible mask's subject is still found: its overlay shows it. No mask needs the depth map.
+    assert!(a.uses_subject() && !a.needs_depth());
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn json_round_trips_with_every_shape() {
         Shape::Color { samples: vec![[0.6, 0.1, -0.05]], refine: 40.0 },
         Shape::Subject,
         Shape::Background,
-        Shape::Depth { near: 0.25, far: 0.5, feather: 0.125 },
+        Shape::Depth { from: 0.25, to: 0.5, feather: 0.125 },
     ];
     let a = Adjustments {
         global: Global { exposure: 0.25, temperature: -10.0, vibrance: 20.0, ..Global::default() },
@@ -53,7 +53,7 @@ fn json_round_trips_with_every_shape() {
     };
     a.validate().unwrap();
     let value = serde_json::to_value(&a).unwrap();
-    assert_eq!(value["masks"][0]["components"][8]["shape"], json!({"kind": "depth", "near": 0.25, "far": 0.5, "feather": 0.125}));
+    assert_eq!(value["masks"][0]["components"][8]["shape"], json!({"kind": "depth", "from": 0.25, "to": 0.5, "feather": 0.125}));
     assert_eq!(serde_json::from_value::<Adjustments>(value).unwrap(), a);
 }
 
@@ -120,7 +120,7 @@ fn shape() -> impl Strategy<Value = Shape> {
             .prop_map(|(c, refine)| Shape::Color { samples: vec![c], refine }),
         Just(Shape::Subject),
         Just(Shape::Background),
-        (finite(0.0, 0.5), finite(0.5, 1.0), finite(0.0, 1.0)).prop_map(|(near, far, feather)| Shape::Depth { near, far, feather }),
+        (finite(0.0, 0.5), finite(0.5, 1.0), finite(0.0, 1.0)).prop_map(|(near, far, feather)| Shape::Depth { from: near, to: far, feather }),
     ]
 }
 
@@ -183,7 +183,7 @@ proptest! {
     fn accepted_adjustments_render(a in adjustments(), w in 1usize..40, h in 1usize..40) {
         let image = Image::from_fn(w, h, 3, ColorSpace::LINEAR, |x, y, c| ((x * 7 + y * 13 + c * 5) % 17) as f32 / 16.0).unwrap();
         let maps = Image::from_fn(w, h, 1, ColorSpace::LINEAR, |x, _, _| x as f32 / w as f32).unwrap();
-        let r = Renderer::new(&image).unwrap().with_focus(&Focus { subject: maps.clone(), depth: maps }).unwrap();
+        let r = Renderer::new(&image).unwrap().with_depth(&maps).unwrap();
         prop_assume!(a.validate().is_ok());
         for request in [Request::FULL, Request { size: Size::Fit { width: 16, height: 16 }, draft: true, overlay: Some(1) }] {
             let out = r.render(&a, &request).unwrap();
