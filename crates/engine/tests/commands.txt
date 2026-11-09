@@ -9,6 +9,7 @@ adjust.reset
 adjust.sampleColor
 adjust.set
 adjust.setMask
+adjust.stroke
 align.get
 align.info
 align.reset

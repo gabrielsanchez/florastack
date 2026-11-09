@@ -298,12 +298,13 @@ pub enum Shape {
         /// The strokes, in the order they were painted.
         strokes: Vec<Stroke>,
     },
-    /// The pixels in a range of brightness.
+    /// The pixels in a range of brightness, measured in stops: 0 is 8 stops below white (or darker), 1 is white, and
+    /// each eighth is a stop.
     Luminance {
         /// The darkest brightness it selects fully, from 0 to 1.
         #[schemars(range(min = 0.0, max = 1.0))]
         low: f64,
-        /// The brightest it selects fully, from 0 to 1.
+        /// The brightest it selects fully, from 0 to 1; at 1, everything brighter than white too.
         #[schemars(range(min = 0.0, max = 1.0))]
         high: f64,
         /// How far below `low` the selection fades out, from 0 to 1.

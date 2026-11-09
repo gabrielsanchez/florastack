@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use florastack_core::Monitor;
-use florastack_edit::{Adjustments, Mask, Request, Size};
+use florastack_edit::{Adjustments, Component, Mask, Op, Request, Shape, Size, Stroke};
 use florastack_project::{Edit, OutputId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,21 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 .undoable()
                 .examples(&[r#"{ "output": 3, "mask": 2, "index": 0 }"#]),
             move_mask,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.stroke", "Brush stroke", "Paints a brush stroke onto a mask, as one undo step.")
+                .help(
+                    "The stroke goes on top of the mask's brush component `component` (an index into its components), or \
+                     of its last brush component, or of a new one added when it has none. Its `points` are fractions \
+                     of the output's width and height, its `size` a fraction of its long edge; `erase` takes away what \
+                     earlier strokes of the component painted.",
+                )
+                .undoable()
+                .examples(&[
+                    r#"{ "output": 3, "mask": 1, "stroke": { "points": [[0.2, 0.3], [0.25, 0.32], [0.3, 0.36]], "size": 0.04, "feather": 60, "flow": 100 } }"#,
+                    r#"{ "output": 3, "mask": 1, "stroke": { "points": [[0.22, 0.31]], "size": 0.02, "erase": true }, "component": 0 }"#,
+                ]),
+            stroke,
         ),
         CommandSpec::job(
             Meta::new("adjust.open", "Open for adjusting", "Opens an output for adjusting, so that `adjust.preview` can show its adjustments.")
@@ -324,6 +339,67 @@ fn move_mask(session: &mut Session, p: MoveParams) -> Result<MaskChanged, Comman
         Ok(())
     })?;
     Ok(MaskChanged { mask: p.mask, info: AdjustInfo::new(p.output, adjustments) })
+}
+
+/// A stroke and the mask it goes onto.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct StrokeParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// The mask's id, as `adjust.get` lists it.
+    mask: u32,
+    /// The stroke.
+    stroke: Stroke,
+    /// The brush component it goes onto, by its index among the mask's components; its last brush component when
+    /// left out, or a new one when it has none.
+    #[serde(default)]
+    component: Option<usize>,
+}
+
+impl Params for StrokeParams {
+    fn check(&self) -> Result<(), Invalid> {
+        let shape = Shape::Brush { strokes: vec![self.stroke.clone()] };
+        let mask = Mask { components: vec![Component { op: Op::Add, invert: false, shape }], ..Mask::default() };
+        Adjustments { masks: vec![mask], ..Adjustments::default() }.validate().map_err(|e| invalid(&e))
+    }
+}
+
+/// The stroke painted.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Stroked {
+    /// The mask's id, and the index of the component the stroke went onto.
+    mask: u32,
+    component: usize,
+    /// How many strokes the component has now.
+    strokes: usize,
+}
+
+fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandError> {
+    let (mut component, mut strokes) = (0, 0);
+    change(session, p.output, |a| {
+        let mask = a.mask_mut(p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+        let brush = |c: &Component| matches!(c.shape, Shape::Brush { .. });
+        let index = match p.component {
+            Some(i) if mask.components.get(i).is_some_and(brush) => i,
+            Some(i) => return Err(CommandError::NotFound { what: format!("brush component {i} of mask {}", p.mask) }),
+            None => {
+                if let Some(i) = mask.components.iter().rposition(brush) {
+                    i
+                } else {
+                    mask.components.push(Component { op: Op::Add, invert: false, shape: Shape::Brush { strokes: Vec::new() } });
+                    mask.components.len() - 1
+                }
+            }
+        };
+        if let Some(Component { shape: Shape::Brush { strokes: list }, .. }) = mask.components.get_mut(index) {
+            list.push(p.stroke);
+            (component, strokes) = (index, list.len());
+        }
+        Ok(())
+    })?;
+    Ok(Stroked { mask: p.mask, component, strokes })
 }
 
 fn open_session(session: &Session) -> Result<&AdjustSession, CommandError> {

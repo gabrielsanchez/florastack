@@ -173,3 +173,89 @@ fn a_sidecar_replays_the_adjustments() {
     let written = result["result"]["path"].as_str().unwrap();
     assert_eq!(std::fs::read(written).unwrap(), std::fs::read(&path).unwrap(), "the same file");
 }
+
+/// The mean of the pixels `keep` selects, over the color channels.
+fn mean_where(image: &florastack_engine::Image<f32>, keep: impl Fn(usize, usize) -> bool) -> f64 {
+    let (mut sum, mut n) = (0.0, 0.0);
+    for y in 0..image.height() {
+        for x in 0..image.width() {
+            if keep(x, y) {
+                let p = image.pixel(x, y).unwrap();
+                sum += p.iter().take(3).map(|v| f64::from(*v)).sum::<f64>();
+                n += 3.0;
+            }
+        }
+    }
+    sum / n
+}
+
+#[test]
+fn every_shape_selects_its_region_through_the_commands() {
+    let dir = TempDir::new("adjust-shapes");
+    let (mut engine, output) = stacked(dir.path());
+    let plain = saved(&mut engine, output, &dir.path().join("plain.tif"));
+    let (w, h) = (plain.width(), plain.height());
+    // Each shape darkens by a stop where it selects: the ratio to the plain output there, and elsewhere.
+    let darkened = |engine: &mut Engine, name: &str, shape: florastack_engine::Value| {
+        run(engine, "adjust.reset", &json!({"output": output}).to_string());
+        let mask = json!({"components": if shape.is_null() { json!([]) } else { json!([{"shape": shape}]) }, "adjust": {"exposure": -1}});
+        let added = run(engine, "adjust.addMask", &json!({"output": output, "mask": mask}).to_string());
+        if shape.is_null() {
+            // A brush: two strokes along the middle row, the second erasing its right end.
+            let id = &added["mask"];
+            run(
+                engine,
+                "adjust.stroke",
+                &json!({"output": output, "mask": id, "stroke": {"points": [[0.1, 0.5], [0.9, 0.5]], "size": 0.06, "feather": 0}}).to_string(),
+            );
+            let erased = run(
+                engine,
+                "adjust.stroke",
+                &json!({"output": output, "mask": id, "stroke": {"points": [[0.75, 0.5], [0.95, 0.5]], "size": 0.08, "feather": 0, "erase": true}})
+                    .to_string(),
+            );
+            assert_eq!((&erased["component"], &erased["strokes"]), (&json!(0), &json!(2)), "{erased}");
+        }
+        saved(engine, output, &dir.path().join(format!("{name}.tif")))
+    };
+    let ratio = |image: &florastack_engine::Image<f32>, keep: &dyn Fn(usize, usize) -> bool| mean_where(image, keep) / mean_where(&plain, keep);
+    let darker = |r: f64| r < 0.6;
+    let same = |r: f64| (r - 1.0).abs() < 0.01;
+
+    let out = darkened(&mut engine, "whole", json!({"kind": "whole"}));
+    assert!(darker(ratio(&out, &|_, _| true)));
+
+    let out = darkened(&mut engine, "linear", json!({"kind": "linear", "start": [0, 0.3], "end": [0, 0.4]}));
+    assert!(darker(ratio(&out, &|_, y| y < h * 3 / 10)) && same(ratio(&out, &|_, y| y > h / 2)));
+
+    let out =
+        darkened(&mut engine, "radial", json!({"kind": "radial", "center": [0.5, 0.5], "radius_x": 0.2, "radius_y": 0.2, "angle": 0, "feather": 0}));
+    let distance = |x: usize, y: usize| (x as f64 - w as f64 / 2.0).hypot(y as f64 - h as f64 / 2.0) / w as f64;
+    assert!(darker(ratio(&out, &|x, y| distance(x, y) < 0.15)) && same(ratio(&out, &|x, y| distance(x, y) > 0.3)));
+
+    let out = darkened(&mut engine, "brush", florastack_engine::Value::Null);
+    let row = |x0: usize, x1: usize| move |x: usize, y: usize| (x0..x1).contains(&x) && y.abs_diff(h / 2) < 3;
+    assert!(darker(ratio(&out, &row(w / 5, w * 3 / 5))), "painted");
+    assert!(same(ratio(&out, &row(w * 4 / 5, w * 17 / 20))), "erased");
+    assert!(same(ratio(&out, &|_, y: usize| y.abs_diff(h / 2) > h / 4)), "never painted");
+
+    // Brightness: the brightest tenth of the pixels against the darkest third.
+    let mut luma: Vec<f64> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| mean_where(&plain, |i, j| (i, j) == (x, y))).collect();
+    luma.sort_by(f64::total_cmp);
+    let (dark, bright) = (luma[luma.len() / 3], luma[luma.len() * 9 / 10]);
+    // On the range's scale, a stop an eighth: 0 eight stops below white, 1 white.
+    let stops = |v: f64| ((v.log2() + 8.0) / 8.0).clamp(0.0, 1.0);
+    let low = f64::midpoint(stops(dark), stops(bright));
+    let out = darkened(&mut engine, "luminance", json!({"kind": "luminance", "low": low, "high": 1.0, "low_feather": 0.01, "high_feather": 0}));
+    let value = |x: usize, y: usize| plain.pixel(x, y).unwrap().iter().take(3).map(|v| f64::from(*v)).sum::<f64>() / 3.0;
+    let (r_bright, r_dark) = (ratio(&out, &|x, y| value(x, y) >= bright), ratio(&out, &|x, y| value(x, y) <= dark));
+    assert!(r_bright < r_dark && (r_dark - 1.0).abs() < 0.05, "bright {r_bright}, dark {r_dark}");
+
+    // A color sampled at the center: its pixels darken more than the image does.
+    run(&mut engine, "adjust.reset", &json!({"output": output}).to_string());
+    run(&mut engine, "adjust.open", &json!({"output": output}).to_string());
+    let color = run(&mut engine, "adjust.sampleColor", r#"{ "x": 0.5, "y": 0.5 }"#)["color"].clone();
+    let out = darkened(&mut engine, "color", json!({"kind": "color", "samples": [color], "refine": 50}));
+    let center = |x: usize, y: usize| x.abs_diff(w / 2) <= 1 && y.abs_diff(h / 2) <= 1;
+    assert!(ratio(&out, &center) < ratio(&out, &|_, _| true), "{} {}", ratio(&out, &center), ratio(&out, &|_, _| true));
+}

@@ -28,6 +28,10 @@ use lightcraft_raster::{Plane, Rgb32f};
 use crate::error::EditError;
 use crate::settings::{Adjustments, Component, Global, Local, MAX_DEPTH_RANGES, Mask, Op, Shape, Stroke};
 
+/// How many stops white is above middle gray (0.18), from which LightCraft's luminance ranges count: their 0 to 1 spans
+/// 8 stops below middle gray to 4 above it.
+const WHITE_OVER_GREY: f64 = 2.473_931_188_332_412;
+
 /// The mattes that hold depth ranges, in order, with the pipeline shape that selects each.
 const DEPTH_SLOTS: [MatteKind; MAX_DEPTH_RANGES] = [MatteKind::Skin, MatteKind::Hair, MatteKind::Teeth, MatteKind::Glasses, MatteKind::Sky];
 
@@ -413,7 +417,12 @@ fn component(c: &Component, ranges: &[[f64; 3]]) -> MaskComponent {
         }
         Shape::Brush { strokes } => MaskShape::Brush { strokes: strokes.iter().map(stroke).collect() },
         Shape::Luminance { low, high, low_feather, high_feather } => {
-            MaskShape::LuminanceRange { lo: *low, hi: *high, lo_feather: *low_feather, hi_feather: *high_feather }
+            // LightCraft's scale runs from 8 stops below middle gray to 4 above it; FloraStack's from 8 stops below
+            // white to white, `high` at white taking in everything brighter.
+            let level = |v: f64| (8.0 * v + WHITE_OVER_GREY) / 12.0;
+            let width = |v: f64| 8.0 * v / 12.0;
+            let hi = if *high >= 1.0 { 1.0 } else { level(*high) };
+            MaskShape::LuminanceRange { lo: level(*low), hi, lo_feather: width(*low_feather), hi_feather: width(*high_feather) }
         }
         Shape::Color { samples, refine } => MaskShape::ColorRange { samples: samples.clone(), refine: *refine },
         Shape::Subject => MaskShape::Subject,
