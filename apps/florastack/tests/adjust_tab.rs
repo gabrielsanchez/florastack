@@ -96,3 +96,36 @@ fn masks_are_added_moved_painted_and_undone_from_the_tab() {
     drop(harness);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_ai_mask_asks_for_the_model_it_needs() {
+    let (dir, mut harness) = app("adjust-tab-ai");
+    drop_files(&mut harness, &frames(&dir.join("photos")));
+    until(&mut harness, "the frames", |app| app.shell.frames.len() == 4);
+    harness.get_by_label("Align").click();
+    until(&mut harness, "the alignment", |app| app.aligned() && !app.shell.busy());
+    harness.get_by_label("Stack frames").click();
+    until(&mut harness, "the output", |app| app.shell.outputs.len() == 1 && !app.shell.busy());
+    harness.get_by_label("Adjust").click();
+    until(&mut harness, "the output's preview", |app| app.adjust.is_shown() && !app.shell.busy());
+
+    // Subject (AI): a mask waiting for its first click, and, without the model, how to get it.
+    harness.get_by_label("Add mask").click();
+    harness.run_steps(2);
+    harness.get_by_label("Subject (AI)").click();
+    harness.run_steps(2);
+    until(&mut harness, "the AI mask", |app| masks(app).len() == 1);
+    assert!(matches!(harness.state().adjust.ai_pending, Some(florastack_app::adjust_tab::AiPending::Clicks(_))));
+    harness.get_by_label("Choose the model's folder…");
+    harness.get_by_label("Download page");
+    // Background (AI) is the same selection, inverted.
+    harness.get_by_label("Add mask").click();
+    harness.run_steps(2);
+    harness.get_by_label("Background (AI)").click();
+    harness.run_steps(2);
+    until(&mut harness, "the second AI mask", |app| masks(app).len() == 2);
+    assert!(masks(harness.state())[1].invert);
+    assert!(harness.state().shell.notices.iter().all(|n| !n.error), "{:?}", harness.state().shell.notices);
+    drop(harness);
+    let _ = std::fs::remove_dir_all(dir);
+}

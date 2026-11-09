@@ -7,7 +7,7 @@
 //! mask's gradients and ellipses; dragging on the image paints the selected mask's brush.
 
 use egui::{Pos2, Rect, RichText, Sense, Vec2};
-use florastack_engine::adjust::{Component, Global, Local, MAX_SAMPLES, Mask, Op, Settings, Shape, Stroke};
+use florastack_engine::adjust::{Click, Component, Global, Local, MAX_SAMPLES, Mask, Op, Settings, Shape, Stroke};
 use florastack_engine::json;
 
 use crate::app::FloraStackApp;
@@ -62,6 +62,17 @@ fn shape_label(shape: &Shape) -> &'static str {
     }
 }
 
+/// The AI selections in Add mask: their kinds and labels' keys.
+pub const AI_SHAPES: [(&str, &str); 3] =
+    [("ai-subject", "adjust-shape-object"), ("ai-background", "adjust-shape-ai-background"), ("ai-describe", "adjust-shape-described")];
+
+/// An AI mask waiting for its first selection: from clicks, or from a description.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiPending {
+    Clicks(u32),
+    Description(u32),
+}
+
 /// A handle of the selected mask being dragged: the component, and which of its points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Handle {
@@ -105,6 +116,12 @@ pub struct AdjustUi {
     stroke: Vec<[f64; 2]>,
     /// The next click on the image samples a color for the selected mask's color range.
     pub picking: bool,
+    /// An AI mask added and waiting for its first selection, and the description being typed.
+    pub ai_pending: Option<AiPending>,
+    pub description: String,
+    /// What `adjust.model` said, and the project revision it was asked at.
+    model: Option<florastack_engine::Value>,
+    model_asked: Option<u64>,
     /// Where the image was last drawn, on screen (the tests paint into it).
     pub image_rect: Option<Rect>,
 }
@@ -131,6 +148,10 @@ impl Default for AdjustUi {
             erase: false,
             stroke: Vec::new(),
             picking: false,
+            ai_pending: None,
+            description: String::new(),
+            model: None,
+            model_asked: None,
             image_rect: None,
         }
     }
@@ -224,6 +245,28 @@ fn set_mask(app: &mut FloraStackApp, mask: &Mask, key: &str, dragging: bool) {
     }
     app.shell.run_with("adjust.setMask", json!({ "output": output, "mask": mask }), coalesce);
     app.adjust.want_preview(dragging);
+}
+
+/// Whether this build runs the AI model (not in the browser).
+fn ai_available(app: &FloraStackApp) -> bool {
+    app.shell.engine().registry().get("adjust.select").is_some()
+}
+
+/// Adds an empty AI mask of `kind` (`ai-subject`, `ai-background` or `ai-describe`), selected and waiting for its
+/// first selection.
+pub fn add_ai_mask(app: &mut FloraStackApp, kind: &str) {
+    let Some(output) = app.adjust.output else { return };
+    let name = tr(AI_SHAPES.iter().find(|(k, _)| *k == kind).map_or("adjust-shape-object", |(_, label)| label));
+    let mask = Mask { name, invert: kind == "ai-background", ..Mask::default() };
+    if let Some(added) = app.shell.run("adjust.addMask", json!({ "output": output, "mask": mask })) {
+        let id = added["mask"].as_u64().and_then(|id| u32::try_from(id).ok());
+        app.adjust.selected = id;
+        if let Ok(settings) = serde_json::from_value(added["adjustments"].clone()) {
+            app.adjust.settings = settings;
+        }
+        app.adjust.ai_pending = id.map(|id| if kind == "ai-describe" { AiPending::Description(id) } else { AiPending::Clicks(id) });
+        app.adjust.description.clear();
+    }
 }
 
 /// Adds a mask of one shape of `kind`, and selects it.
@@ -393,6 +436,15 @@ fn masks(app: &mut FloraStackApp, ui: &mut egui::Ui, output: u64) {
     }
     ui.horizontal(|ui| {
         ui.menu_button(tr("adjust-add-mask"), |ui| {
+            if ai_available(app) {
+                for (kind, label) in AI_SHAPES {
+                    if ui.button(tr(label)).clicked() {
+                        add_ai_mask(app, kind);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+            }
             for (kind, label) in SHAPES {
                 if ui.button(tr(label)).clicked() {
                     add_mask(app, kind);
@@ -570,8 +622,93 @@ fn shape_settings(ui: &mut egui::Ui, shape: &mut Shape) -> Option<(&'static str,
     key
 }
 
-/// The selected mask's tools: the brush's settings, picking a color, mapping the depth.
+/// What the AI does for the selected mask: selecting from clicks, or from a description; and the model's setup when
+/// it isn't installed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AiUse {
+    Clicks,
+    Description,
+}
+
+/// The AI use of `mask`: from its shapes, or from its waiting to be selected.
+fn ai_use(app: &FloraStackApp, mask: &Mask) -> Option<AiUse> {
+    if mask.components.iter().any(|c| matches!(c.shape, Shape::Object { .. })) || app.adjust.ai_pending == Some(AiPending::Clicks(mask.id)) {
+        Some(AiUse::Clicks)
+    } else if mask.components.iter().any(|c| matches!(c.shape, Shape::Described { .. }))
+        || app.adjust.ai_pending == Some(AiPending::Description(mask.id))
+    {
+        Some(AiUse::Description)
+    } else {
+        None
+    }
+}
+
+/// What `adjust.model` says, asked again when the project changed or a folder was just checked.
+fn model_info(app: &mut FloraStackApp) -> florastack_engine::Value {
+    let revision = app.shell.revision;
+    if app.adjust.model.is_none() || app.adjust.model_asked != Some(revision) {
+        app.adjust.model = app.shell.run("adjust.model", json!({}));
+        app.adjust.model_asked = Some(revision);
+    }
+    app.adjust.model.clone().unwrap_or_default()
+}
+
+/// The AI part of the selected mask's panel.
+fn ai(app: &mut FloraStackApp, ui: &mut egui::Ui, mask: &Mask) {
+    let Some(using) = ai_use(app, mask) else { return };
+    ui.label(RichText::new(tr("adjust-ai")).strong());
+    if app.shell.running(&["adjust.setModel"]) {
+        ui.weak(tr("adjust-model-checking"));
+        app.adjust.model_asked = None;
+        return;
+    }
+    let model = model_info(app);
+    if model["installed"] != json!(true) {
+        ui.label(tr("adjust-model-missing"));
+        if let Some(problem) = model["problem"].as_str() {
+            ui.colored_label(ui.visuals().warn_fg_color, problem);
+        }
+        ui.horizontal(|ui| {
+            if ui.link(tr("adjust-model-download")).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(model["download"].as_str().unwrap_or_default()));
+            }
+            if ui.link(tr("adjust-model-license")).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(model["license"].as_str().unwrap_or_default()));
+            }
+        });
+        ui.weak(tr("adjust-model-steps"));
+        if ui.button(tr("adjust-model-choose")).on_hover_text(tr("tip-adjust-model-choose")).clicked()
+            && let Some(folder) = crate::dialogs::read_folder(None)
+        {
+            app.shell.run("adjust.setModel", json!({ "folder": folder }));
+            app.adjust.model_asked = None;
+        }
+        return;
+    }
+    if app.shell.running(&["adjust.select", "adjust.describe"]) {
+        ui.weak(tr("adjust-ai-working"));
+        return;
+    }
+    match using {
+        AiUse::Clicks => {
+            let has = mask.components.iter().any(|c| matches!(c.shape, Shape::Object { selection: Some(_), .. }));
+            ui.weak(if has { tr("adjust-object-selected") } else { tr("adjust-object-hint") });
+        }
+        AiUse::Description => {
+            let response = ui.add(egui::TextEdit::singleline(&mut app.adjust.description).hint_text(tr("adjust-describe-hint")));
+            let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (ui.button(tr("adjust-describe-select")).clicked() || enter) && !app.adjust.description.trim().is_empty() {
+                let text = app.adjust.description.trim().to_owned();
+                app.shell.run("adjust.describe", json!({ "mask": mask.id, "text": text }));
+                app.adjust.ai_pending = None;
+            }
+        }
+    }
+}
+
+/// The selected mask's tools: the brush's settings, picking a color, mapping the depth, the AI.
 fn tools(app: &mut FloraStackApp, ui: &mut egui::Ui, mask: &Mask) {
+    ai(app, ui, mask);
     let has = |f: fn(&Shape) -> bool| mask.components.iter().any(|c| f(&c.shape));
     if has(|s| matches!(s, Shape::Brush { .. })) {
         let a = &mut app.adjust;
@@ -719,6 +856,11 @@ fn interact(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response, i
         app.adjust.want_preview(false);
         return;
     }
+    // Selecting with the AI: a click on the image selects there; an Alt-click leaves the part there out.
+    if ai_use(app, &mask) == Some(AiUse::Clicks) && !app.adjust.picking {
+        select_by_clicks(app, ui, response, (image, at), &mask);
+        return;
+    }
     let brush = mask.components.iter().any(|c| matches!(c.shape, Shape::Brush { .. }));
     let a = &mut app.adjust;
     // Painting the brush.
@@ -742,6 +884,38 @@ fn interact(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response, i
             }
             set_mask(app, &m, "sample", false);
         }
+    }
+}
+
+/// The selected mask's AI clicks, drawn; a click adds one and asks the model again (`adjust.select`, with every click).
+fn select_by_clicks(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response, (image, at): (Rect, Option<Pos2>), mask: &Mask) {
+    let clicks: Vec<Click> = mask
+        .components
+        .iter()
+        .find_map(|c| if let Shape::Object { clicks, .. } = &c.shape { Some(clicks.clone()) } else { None })
+        .unwrap_or_default();
+    let painter = ui.painter().with_clip_rect(image);
+    for c in &clicks {
+        let color = if c.include { egui::Color32::from_rgb(40, 200, 90) } else { egui::Color32::from_rgb(230, 40, 40) };
+        painter.circle(to_screen(image, c.at), 5.0, color, egui::Stroke::new(1.5, egui::Color32::WHITE));
+    }
+    if at.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    let busy = app.shell.running(&["adjust.select", "adjust.describe", "adjust.setModel"]);
+    if response.clicked()
+        && !busy
+        && let Some(p) = at
+    {
+        let leave_out = ui.input(|i| i.modifiers.alt);
+        let mut clicks = clicks;
+        if clicks.is_empty() && leave_out {
+            return;
+        }
+        clicks.push(Click { at: to_image(image, p), include: !leave_out });
+        clicks.truncate(florastack_engine::adjust::MAX_CLICKS);
+        app.shell.run("adjust.select", json!({ "mask": mask.id, "clicks": clicks }));
+        app.adjust.ai_pending = None;
     }
 }
 

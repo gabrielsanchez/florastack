@@ -106,8 +106,8 @@
   in layers, with full undo.
 - **Adjustments and masks**: exposure, white balance, contrast, highlights and shadows, texture, clarity, dehaze,
   vibrance, saturation, sharpening and noise reduction, for the whole image and within masks: the subject or its
-  background, found from what the stack has in focus, a range of its depth, gradients, brush strokes, luminance and color
-  ranges.
+  background, outlined from a click by Meta's SAM 3 model (which you download separately), a range of the stack's
+  depth, gradients, brush strokes, luminance and color ranges.
 - **Camera RAW** files developed linearly for the whole stack, and TIFF, JPEG, PNG, WebP, OpenEXR and DNG out with
   their metadata; depth and confidence maps, calibrated depth, scale bars, 3D reliefs and stereo pairs.
 - **Batches, watch folders and tethered capture**, a command-line tool, MCP and Python bindings, all over the same
