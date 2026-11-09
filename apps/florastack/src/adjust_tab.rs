@@ -175,10 +175,11 @@ pub fn sync(app: &mut FloraStackApp) {
         if let Some(read) =
             app.shell.run("adjust.get", json!({ "output": output })).and_then(|r| serde_json::from_value(r["adjustments"].clone()).ok())
         {
-            if app.adjust.read.is_some() && read != app.adjust.settings {
-                app.adjust.want_preview(false);
-            }
             app.adjust.settings = read;
+        }
+        // Any change can matter: the adjustments, or a retouch stroke under them.
+        if app.adjust.read.is_some() {
+            app.adjust.want_preview(false);
         }
         app.adjust.read = Some(app.shell.revision);
         let ui = &mut app.adjust;

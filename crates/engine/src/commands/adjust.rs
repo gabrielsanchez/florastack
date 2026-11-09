@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use florastack_core::{AnyImage, Image, Monitor};
-use florastack_edit::{Adjustments, Component, Mask, Op, Request, Shape, Size, Stroke};
+use florastack_edit::{Adjustments, Component, Mask, Op, Renderer, Request, Shape, Size, Stroke};
 use florastack_project::{Area, CacheDir, CacheRef, Edit, Output, OutputId};
 use florastack_raw::Quality;
 use florastack_stack::{DepthSettings, PREVIEW_FACTOR, StackShape};
@@ -142,7 +142,8 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::job(
             Meta::new("adjust.preview", "Preview adjustments", "Renders the output open for adjusting with its adjustments, reduced to fit a view.")
                 .help(
-                    "The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a \
+                    "The preview fits in `width` by `height` pixels (never enlarged). When the output's retouch strokes \
+                     changed since it was read, it is read again first. `draft` renders quickly while a \
                      slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; \
                      `before` also renders the output without its adjustments at the same size, for comparing. \
                      Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call \
@@ -570,25 +571,38 @@ struct Opened {
     depth: bool,
 }
 
-fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandError> {
-    let output = find(session, p.output)?;
-    let base = crate::retouch::render_key(output, &crate::retouch::visible_strokes(output));
-    let mut notes = Vec::new();
-    let pixels = super::output::Pixels::base(session, p.output, &mut notes)?;
-    let map = match DepthSource::of(session, output, "adjust.open") {
-        Ok(DepthSource::Map(depth)) => Some(depth),
-        _ => None,
-    };
-    let cache = session.cache_dir()?;
-    let id = p.output;
-    let job = JobPlan::new(move |ctx| {
-        let result = pixels.read(&cache, &mut notes)?;
+/// What an output is read for adjusting from: its result with its visible strokes, the strokes it has now, and its
+/// depth map when it has one. Planned on the engine's thread, read by [`Reading::read`] on a worker.
+struct Reading {
+    pixels: super::output::Pixels,
+    map: Option<CacheRef>,
+    cache: CacheDir,
+    /// What the output's strokes are (`crate::retouch::render_key`).
+    base: String,
+}
+
+impl Reading {
+    fn plan(session: &Session, id: OutputId, command: &'static str) -> Result<Reading, CommandError> {
+        let output = find(session, id)?;
+        let base = crate::retouch::render_key(output, &crate::retouch::visible_strokes(output));
+        let mut notes = Vec::new();
+        let pixels = super::output::Pixels::base(session, id, &mut notes)?;
+        let map = match DepthSource::of(session, output, command) {
+            Ok(DepthSource::Map(depth)) => Some(depth),
+            _ => None,
+        };
+        Ok(Reading { pixels, map, cache: session.cache_dir()?, base })
+    }
+
+    /// The renderer of the output's result, with its depth map when it has one, and what converts its renders back.
+    fn read(self) -> Result<(Renderer, crate::adjust::Working, String), CommandError> {
+        let mut notes = Vec::new();
+        let result = self.pixels.read(&self.cache, &mut notes)?;
         for note in &notes {
-            tracing::info!("adjust.open: {note}");
+            tracing::info!("adjusting: {note}");
         }
-        ctx.checkpoint()?;
         let (renderer, working) = renderer(result)?;
-        let renderer = match map.map(|d| read_u16(&cache, &d).and_then(|m| crate::adjust::depth(&m))) {
+        let renderer = match self.map.map(|d| read_u16(&self.cache, &d).and_then(|m| crate::adjust::depth(&m))) {
             Some(Ok(depth)) => renderer.with_depth(&depth)?,
             Some(Err(e)) => {
                 tracing::warn!("the output's depth map can't be read, so its depth masks wait for `adjust.mapDepth`: {e}");
@@ -596,6 +610,16 @@ fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandEr
             }
             None => renderer,
         };
+        Ok((renderer, working, self.base))
+    }
+}
+
+fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandError> {
+    let reading = Reading::plan(session, p.output, "adjust.open")?;
+    let id = p.output;
+    let job = JobPlan::new(move |ctx| {
+        ctx.checkpoint()?;
+        let (renderer, working, base) = reading.read()?;
         let opened = Opened { output: id, width: renderer.width(), height: renderer.height(), depth: renderer.has_depth() };
         Ok(commit(move |session: &mut Session| {
             session.adjust = Some(AdjustSession {
@@ -671,15 +695,23 @@ struct Previewed {
 fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, CommandError> {
     let open = open_session(session)?;
     let output = find(session, open.output)?;
+    // Strokes painted, undone or hidden since the output was read change what adjusting starts from: it is read again.
     let current = crate::retouch::render_key(output, &crate::retouch::visible_strokes(output));
-    if current != open.base {
-        return Err(session.unavailable("the output's retouch strokes changed since it was opened for adjusting: open it again with `adjust.open`"));
-    }
+    let reading = if current == open.base { None } else { Some(Reading::plan(session, open.output, "adjust.preview")?) };
     let adjustments = adjustments(output)?;
     let (renderer, working, id) = (Arc::clone(&open.renderer), Arc::clone(&open.working), open.output);
     let request = Request { size: Size::Fit { width: p.width, height: p.height }, draft: p.draft, overlay: p.overlay };
     let with_before = p.before;
     let job = JobPlan::new(move |ctx| {
+        let reread = match reading {
+            Some(reading) => {
+                let (renderer, working, base) = reading.read()?;
+                ctx.checkpoint()?;
+                Some((Arc::new(renderer), Arc::new(working), base))
+            }
+            None => None,
+        };
+        let (renderer, working) = reread.as_ref().map_or((renderer, working), |(r, w, _)| (Arc::clone(r), Arc::clone(w)));
         let shown = |adjustments: &Adjustments, request: &Request| -> Result<crate::view::DisplayImage, CommandError> {
             let mut image = renderer.render(adjustments, request)?;
             working.back(&mut image)?;
@@ -691,6 +723,10 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
         let previewed = Previewed { output: id, width: display.width, height: display.height };
         Ok(commit(move |session: &mut Session| {
             if let Some(open) = session.adjust.as_mut().filter(|s| s.output == id) {
+                if let Some((renderer, working, base)) = reread {
+                    (open.renderer, open.working, open.base) = (renderer, working, base);
+                    open.before = None;
+                }
                 open.preview = Some(Arc::new(display));
                 if before.is_some() {
                     open.before = before;
