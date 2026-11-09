@@ -677,6 +677,8 @@ fn ai(app: &mut FloraStackApp, ui: &mut egui::Ui, mask: &Mask) {
             }
         });
         ui.weak(tr("adjust-model-steps"));
+        // The browser build offers no AI selection (`ai_available`), and has no folders to pick.
+        #[cfg(not(target_arch = "wasm32"))]
         if ui.button(tr("adjust-model-choose")).on_hover_text(tr("tip-adjust-model-choose")).clicked()
             && let Some(folder) = crate::dialogs::read_folder(None)
         {
