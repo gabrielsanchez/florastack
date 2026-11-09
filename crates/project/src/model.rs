@@ -347,6 +347,10 @@ pub struct Output {
     /// Non-destructive annotation layers (the engine's records), rendered only on exported copies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Value>,
+    /// Adjustments of tone, color and detail, with their masks (florastack-edit's, as data the engine reads), applied
+    /// after the retouch layers; `None` for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjustments: Option<Value>,
 }
 
 impl Output {
@@ -549,6 +553,7 @@ impl Project {
             maps: new.maps,
             retouch: Vec::new(),
             annotations: Vec::new(),
+            adjustments: None,
         });
         id
     }

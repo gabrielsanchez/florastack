@@ -10,6 +10,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 
 | Area | Commands |
 |---|---|
+| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.get`](#adjustget), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask) |
 | [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
@@ -30,6 +31,406 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [retouch](#retouch) | [`retouch.addLayer`](#retouchaddlayer), [`retouch.cancelPaint`](#retouchcancelpaint), [`retouch.close`](#retouchclose), [`retouch.mapFocus`](#retouchmapfocus), [`retouch.open`](#retouchopen), [`retouch.paint`](#retouchpaint), [`retouch.removeLayer`](#retouchremovelayer), [`retouch.setLayerVisible`](#retouchsetlayervisible), [`retouch.setSource`](#retouchsetsource), [`retouch.sharpest`](#retouchsharpest), [`retouch.stroke`](#retouchstroke) |
 | [stack](#stack) | [`stack.average`](#stackaverage), [`stack.depthMap`](#stackdepthmap), [`stack.get`](#stackget), [`stack.preview`](#stackpreview), [`stack.pyramid`](#stackpyramid), [`stack.reset`](#stackreset), [`stack.set`](#stackset), [`stack.slabbed`](#stackslabbed), [`stack.threshold`](#stackthreshold), [`stack.wavelet`](#stackwavelet) |
 | [watch](#watch) | [`watch.run`](#watchrun) |
+
+## adjust
+
+### `adjust.addMask`
+
+**Add mask.** Adds a mask on top of an output's, as one undo step.
+
+The mask is given a new id, which the result returns; an `id` given is ignored. Its components are combined in order: the first one's region, then each next one added (`add`), taken away (`subtract`) or intersected (`intersect`). Shapes: `whole`, `linear` (`start`, `end`), `radial` (`center`, `radius_x`, `radius_y`, `angle`, `feather`), `brush` (`strokes`), `luminance` (`low`, `high`, `low_feather`, `high_feather`), `color` (`samples`, from `adjust.sampleColor`, and `refine`), and from the stack's focus `subject`, `background` and `depth` (`near`, `far`, `feather`). Coordinates are fractions of the output's width and height.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `mask` | object | **Required.** The mask: its name, components and adjustments. |
+| `mask.adjust` | object | The adjustments it applies where it selects. Default: `{"amount":100.0,"blacks":0.0,"clarity":0.0,"contrast":0.0,"dehaze":0.0,"exposure":0.0,"highlights":0.0,"noise":0.0,"saturation":0.0,"shadows":0.0,"sharpness":0.0,"temperature":0.0,"texture":0.0,"tint":0.0,"whites":0.0}`. |
+| `mask.adjust.amount` | number, from 0.0 to 100.0 | How strongly the mask applies its adjustments, from 0 (not at all) to 100. Default: `100.0`. |
+| `mask.adjust.blacks` | number, from -100.0 to 100.0 | The black point. Default: `0.0`. |
+| `mask.adjust.clarity` | number, from -100.0 to 100.0 | Contrast of mid-sized detail. Default: `0.0`. |
+| `mask.adjust.contrast` | number, from -100.0 to 100.0 | Contrast. Default: `0.0`. |
+| `mask.adjust.dehaze` | number, from -100.0 to 100.0 | Removes haze (positive) or adds it (negative). Default: `0.0`. |
+| `mask.adjust.exposure` | number, from -5.0 to 5.0 | Exposure in stops, from -5 to 5. Default: `0.0`. |
+| `mask.adjust.highlights` | number, from -100.0 to 100.0 | Brightness of the bright tones. Default: `0.0`. |
+| `mask.adjust.noise` | number, from -100.0 to 100.0 | Reduces noise (positive) or keeps more grain (negative). Default: `0.0`. |
+| `mask.adjust.saturation` | number, from -100.0 to 100.0 | Saturation; -100 is black and white. Default: `0.0`. |
+| `mask.adjust.shadows` | number, from -100.0 to 100.0 | Brightness of the dark tones. Default: `0.0`. |
+| `mask.adjust.sharpness` | number, from -100.0 to 100.0 | Sharpens (positive) or softens (negative). Default: `0.0`. |
+| `mask.adjust.temperature` | number, from -100.0 to 100.0 | Warmer (positive) or cooler (negative). Default: `0.0`. |
+| `mask.adjust.texture` | number, from -100.0 to 100.0 | Contrast of fine detail and surface texture. Default: `0.0`. |
+| `mask.adjust.tint` | number, from -100.0 to 100.0 | Magenta (positive) or green (negative). Default: `0.0`. |
+| `mask.adjust.whites` | number, from -100.0 to 100.0 | The white point. Default: `0.0`. |
+| `mask.components` | array of object | Its shapes, combined in order: the first one's region, then each next one added, subtracted or intersected. Default: `[]`. |
+| `mask.id` | integer | The mask's id, unique among the output's masks and never reused: commands name a mask by it. Default: `0`. |
+| `mask.invert` | boolean | Whether it selects what its components leave out instead. Default: `false`. |
+| `mask.name` | string | Its name, at most 64 characters. Default: `""`. |
+| `mask.refine` | number, from 0.0 to 100.0 | How closely its edges follow the image's own, from 0 (as drawn) to 100. Default: `0.0`. |
+| `mask.visible` | boolean | Whether its adjustments apply. A hidden mask is kept but changes nothing. Default: `true`. |
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `mask` | integer | The mask's id. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Examples:
+
+```json
+{"mask":{"adjust":{"exposure":0.4},"components":[{"shape":{"angle":0,"center":[0.5,0.5],"feather":60,"kind":"radial","radius_x":0.25,"radius_y":0.2}}],"name":"Center"},"output":3}
+{"mask":{"adjust":{"saturation":-30},"components":[{"shape":{"kind":"whole"}}]},"output":3}
+```
+
+### `adjust.close`
+
+**Close adjusting.** Closes the output open for adjusting.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | No | An open project | Nothing |
+
+Parameters: none.
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `closed` | boolean | Whether an output was open for adjusting. |
+
+Example:
+
+```json
+{}
+```
+
+### `adjust.get`
+
+**Adjustments.** An output's adjustments: the whole image's and its masks'.
+
+Every setting is listed, neutral ones included; `neutral` says whether they change anything. The whole image's (`global`) are applied first, then each visible mask's (`masks`) where it selects.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Query | No | An open project | Nothing |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Example:
+
+```json
+{"output":3}
+```
+
+### `adjust.moveMask`
+
+**Move mask.** Moves one of an output's masks to another place in their order, in one undo step.
+
+Masks apply in order, the first one first; `index` 0 is the first place, and an index past the end the last.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `index` | integer | **Required.** Its new place: 0 is the first, and an index past the end the last. |
+| `mask` | integer | **Required.** The mask's id, as `adjust.get` lists it. |
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `mask` | integer | The mask's id. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Example:
+
+```json
+{"index":0,"mask":2,"output":3}
+```
+
+### `adjust.open`
+
+**Open for adjusting.** Opens an output for adjusting, so that `adjust.preview` can show its adjustments.
+
+Reads the output with its visible retouch strokes (the output open for retouching as it is, or the result cached) and keeps it in memory, ready to render. One output is open for adjusting at a time; opening another closes the one open. Runs beside other jobs.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | Nothing |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `focus` | boolean | Whether the stack's focus is known, for the subject, background and depth masks. |
+| `height` | integer |  |
+| `output` | integer | An output's id in its project. |
+| `width` | integer |  |
+
+Example:
+
+```json
+{"output":3}
+```
+
+### `adjust.preview`
+
+**Preview adjustments.** Renders the output open for adjusting with its adjustments, reduced to fit a view.
+
+The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | Nothing |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `draft` | boolean | A quick render while a slider moves. Default: `false`. |
+| `height` | integer, from 1 to 16384 | **Required.** The largest height, in pixels, from 1 to 16384. |
+| `overlay` | integer | A mask whose region is shown tinted red, by id. |
+| `width` | integer, from 1 to 16384 | **Required.** The largest width, in pixels, from 1 to 16384. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `height` | integer |  |
+| `output` | integer | An output's id in its project. |
+| `width` | integer |  |
+
+Examples:
+
+```json
+{"height":1000,"width":1600}
+{"draft":true,"height":600,"overlay":2,"width":800}
+```
+
+### `adjust.removeMask`
+
+**Remove mask.** Removes one of an output's masks, in one undo step.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `mask` | integer | **Required.** The mask's id, as `adjust.get` lists it. |
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `mask` | integer | The mask's id. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Example:
+
+```json
+{"mask":1,"output":3}
+```
+
+### `adjust.reset`
+
+**Reset adjustments.** Removes an output's adjustments and masks, in one undo step.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Example:
+
+```json
+{"output":3}
+```
+
+### `adjust.sampleColor`
+
+**Sample color.** The color of the output open for adjusting at a point, for a color-range mask.
+
+`x` and `y` are fractions of the output's width and height. The color is in `OkLab`, after the whole image's adjustments, averaged over a few pixels: what a `color` shape's `samples` hold. `null` outside the image.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Query | No | An open project | Nothing |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `x` | number, from -10.0 to 10.0 | **Required.** From 0 (the left edge) to 1 (the right edge). |
+| `y` | number, from -10.0 to 10.0 | **Required.** From 0 (the top edge) to 1 (the bottom edge). |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `color` | array of number | Lightness, then the green-red and blue-yellow axes; `null` outside the image. |
+
+Example:
+
+```json
+{"x":0.42,"y":0.6}
+```
+
+### `adjust.set`
+
+**Set adjustments.** Replaces an output's adjustments, the whole image's and its masks', in one undo step.
+
+Settings left out take their neutral defaults. Sliders run from -100 to 100 (0 neutral) unless their description says otherwise: exposure in stops from -5 to 5, sharpening from 0 to 150, noise reduction from 0 to 100. Masks keep their ids; a new mask's id must be one no mask of the output has. Adjustments apply after the output's retouch strokes, to exports too.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | **Required.** The adjustments: the whole image's (`global`) and the masks (`masks`). What is left out is neutral. |
+| `adjustments.global` | object | The adjustments of the whole image. Default: `{"blacks":0.0,"clarity":0.0,"color_noise":0.0,"contrast":0.0,"dehaze":0.0,"exposure":0.0,"highlights":0.0,"noise_detail":50.0,"noise_reduction":0.0,"saturation":0.0,"shadows":0.0,"sharpen_detail":25.0,"sharpen_masking":0.0,"sharpen_radius":1.0,"sharpening":0.0,"temperature":0.0,"texture":0.0,"tint":0.0,"vibrance":0.0,"whites":0.0}`. |
+| `adjustments.global.blacks` | number, from -100.0 to 100.0 | The black point. Default: `0.0`. |
+| `adjustments.global.clarity` | number, from -100.0 to 100.0 | Contrast of mid-sized detail: punch when positive, softness when negative. Default: `0.0`. |
+| `adjustments.global.color_noise` | number, from 0.0 to 100.0 | Color noise reduction, from 0 (none) to 100. Default: `0.0`. |
+| `adjustments.global.contrast` | number, from -100.0 to 100.0 | Contrast of the tones around middle gray. Default: `0.0`. |
+| `adjustments.global.dehaze` | number, from -100.0 to 100.0 | Removes haze (positive) or adds it (negative). Default: `0.0`. |
+| `adjustments.global.exposure` | number, from -5.0 to 5.0 | Exposure in stops, from -5 to 5. Default: `0.0`. |
+| `adjustments.global.highlights` | number, from -100.0 to 100.0 | Brightness of the bright tones, recovering detail in them when negative. Default: `0.0`. |
+| `adjustments.global.noise_detail` | number, from 0.0 to 100.0 | How much detail luminance noise reduction keeps, from 0 to 100. Default: `50.0`. |
+| `adjustments.global.noise_reduction` | number, from 0.0 to 100.0 | Luminance noise reduction, from 0 (none) to 100. Default: `0.0`. |
+| `adjustments.global.saturation` | number, from -100.0 to 100.0 | Saturation of every color alike; -100 is black and white. Default: `0.0`. |
+| `adjustments.global.shadows` | number, from -100.0 to 100.0 | Brightness of the dark tones, opening them up when positive. Default: `0.0`. |
+| `adjustments.global.sharpen_detail` | number, from 0.0 to 100.0 | How much sharpening favors fine detail over edges, from 0 to 100. Default: `25.0`. |
+| `adjustments.global.sharpen_masking` | number, from 0.0 to 100.0 | Limits sharpening to edges, from 0 (everywhere) to 100 (only the strongest edges). Default: `0.0`. |
+| `adjustments.global.sharpen_radius` | number, from 0.5 to 3.0 | The size of the detail sharpening works on, in pixels, from 0.5 to 3. Default: `1.0`. |
+| `adjustments.global.sharpening` | number, from 0.0 to 150.0 | Sharpening, from 0 (none) to 150. Default: `0.0`. |
+| `adjustments.global.temperature` | number, from -100.0 to 100.0 | White balance: warmer (positive) or cooler (negative), on a scale of mireds around the image as stacked. Default: `0.0`. |
+| `adjustments.global.texture` | number, from -100.0 to 100.0 | Contrast of fine detail and surface texture. Default: `0.0`. |
+| `adjustments.global.tint` | number, from -100.0 to 100.0 | White balance: magenta (positive) or green (negative). Default: `0.0`. |
+| `adjustments.global.vibrance` | number, from -100.0 to 100.0 | Saturation that spares colors already saturated, and skin tones. Default: `0.0`. |
+| `adjustments.global.whites` | number, from -100.0 to 100.0 | The white point. Default: `0.0`. |
+| `adjustments.masks` | array of object | The masks, each a region with adjustments of its own, applied on top of the whole image's. Default: `[]`. |
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Examples:
+
+```json
+{"adjustments":{"global":{"clarity":20,"exposure":0.3,"vibrance":15}},"output":3}
+{"adjustments":{"masks":[{"adjust":{"exposure":-0.5},"components":[{"shape":{"end":[0.5,0.4],"kind":"linear","start":[0.5,0]}}],"id":1,"name":"Sky"}]},"output":3}
+```
+
+### `adjust.setMask`
+
+**Set mask.** Replaces one of an output's masks, the one with the same id, in one undo step.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `mask` | object | **Required.** The mask: its name, components and adjustments. |
+| `mask.adjust` | object | The adjustments it applies where it selects. Default: `{"amount":100.0,"blacks":0.0,"clarity":0.0,"contrast":0.0,"dehaze":0.0,"exposure":0.0,"highlights":0.0,"noise":0.0,"saturation":0.0,"shadows":0.0,"sharpness":0.0,"temperature":0.0,"texture":0.0,"tint":0.0,"whites":0.0}`. |
+| `mask.adjust.amount` | number, from 0.0 to 100.0 | How strongly the mask applies its adjustments, from 0 (not at all) to 100. Default: `100.0`. |
+| `mask.adjust.blacks` | number, from -100.0 to 100.0 | The black point. Default: `0.0`. |
+| `mask.adjust.clarity` | number, from -100.0 to 100.0 | Contrast of mid-sized detail. Default: `0.0`. |
+| `mask.adjust.contrast` | number, from -100.0 to 100.0 | Contrast. Default: `0.0`. |
+| `mask.adjust.dehaze` | number, from -100.0 to 100.0 | Removes haze (positive) or adds it (negative). Default: `0.0`. |
+| `mask.adjust.exposure` | number, from -5.0 to 5.0 | Exposure in stops, from -5 to 5. Default: `0.0`. |
+| `mask.adjust.highlights` | number, from -100.0 to 100.0 | Brightness of the bright tones. Default: `0.0`. |
+| `mask.adjust.noise` | number, from -100.0 to 100.0 | Reduces noise (positive) or keeps more grain (negative). Default: `0.0`. |
+| `mask.adjust.saturation` | number, from -100.0 to 100.0 | Saturation; -100 is black and white. Default: `0.0`. |
+| `mask.adjust.shadows` | number, from -100.0 to 100.0 | Brightness of the dark tones. Default: `0.0`. |
+| `mask.adjust.sharpness` | number, from -100.0 to 100.0 | Sharpens (positive) or softens (negative). Default: `0.0`. |
+| `mask.adjust.temperature` | number, from -100.0 to 100.0 | Warmer (positive) or cooler (negative). Default: `0.0`. |
+| `mask.adjust.texture` | number, from -100.0 to 100.0 | Contrast of fine detail and surface texture. Default: `0.0`. |
+| `mask.adjust.tint` | number, from -100.0 to 100.0 | Magenta (positive) or green (negative). Default: `0.0`. |
+| `mask.adjust.whites` | number, from -100.0 to 100.0 | The white point. Default: `0.0`. |
+| `mask.components` | array of object | Its shapes, combined in order: the first one's region, then each next one added, subtracted or intersected. Default: `[]`. |
+| `mask.id` | integer | The mask's id, unique among the output's masks and never reused: commands name a mask by it. Default: `0`. |
+| `mask.invert` | boolean | Whether it selects what its components leave out instead. Default: `false`. |
+| `mask.name` | string | Its name, at most 64 characters. Default: `""`. |
+| `mask.refine` | number, from 0.0 to 100.0 | How closely its edges follow the image's own, from 0 (as drawn) to 100. Default: `0.0`. |
+| `mask.visible` | boolean | Whether its adjustments apply. A hidden mask is kept but changes nothing. Default: `true`. |
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `adjustments` | object | An output's adjustments: the whole image's, then each mask's in order. |
+| `mask` | integer | The mask's id. |
+| `neutral` | boolean | Whether they leave the output as it is. |
+| `output` | integer | An output's id in its project. |
+
+Example:
+
+```json
+{"mask":{"adjust":{"clarity":30},"components":[{"shape":{"kind":"whole"}}],"id":1,"name":"Center","visible":false},"output":3}
+```
 
 ## align
 

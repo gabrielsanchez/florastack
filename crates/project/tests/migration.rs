@@ -59,6 +59,7 @@ fn a_v0_project_is_upgraded_and_reopens_without_recomputation() {
     assert_eq!(output.created(), "2026-10-20T12:45:00Z".parse::<Timestamp>().unwrap());
     assert_eq!(output.inputs, [Input::Frame(project.frames[0].id()), Input::Frame(project.frames[2].id())]);
     assert_eq!(output.image.path.to_string(), "cache/output-1.tiff");
+    assert_eq!(output.adjustments, None, "an output from before version 6 has no adjustments");
     assert_eq!(output.retouch.len(), 1);
     let layer = &output.retouch[0];
     assert_eq!((layer.id().get(), layer.name.as_str(), layer.visible), (5, "Retouching", true));

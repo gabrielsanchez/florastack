@@ -23,6 +23,7 @@ florastack-stack.workspace = true
 florastack-gpu.workspace = true
 florastack-project.workspace = true
 florastack-retouch.workspace = true
+florastack-edit.workspace = true
 florastack-capture.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

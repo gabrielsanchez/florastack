@@ -61,6 +61,9 @@ pub struct Session {
     /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
     pub(crate) retouch: Option<crate::retouch::RetouchSession>,
     pub(crate) retouch_closed: bool,
+    /// The output open for adjusting (`crate::adjust`), and whether a session closed since an app last asked.
+    pub(crate) adjust: Option<crate::adjust::AdjustSession>,
+    pub(crate) adjust_closed: bool,
     pub(crate) capture: Arc<std::sync::Mutex<florastack_capture::Devices>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) capture_preview: Arc<std::sync::Mutex<Option<tempfile::TempPath>>>,
@@ -95,6 +98,8 @@ impl Session {
             focus: None,
             retouch: None,
             retouch_closed: false,
+            adjust: None,
+            adjust_closed: false,
             capture: Arc::default(),
             #[cfg(not(target_arch = "wasm32"))]
             capture_preview: Arc::default(),
@@ -325,7 +330,7 @@ impl Session {
         cleaned
     }
 
-    /// Closes the retouch session, its result cached first when it can be.
+    /// Closes the retouch session, its result cached first when it can be, and the adjust session.
     fn close_retouch(&mut self) {
         if self.retouch.is_some() {
             if let Err(e) = self.flush_retouch() {
@@ -333,6 +338,9 @@ impl Session {
             }
             self.retouch = None;
             self.retouch_closed = true;
+        }
+        if self.adjust.take().is_some() {
+            self.adjust_closed = true;
         }
     }
 

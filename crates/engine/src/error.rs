@@ -79,6 +79,9 @@ pub enum CommandError {
     /// A stroke that can't be painted: a malformed record, or images that don't fit.
     #[error(transparent)]
     Retouch(Box<florastack_retouch::RetouchError>),
+    /// Adjustments that can't be rendered: a mask that needs the stack's focus, an image that isn't RGB.
+    #[error(transparent)]
+    Adjust(Box<florastack_edit::EditError>),
     #[error("cannot start a worker for `{command}`")]
     Spawn {
         command: String,
@@ -111,7 +114,8 @@ boxed_from!(
     Frame(FrameError),
     Codec(CodecError),
     Raw(RawError),
-    Retouch(florastack_retouch::RetouchError)
+    Retouch(florastack_retouch::RetouchError),
+    Adjust(florastack_edit::EditError)
 );
 
 impl From<AlignError> for CommandError {
@@ -168,6 +172,11 @@ impl CommandError {
             CommandError::Align(_) => "align",
             CommandError::Stack(_) => "stack",
             CommandError::Retouch(_) => "retouch",
+            CommandError::Adjust(e) => match &**e {
+                florastack_edit::EditError::Invalid { .. } => "params",
+                florastack_edit::EditError::NoFocus { .. } => "unavailable",
+                _ => "adjust",
+            },
             CommandError::Spawn { .. } | CommandError::Internal { .. } => "internal",
         }
     }

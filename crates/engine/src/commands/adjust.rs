@@ -1,0 +1,489 @@
+//! Adjusting an output (`adjust.*`): its adjustments and masks, each change one undo step, and the adjust session
+//! that previews them (`adjust.open`, `adjust.preview`, `adjust.close`). What is stored and how it is rendered are in
+//! `crate::adjust`.
+
+use std::sync::Arc;
+
+use florastack_core::Monitor;
+use florastack_edit::{Adjustments, Mask, Request, Size};
+use florastack_project::{Edit, OutputId};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::adjust::{AdjustChanges, AdjustSession, adjustments, renderer};
+use crate::error::{CommandError, Invalid};
+use crate::jobs::{JobPlan, Lane, commit};
+use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
+use crate::session::Session;
+
+/// The largest preview side, in pixels.
+const MAX_PREVIEW_SIDE: usize = 16384;
+
+#[allow(clippy::too_many_lines)] // The commands' help texts and examples.
+pub(super) fn specs() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec::query(
+            Meta::new("adjust.get", "Adjustments", "An output's adjustments: the whole image's and its masks'.")
+                .help(
+                    "Every setting is listed, neutral ones included; `neutral` says whether they change anything. The \
+                     whole image's (`global`) are applied first, then each visible mask's (`masks`) where it selects.",
+                )
+                .requires(Requires::Project)
+                .examples(&[r#"{ "output": 3 }"#]),
+            get,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.set", "Set adjustments", "Replaces an output's adjustments, the whole image's and its masks', in one undo step.")
+                .help(
+                    "Settings left out take their neutral defaults. Sliders run from -100 to 100 (0 neutral) unless their \
+                     description says otherwise: exposure in stops from -5 to 5, sharpening from 0 to 150, noise \
+                     reduction from 0 to 100. Masks keep their ids; a new mask's id must be one no mask of the output \
+                     has. Adjustments apply after the output's retouch strokes, to exports too.",
+                )
+                .undoable()
+                .examples(&[
+                    r#"{ "output": 3, "adjustments": { "global": { "exposure": 0.3, "clarity": 20, "vibrance": 15 } } }"#,
+                    r#"{ "output": 3, "adjustments": { "masks": [ { "id": 1, "name": "Sky", "components": [ { "shape": { "kind": "linear", "start": [0.5, 0], "end": [0.5, 0.4] } } ], "adjust": { "exposure": -0.5 } } ] } }"#,
+                ]),
+            set,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.reset", "Reset adjustments", "Removes an output's adjustments and masks, in one undo step.")
+                .undoable()
+                .examples(&[r#"{ "output": 3 }"#]),
+            reset,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.addMask", "Add mask", "Adds a mask on top of an output's, as one undo step.")
+                .help(
+                    "The mask is given a new id, which the result returns; an `id` given is ignored. Its components are \
+                     combined in order: the first one's region, then each next one added (`add`), taken away \
+                     (`subtract`) or intersected (`intersect`). Shapes: `whole`, `linear` (`start`, `end`), `radial` \
+                     (`center`, `radius_x`, `radius_y`, `angle`, `feather`), `brush` (`strokes`), `luminance` (`low`, \
+                     `high`, `low_feather`, `high_feather`), `color` (`samples`, from `adjust.sampleColor`, and \
+                     `refine`), and from the stack's focus `subject`, `background` and `depth` (`near`, `far`, \
+                     `feather`). Coordinates are fractions of the output's width and height.",
+                )
+                .undoable()
+                .examples(&[
+                    r#"{ "output": 3, "mask": { "name": "Center", "components": [ { "shape": { "kind": "radial", "center": [0.5, 0.5], "radius_x": 0.25, "radius_y": 0.2, "angle": 0, "feather": 60 } } ], "adjust": { "exposure": 0.4 } } }"#,
+                    r#"{ "output": 3, "mask": { "components": [ { "shape": { "kind": "whole" } } ], "adjust": { "saturation": -30 } } }"#,
+                ]),
+            add_mask,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.setMask", "Set mask", "Replaces one of an output's masks, the one with the same id, in one undo step.")
+                .undoable()
+                .examples(&[
+                    r#"{ "output": 3, "mask": { "id": 1, "name": "Center", "visible": false, "components": [ { "shape": { "kind": "whole" } } ], "adjust": { "clarity": 30 } } }"#,
+                ]),
+            set_mask,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.removeMask", "Remove mask", "Removes one of an output's masks, in one undo step.")
+                .undoable()
+                .examples(&[r#"{ "output": 3, "mask": 1 }"#]),
+            remove_mask,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.moveMask", "Move mask", "Moves one of an output's masks to another place in their order, in one undo step.")
+                .help("Masks apply in order, the first one first; `index` 0 is the first place, and an index past the end the last.")
+                .undoable()
+                .examples(&[r#"{ "output": 3, "mask": 2, "index": 0 }"#]),
+            move_mask,
+        ),
+        CommandSpec::job(
+            Meta::new("adjust.open", "Open for adjusting", "Opens an output for adjusting, so that `adjust.preview` can show its adjustments.")
+                .help(
+                    "Reads the output with its visible retouch strokes (the output open for retouching as it is, or the \
+                     result cached) and keeps it in memory, ready to render. One output is open for adjusting at a time; \
+                     opening another closes the one open. Runs beside other jobs.",
+                )
+                .requires(Requires::Project)
+                .examples(&[r#"{ "output": 3 }"#]),
+            Lane::Preview,
+            open,
+        ),
+        CommandSpec::instant(
+            Meta::new("adjust.close", "Close adjusting", "Closes the output open for adjusting.").requires(Requires::Project),
+            close,
+        ),
+        CommandSpec::job(
+            Meta::new("adjust.preview", "Preview adjustments", "Renders the output open for adjusting with its adjustments, reduced to fit a view.")
+                .help(
+                    "The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a \
+                     slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red. \
+                     Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call \
+                     replaces one still running.",
+                )
+                .requires(Requires::Project)
+                .supersede()
+                .examples(&[r#"{ "width": 1600, "height": 1000 }"#, r#"{ "width": 800, "height": 600, "draft": true, "overlay": 2 }"#]),
+            Lane::Preview,
+            preview,
+        ),
+        CommandSpec::query(
+            Meta::new("adjust.sampleColor", "Sample color", "The color of the output open for adjusting at a point, for a color-range mask.")
+                .help(
+                    "`x` and `y` are fractions of the output's width and height. The color is in `OkLab`, after the whole \
+                     image's adjustments, averaged over a few pixels: what a `color` shape's `samples` hold. `null` \
+                     outside the image.",
+                )
+                .requires(Requires::Project)
+                .examples(&[r#"{ "x": 0.42, "y": 0.6 }"#]),
+            sample_color,
+        ),
+    ]
+}
+
+/// An output.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct OutputParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+}
+
+impl Params for OutputParams {}
+
+/// An output's adjustments.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct AdjustInfo {
+    output: OutputId,
+    adjustments: Adjustments,
+    /// Whether they leave the output as it is.
+    neutral: bool,
+}
+
+impl AdjustInfo {
+    fn new(output: OutputId, adjustments: Adjustments) -> AdjustInfo {
+        let neutral = adjustments.is_neutral();
+        AdjustInfo { output, adjustments, neutral }
+    }
+}
+
+fn find(session: &Session, id: OutputId) -> Result<&florastack_project::Output, CommandError> {
+    session.project()?.output(id).ok_or(CommandError::NotFound { what: id.to_string() })
+}
+
+/// Stores `adjustments` as output `id`'s, as one undo step: none at all when they are the defaults.
+fn store(session: &mut Session, id: OutputId, adjustments: &Adjustments) -> Result<(), CommandError> {
+    let value = if *adjustments == Adjustments::default() { None } else { Some(florastack_project::to_data("adjustments", adjustments)?) };
+    if find(session, id)?.adjustments != value {
+        session.apply(Edit::SetAdjustments { output: id, adjustments: value })?;
+    }
+    Ok(())
+}
+
+fn invalid(e: &florastack_edit::EditError) -> Invalid {
+    match e {
+        florastack_edit::EditError::Invalid { reason } => Invalid::new("adjustments", reason.clone()),
+        other => Invalid::new("adjustments", other.to_string()),
+    }
+}
+
+fn get(session: &Session, p: OutputParams) -> Result<AdjustInfo, CommandError> {
+    Ok(AdjustInfo::new(p.output, adjustments(find(session, p.output)?)?))
+}
+
+/// An output and its new adjustments.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SetParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// The adjustments: the whole image's (`global`) and the masks (`masks`). What is left out is neutral.
+    adjustments: Adjustments,
+}
+
+impl Params for SetParams {
+    fn check(&self) -> Result<(), Invalid> {
+        self.adjustments.validate().map_err(|e| invalid(&e))
+    }
+}
+
+fn set(session: &mut Session, p: SetParams) -> Result<AdjustInfo, CommandError> {
+    find(session, p.output)?;
+    store(session, p.output, &p.adjustments)?;
+    Ok(AdjustInfo::new(p.output, p.adjustments))
+}
+
+fn reset(session: &mut Session, p: OutputParams) -> Result<AdjustInfo, CommandError> {
+    find(session, p.output)?;
+    store(session, p.output, &Adjustments::default())?;
+    Ok(AdjustInfo::new(p.output, Adjustments::default()))
+}
+
+/// An output and a mask.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MaskParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// The mask: its name, components and adjustments.
+    mask: Mask,
+}
+
+impl Params for MaskParams {
+    fn check(&self) -> Result<(), Invalid> {
+        Adjustments { masks: vec![self.mask.clone()], ..Adjustments::default() }.validate().map_err(|e| invalid(&e))
+    }
+}
+
+/// The mask added or changed, and the output's adjustments after it.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct MaskChanged {
+    /// The mask's id.
+    mask: u32,
+    #[serde(flatten)]
+    info: AdjustInfo,
+}
+
+/// The output's adjustments with `change` made to them, checked and stored as one undo step.
+fn change(
+    session: &mut Session,
+    id: OutputId,
+    change: impl FnOnce(&mut Adjustments) -> Result<(), CommandError>,
+) -> Result<Adjustments, CommandError> {
+    let mut adjustments = adjustments(find(session, id)?)?;
+    change(&mut adjustments)?;
+    adjustments.validate().map_err(|e| {
+        let Invalid { field, reason } = invalid(&e);
+        session.invalid(field, reason)
+    })?;
+    store(session, id, &adjustments)?;
+    Ok(adjustments)
+}
+
+fn add_mask(session: &mut Session, p: MaskParams) -> Result<MaskChanged, CommandError> {
+    let mut id = 0;
+    let adjustments = change(session, p.output, |a| {
+        id = a.next_mask_id();
+        a.masks.push(Mask { id, ..p.mask });
+        Ok(())
+    })?;
+    Ok(MaskChanged { mask: id, info: AdjustInfo::new(p.output, adjustments) })
+}
+
+fn no_mask(output: OutputId, mask: u32) -> CommandError {
+    CommandError::NotFound { what: format!("mask {mask} on output {output}") }
+}
+
+fn set_mask(session: &mut Session, p: MaskParams) -> Result<MaskChanged, CommandError> {
+    let id = p.mask.id;
+    let adjustments = change(session, p.output, |a| {
+        let mask = a.mask_mut(id).ok_or_else(|| no_mask(p.output, id))?;
+        *mask = p.mask;
+        Ok(())
+    })?;
+    Ok(MaskChanged { mask: id, info: AdjustInfo::new(p.output, adjustments) })
+}
+
+/// An output and one of its masks.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MaskIdParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// The mask's id, as `adjust.get` lists it.
+    mask: u32,
+}
+
+impl Params for MaskIdParams {}
+
+fn remove_mask(session: &mut Session, p: MaskIdParams) -> Result<MaskChanged, CommandError> {
+    let adjustments = change(session, p.output, |a| {
+        let index = a.masks.iter().position(|m| m.id == p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+        a.masks.remove(index);
+        Ok(())
+    })?;
+    Ok(MaskChanged { mask: p.mask, info: AdjustInfo::new(p.output, adjustments) })
+}
+
+/// An output, one of its masks and its new place.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MoveParams {
+    /// The output's id, as `output.list` lists it.
+    output: OutputId,
+    /// The mask's id, as `adjust.get` lists it.
+    mask: u32,
+    /// Its new place: 0 is the first, and an index past the end the last.
+    index: usize,
+}
+
+impl Params for MoveParams {}
+
+fn move_mask(session: &mut Session, p: MoveParams) -> Result<MaskChanged, CommandError> {
+    let adjustments = change(session, p.output, |a| {
+        let from = a.masks.iter().position(|m| m.id == p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+        let mask = a.masks.remove(from);
+        a.masks.insert(p.index.min(a.masks.len()), mask);
+        Ok(())
+    })?;
+    Ok(MaskChanged { mask: p.mask, info: AdjustInfo::new(p.output, adjustments) })
+}
+
+fn open_session(session: &Session) -> Result<&AdjustSession, CommandError> {
+    session.adjust.as_ref().ok_or_else(|| session.unavailable("no output is open for adjusting: open one with `adjust.open`"))
+}
+
+/// The output opened.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Opened {
+    output: OutputId,
+    width: usize,
+    height: usize,
+    /// Whether the stack's focus is known, for the subject, background and depth masks.
+    focus: bool,
+}
+
+fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandError> {
+    let output = find(session, p.output)?;
+    let base = crate::retouch::render_key(output, &crate::retouch::visible_strokes(output));
+    let mut notes = Vec::new();
+    let pixels = super::output::Pixels::base(session, p.output, &mut notes)?;
+    let cache = session.cache_dir()?;
+    let id = p.output;
+    let job = JobPlan::new(move |ctx| {
+        let result = pixels.read(&cache, &mut notes)?;
+        for note in &notes {
+            tracing::info!("adjust.open: {note}");
+        }
+        ctx.checkpoint()?;
+        let (renderer, working) = renderer(result)?;
+        let opened = Opened { output: id, width: renderer.width(), height: renderer.height(), focus: renderer.has_focus() };
+        Ok(commit(move |session: &mut Session| {
+            session.adjust = Some(AdjustSession {
+                output: id,
+                renderer: Arc::new(renderer),
+                working: Arc::new(working),
+                base,
+                preview: None,
+                shown: None,
+                changes: AdjustChanges { opened: true, ..AdjustChanges::default() },
+            });
+            Ok(opened)
+        }))
+    });
+    Ok(job.stages(&[("Reading", 1.0)]))
+}
+
+/// Adjusting closed.
+#[derive(Debug, Serialize, JsonSchema)]
+struct Closed {
+    /// Whether an output was open for adjusting.
+    closed: bool,
+}
+
+fn close(session: &mut Session, _: NoParams) -> Result<Closed, CommandError> {
+    let closed = session.adjust.take().is_some();
+    session.adjust_closed |= closed;
+    Ok(Closed { closed })
+}
+
+/// What to preview.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PreviewParams {
+    /// The largest width, in pixels, from 1 to 16384.
+    #[schemars(range(min = 1, max = 16384))]
+    width: usize,
+    /// The largest height, in pixels, from 1 to 16384.
+    #[schemars(range(min = 1, max = 16384))]
+    height: usize,
+    /// A quick render while a slider moves.
+    #[serde(default)]
+    draft: bool,
+    /// A mask whose region is shown tinted red, by id.
+    #[serde(default)]
+    overlay: Option<u32>,
+}
+
+impl Params for PreviewParams {
+    fn check(&self) -> Result<(), Invalid> {
+        for (field, v) in [("width", self.width), ("height", self.height)] {
+            if !(1..=MAX_PREVIEW_SIDE).contains(&v) {
+                return Err(Invalid::new(field, format!("must be from 1 to {MAX_PREVIEW_SIDE} pixels")));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The preview rendered.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Previewed {
+    output: OutputId,
+    width: usize,
+    height: usize,
+}
+
+fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, CommandError> {
+    let open = open_session(session)?;
+    let output = find(session, open.output)?;
+    let current = crate::retouch::render_key(output, &crate::retouch::visible_strokes(output));
+    if current != open.base {
+        return Err(session.unavailable("the output's retouch strokes changed since it was opened for adjusting: open it again with `adjust.open`"));
+    }
+    let adjustments = adjustments(output)?;
+    let (renderer, working, id) = (Arc::clone(&open.renderer), Arc::clone(&open.working), open.output);
+    let request = Request { size: Size::Fit { width: p.width, height: p.height }, draft: p.draft, overlay: p.overlay };
+    let job = JobPlan::new(move |ctx| {
+        let mut image = renderer.render(&adjustments, &request)?;
+        ctx.checkpoint()?;
+        working.back(&mut image)?;
+        let display = crate::view::display(&image, None)
+            .map_err(|e| CommandError::Unavailable { command: "adjust.preview".to_owned(), reason: e.to_string() })?;
+        let previewed = Previewed { output: id, width: display.width, height: display.height };
+        Ok(commit(move |session: &mut Session| {
+            if let Some(open) = session.adjust.as_mut().filter(|s| s.output == id) {
+                open.preview = Some(Arc::new(display));
+                open.shown = Some(adjustments);
+                open.changes.preview = true;
+            }
+            Ok(previewed)
+        }))
+    });
+    Ok(job.stages(&[("Rendering", 1.0)]))
+}
+
+/// A point of the output, as fractions of its width and height.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PointParams {
+    /// From 0 (the left edge) to 1 (the right edge).
+    #[schemars(range(min = -10.0, max = 10.0))]
+    x: f64,
+    /// From 0 (the top edge) to 1 (the bottom edge).
+    #[schemars(range(min = -10.0, max = 10.0))]
+    y: f64,
+}
+
+impl Params for PointParams {
+    fn check(&self) -> Result<(), Invalid> {
+        for (field, v) in [("x", self.x), ("y", self.y)] {
+            if !(v.is_finite() && (-10.0..=10.0).contains(&v)) {
+                return Err(Invalid::new(field, "must be a fraction of the output's size, from -10 to 10"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A color, in `OkLab`.
+#[derive(Debug, Serialize, JsonSchema)]
+struct Sampled {
+    /// Lightness, then the green-red and blue-yellow axes; `null` outside the image.
+    color: Option<[f64; 3]>,
+}
+
+fn sample_color(session: &Session, p: PointParams) -> Result<Sampled, CommandError> {
+    let open = open_session(session)?;
+    let adjustments = adjustments(find(session, open.output)?)?;
+    Ok(Sampled { color: open.renderer.sample_color(&adjustments, [p.x, p.y])? })
+}

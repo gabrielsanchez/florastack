@@ -1652,6 +1652,7 @@ dependencies = [
  "florastack-capture",
  "florastack-codecs",
  "florastack-core",
+ "florastack-edit",
  "florastack-gpu",
  "florastack-metrics",
  "florastack-project",

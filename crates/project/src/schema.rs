@@ -8,7 +8,7 @@
 //! ```json
 //! {
 //!   "format": "florastack-project",
-//!   "version": 5,
+//!   "version": 6,
 //!   "software": "FloraStack 0.1.0",
 //!   "name": "Bee head",
 //!   "created": "2026-10-21T13:02:11.250Z",
@@ -48,6 +48,8 @@
 //! contain no outputs of their own; their mask references remain live when the current project changes its mask.
 //! Version 5 adds each frame's optional `white_balance` to its alignment, the gains per color channel that match its
 //! color to the master's.
+//! Version 6 adds each output's optional `adjustments`: tone, color and detail for the whole image and within masks,
+//! applied after its retouch layers.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -60,7 +62,7 @@ use crate::time::Timestamp;
 /// The `format` of every project file.
 pub const FORMAT: &str = "florastack-project";
 /// The format version this build writes, and the newest it reads.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 /// The project file's name in the project folder.
 pub const FILE_NAME: &str = "project.json";
 /// The largest project file. Bulk data (pixels, focus statistics) lives in the cache; a project file this large is
@@ -71,7 +73,7 @@ pub const MAX_FILE_BYTES: u64 = 64 << 20;
 type Migration = fn(Map<String, Value>) -> Result<Map<String, Value>, MigrationError>;
 
 /// The migrations, from version `i` to `i + 1`.
-pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3, v3_to_v4, v4_to_v5];
+pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3, v3_to_v4, v4_to_v5, v5_to_v6];
 
 /// Version 4 adds optional annotation layers to outputs. Old outputs have no annotations.
 #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
@@ -84,6 +86,13 @@ fn v3_to_v4(mut doc: Map<String, Value>) -> Result<Map<String, Value>, Migration
 #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
 fn v4_to_v5(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
     doc.insert("version".into(), Value::from(5));
+    Ok(doc)
+}
+
+/// Version 6 adds optional adjustments to outputs. Old outputs have none: they look as they did.
+#[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
+fn v5_to_v6(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
+    doc.insert("version".into(), Value::from(6));
     Ok(doc)
 }
 

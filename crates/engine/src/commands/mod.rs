@@ -37,6 +37,7 @@
 // consume them) and a `Result` (most can fail), so that commands are written alike.
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
+pub mod adjust;
 pub mod align;
 pub mod annotation;
 #[cfg(not(target_arch = "wasm32"))]
@@ -85,6 +86,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(stack::specs());
     all.extend(threshold::specs());
     all.extend(retouch::specs());
+    all.extend(adjust::specs());
     all.extend(export::specs());
     all.extend(annotation::specs());
     all.extend(calibration::specs());

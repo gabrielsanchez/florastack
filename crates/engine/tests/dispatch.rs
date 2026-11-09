@@ -238,6 +238,41 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("retouch.close", "{}")["closed"], true);
     assert_eq!(calls.run("retouch.open", &format!(r#"{{ "output": {target} }}"#))["rendered"], "cached", "no recomputation");
     calls.run("retouch.close", "{}");
+    // Adjusting: the whole image's settings and masks, each one undo step, previewed in the adjust session.
+    let set = calls.run("adjust.set", &format!(r#"{{ "output": {target}, "adjustments": {{ "global": {{ "exposure": 0.3, "clarity": 20 }} }} }}"#));
+    assert_eq!((&set["neutral"], &set["adjustments"]["global"]["exposure"]), (&json!(false), &json!(0.3)), "{set}");
+    let added = calls.run(
+        "adjust.addMask",
+        &format!(
+            r#"{{ "output": {target}, "mask": {{ "name": "Top", "components": [ {{ "shape": {{ "kind": "linear", "start": [0, 0], "end": [0, 0.5] }} }} ], "adjust": {{ "exposure": -0.5 }} }} }}"#
+        ),
+    );
+    let mask = added["mask"].clone();
+    let second = calls.run(
+        "adjust.addMask",
+        &format!(
+            r#"{{ "output": {target}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ], "adjust": {{ "saturation": -20 }} }} }}"#
+        ),
+    );
+    assert_ne!(second["mask"], mask);
+    calls.run(
+        "adjust.setMask",
+        &format!(
+            r#"{{ "output": {target}, "mask": {{ "id": {mask}, "name": "Top", "components": [ {{ "shape": {{ "kind": "radial", "center": [0.5, 0.5], "radius_x": 0.2, "radius_y": 0.2, "angle": 0, "feather": 50 }} }} ], "adjust": {{ "exposure": 0.5 }} }} }}"#
+        ),
+    );
+    let moved = calls.run("adjust.moveMask", &format!(r#"{{ "output": {target}, "mask": {}, "index": 0 }}"#, second["mask"]));
+    assert_eq!(moved["adjustments"]["masks"][0]["id"], second["mask"], "{moved}");
+    calls.run("adjust.removeMask", &format!(r#"{{ "output": {target}, "mask": {} }}"#, second["mask"]));
+    assert_eq!(calls.run("adjust.get", &format!(r#"{{ "output": {target} }}"#))["adjustments"]["masks"].as_array().unwrap().len(), 1);
+    let opened = calls.run("adjust.open", &format!(r#"{{ "output": {target} }}"#));
+    assert!(opened["width"].as_u64().unwrap() > 0, "{opened}");
+    let previewed = calls.run("adjust.preview", r#"{ "width": 64, "height": 64, "draft": true }"#);
+    assert!(previewed["width"].as_u64().unwrap() <= 64, "{previewed}");
+    assert!(calls.engine.adjust().unwrap().preview().is_some());
+    assert!(calls.run("adjust.sampleColor", r#"{ "x": 0.5, "y": 0.5 }"#)["color"].is_array());
+    assert_eq!(calls.run("adjust.close", "{}")["closed"], true);
+    assert_eq!(calls.run("adjust.reset", &format!(r#"{{ "output": {target} }}"#))["neutral"], true);
     // In slabs: three slabs of three frames, sharing one, stacked by pyramid, then by weighted average; each slab is
     // an output of its own, and the final output is made from them.
     let slabbed = calls.run("stack.slabbed", r#"{ "slabSize": 3, "overlap": 1, "final": { "method": "average" } }"#);

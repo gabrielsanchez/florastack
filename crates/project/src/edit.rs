@@ -120,6 +120,11 @@ pub enum Edit {
         layer: LayerId,
         visible: bool,
     },
+    /// Sets an output's adjustments (`Some`, florastack-edit's as data), or removes them (`None`).
+    SetAdjustments {
+        output: OutputId,
+        adjustments: Option<Value>,
+    },
     /// Sets one of an output's maps (`Some`), such as its retouched result cached, or removes it (`None`).
     SetOutputMap {
         output: OutputId,
@@ -189,9 +194,11 @@ impl Aspects {
     pub const RETOUCH: Aspects = Aspects(1 << 7);
     /// The frames' previews.
     pub const PREVIEWS: Aspects = Aspects(1 << 8);
-    pub const ALL: Aspects = Aspects((1 << 9) - 1);
+    /// The outputs' adjustments and masks.
+    pub const ADJUST: Aspects = Aspects(1 << 9);
+    pub const ALL: Aspects = Aspects((1 << 10) - 1);
 
-    const NAMES: [(Aspects, &'static str); 9] = [
+    const NAMES: [(Aspects, &'static str); 10] = [
         (Aspects::NAME, "name"),
         (Aspects::FRAMES, "frames"),
         (Aspects::DEVELOP, "develop"),
@@ -201,6 +208,7 @@ impl Aspects {
         (Aspects::OUTPUTS, "outputs"),
         (Aspects::RETOUCH, "retouch"),
         (Aspects::PREVIEWS, "previews"),
+        (Aspects::ADJUST, "adjust"),
     ];
 
     /// The aspect that a preference group belongs to.
@@ -241,7 +249,7 @@ impl Aspects {
     }
 
     /// Every aspect name, in order.
-    pub fn all_names() -> [&'static str; 9] {
+    pub fn all_names() -> [&'static str; 10] {
         Aspects::NAMES.map(|(_, name)| name)
     }
 }
@@ -299,6 +307,7 @@ impl Edit {
             Edit::AddOutput(_) | Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
             // An output's maps (its retouched result cached) are part of it.
             Edit::RenameOutput { .. } | Edit::SetOutputMap { .. } | Edit::SetAnnotations { .. } => Aspects::OUTPUTS,
+            Edit::SetAdjustments { .. } => Aspects::ADJUST,
             Edit::AddLayer { .. }
             | Edit::InsertLayer { .. }
             | Edit::RemoveLayer { .. }
@@ -322,7 +331,8 @@ impl Edit {
             | (Edit::SetPreviews { frame: a, .. }, Edit::SetPreviews { frame: b, .. })
             | (Edit::SetAlignedImage { frame: a, .. }, Edit::SetAlignedImage { frame: b, .. }) => a == b,
             (Edit::RenameOutput { output: a, .. }, Edit::RenameOutput { output: b, .. })
-            | (Edit::SetAnnotations { output: a, .. }, Edit::SetAnnotations { output: b, .. }) => a == b,
+            | (Edit::SetAnnotations { output: a, .. }, Edit::SetAnnotations { output: b, .. })
+            | (Edit::SetAdjustments { output: a, .. }, Edit::SetAdjustments { output: b, .. }) => a == b,
             (Edit::SetProjectMap { name: a, .. }, Edit::SetProjectMap { name: b, .. }) => a == b,
             (Edit::SetLayerVisible { output: a, layer: l, .. }, Edit::SetLayerVisible { output: b, layer: m, .. }) => a == b && l == m,
             (Edit::SetOutputMap { output: a, name: n, .. }, Edit::SetOutputMap { output: b, name: m, .. }) => a == b && n == m,
@@ -388,14 +398,8 @@ impl Project {
                 let output = self.outputs.remove(index);
                 Ok(Edit::InsertOutput { index, output: Box::new(output) })
             }
-            Edit::RenameOutput { output, name } => {
-                check_name("output name", &name)?;
-                let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
-                Ok(Edit::RenameOutput { output, name: std::mem::replace(&mut o.name, name) })
-            }
-            Edit::SetAnnotations { output, layers } => {
-                let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
-                Ok(Edit::SetAnnotations { output, layers: std::mem::replace(&mut o.annotations, layers) })
+            edit @ (Edit::RenameOutput { .. } | Edit::SetAnnotations { .. } | Edit::SetAdjustments { .. } | Edit::SetOutputMap { .. }) => {
+                self.apply_to_output(edit)
             }
             Edit::AddLayer { output, name } => {
                 check_name("retouch layer name", &name)?;
@@ -421,19 +425,41 @@ impl Project {
                 let l = self.layer_mut(output, layer)?;
                 Ok(Edit::SetLayerVisible { output, layer, visible: std::mem::replace(&mut l.visible, visible) })
             }
-            Edit::SetOutputMap { output, name, map } => {
-                let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
-                let old = match map {
-                    Some(map) => o.maps.insert(name.clone(), map),
-                    None => o.maps.remove(&name),
-                };
-                Ok(Edit::SetOutputMap { output, name, map: old })
-            }
             Edit::SetAlignedImage { frame, aligned } => {
                 let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
                 Ok(Edit::SetAlignedImage { frame, aligned: std::mem::replace(&mut f.aligned, aligned) })
             }
         }
+    }
+
+    /// Makes an edit of one output's own fields: its name, annotations, adjustments and maps.
+    fn apply_to_output(&mut self, edit: Edit) -> Result<Edit, EditError> {
+        let output = match &edit {
+            Edit::RenameOutput { output, .. }
+            | Edit::SetAnnotations { output, .. }
+            | Edit::SetAdjustments { output, .. }
+            | Edit::SetOutputMap { output, .. } => *output,
+            other => return self.apply(other.clone()),
+        };
+        if let Edit::RenameOutput { name, .. } = &edit {
+            check_name("output name", name)?;
+        }
+        let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
+        Ok(match edit {
+            Edit::RenameOutput { name, .. } => Edit::RenameOutput { output, name: std::mem::replace(&mut o.name, name) },
+            Edit::SetAnnotations { layers, .. } => Edit::SetAnnotations { output, layers: std::mem::replace(&mut o.annotations, layers) },
+            Edit::SetAdjustments { adjustments, .. } => {
+                Edit::SetAdjustments { output, adjustments: std::mem::replace(&mut o.adjustments, adjustments) }
+            }
+            Edit::SetOutputMap { name, map, .. } => {
+                let old = match map {
+                    Some(map) => o.maps.insert(name.clone(), map),
+                    None => o.maps.remove(&name),
+                };
+                Edit::SetOutputMap { output, name, map: old }
+            }
+            other => other,
+        })
     }
 
     /// Makes the edits in order, or none of them.
@@ -648,6 +674,7 @@ mod tests {
         let retouched = MapName::new("retouched").unwrap();
         for edit in [
             Edit::SetAnnotations { output, layers: vec![serde_json::json!({"name":"Scale","visible":true})] },
+            Edit::SetAdjustments { output, adjustments: Some(serde_json::json!({"global": {"exposure": 0.5}})) },
             Edit::SetLayerVisible { output, layer, visible: false },
             Edit::SetOutputMap { output, name: retouched.clone(), map: Some(cache_ref(2)) },
             Edit::SetAlignedImage { frame: a, aligned: Some(cache_ref(3)) },
