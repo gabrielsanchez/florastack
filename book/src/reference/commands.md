@@ -10,7 +10,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 
 | Area | Commands |
 |---|---|
-| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.get`](#adjustget), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask), [`adjust.stroke`](#adjuststroke) |
+| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.get`](#adjustget), [`adjust.mapDepth`](#adjustmapdepth), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask), [`adjust.stroke`](#adjuststroke) |
 | [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
@@ -38,7 +38,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 
 **Add mask.** Adds a mask on top of an output's, as one undo step.
 
-The mask is given a new id, which the result returns; an `id` given is ignored. Its components are combined in order: the first one's region, then each next one added (`add`), taken away (`subtract`) or intersected (`intersect`). Shapes: `whole`, `linear` (`start`, `end`), `radial` (`center`, `radius_x`, `radius_y`, `angle`, `feather`), `brush` (`strokes`), `luminance` (`low`, `high`, `low_feather`, `high_feather`), `color` (`samples`, from `adjust.sampleColor`, and `refine`), and from the stack's focus `subject`, `background` and `depth` (`near`, `far`, `feather`). Coordinates are fractions of the output's width and height.
+The mask is given a new id, which the result returns; an `id` given is ignored. Its components are combined in order: the first one's region, then each next one added (`add`), taken away (`subtract`) or intersected (`intersect`). Shapes: `whole`, `linear` (`start`, `end`), `radial` (`center`, `radius_x`, `radius_y`, `angle`, `feather`), `brush` (`strokes`), `luminance` (`low`, `high`, `low_feather`, `high_feather`), `color` (`samples`, from `adjust.sampleColor`, and `refine`), and from the stack's focus `subject`, `background` and `depth` (`from`, `to`, `feather`). Coordinates are fractions of the output's width and height.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -141,6 +141,33 @@ Example:
 {"output":3}
 ```
 
+### `adjust.mapDepth`
+
+**Map the stack's depth.** Measures the depth of the output open for adjusting from its frames' focus, for its depth masks.
+
+Measures the output's frames' focus at a quarter of their size, as the depth-map method's first pass does, and keeps the depth map it makes as the output's `focus-depth` map: at each point, which frame was in focus there. A depth-map output needs none: its own depth map tells. Exports that need it and find none measure it themselves. The subject and background masks need no map: the subject is found in the output itself. Runs beside other jobs.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | Nothing |
+
+Parameters: none.
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `height` | integer |  |
+| `measured` | boolean | Whether the frames were measured (`false`: the output's map was there already). |
+| `output` | integer | An output's id in its project. |
+| `width` | integer | The map's size, a quarter of the output's for a measured one. |
+
+Example:
+
+```json
+{}
+```
+
 ### `adjust.moveMask`
 
 **Move mask.** Moves one of an output's masks to another place in their order, in one undo step.
@@ -194,7 +221,7 @@ Result:
 
 | Name | Type | Description |
 |---|---|---|
-| `focus` | boolean | Whether the stack's focus is known, for the subject, background and depth masks. |
+| `depth` | boolean | Whether the stack's depth map is known, for the depth masks. |
 | `height` | integer |  |
 | `output` | integer | An output's id in its project. |
 | `width` | integer |  |

@@ -1,7 +1,7 @@
 //! Rendering adjustments with LightCraft's develop pipeline.
 //!
-//! A [`Renderer`] holds one image (linear light in Rec. 2020 primaries) and, when the output has them, the stack's
-//! focus maps ([`Focus`]); it renders any [`Adjustments`] at full size or reduced to fit a view ([`Request`]),
+//! A [`Renderer`] holds one image (linear light in Rec. 2020 primaries) and, when the output has one, the stack's depth
+//! map ([`Renderer::with_depth`]); it renders any [`Adjustments`] at full size or reduced to fit a view ([`Request`]),
 //! reusing the stages of its last renders that the change left alone (dragging a tone slider reruns only the
 //! per-pixel stage).
 //!
@@ -9,13 +9,13 @@
 //! itself: a stacked output has already been brought into range (its tone compression), so it must not get a camera
 //! look or a filmic curve. White balance is then relative, 6500 K being the image as it is.
 //!
-//! The masks the stack's focus makes (subject, background, depth ranges) reach the pipeline as segmentation mattes,
-//! the ones a file's semantic masks would be: the subject as the person matte, which the pipeline's subject and
-//! background shapes use, and each depth range as one of the other mattes (skin, hair, teeth, glasses, sky), which a
-//! people or sky shape selects. That is why an output's masks select at most [`MAX_DEPTH_RANGES`] different depth
-//! ranges.
+//! The masks of the stack's focus (subject, background, depth ranges) reach the pipeline as segmentation mattes, the
+//! ones a file's semantic masks would be: the subject ([`crate::subject`], found in the image itself) as the person
+//! matte, which the pipeline's subject and background shapes use, and each depth range, the subject's part whose depth
+//! lies in it, as one of the other mattes (skin, hair, teeth, glasses, sky), which a people or sky shape selects. That
+//! is why an output's masks select at most [`MAX_DEPTH_RANGES`] different depth ranges.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use florastack_core::{ColorSpace, Image};
 use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask as LcMask, MaskComponent, MaskOp, MaskShape, WbMode, WhiteBalance};
@@ -34,17 +34,6 @@ const WHITE_OVER_GREY: f64 = 2.473_931_188_332_412;
 
 /// The mattes that hold depth ranges, in order, with the pipeline shape that selects each.
 const DEPTH_SLOTS: [MatteKind; MAX_DEPTH_RANGES] = [MatteKind::Skin, MatteKind::Hair, MatteKind::Teeth, MatteKind::Glasses, MatteKind::Sky];
-
-/// The stack's focus, which the subject, background and depth masks select from. Both maps have one channel and the
-/// image's aspect ratio, at any size (a quarter of the image's is plenty: masks follow the image's edges with their
-/// `refine`).
-#[derive(Clone, Debug)]
-pub struct Focus {
-    /// How much each pixel belongs to the subject, from 0 (no frame was in focus there) to 1.
-    pub subject: Image<f32>,
-    /// Each pixel's depth, from 0 (in focus in the nearest frame) to 1 (the farthest).
-    pub depth: Image<f32>,
-}
 
 /// How large a render is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,14 +65,11 @@ pub struct Renderer {
     /// The coverage channel of an RGBA image, which adjustments leave as it is.
     alpha: Option<Plane>,
     color: ColorSpace,
-    mattes: Option<FocusMattes>,
+    /// The subject, found when a mask first needs it; shared with the renderers made from this one.
+    subject: Arc<OnceLock<Plane>>,
+    /// The stack's depth map, from 0 (the first frame) to 1 (the last).
+    depth: Option<Arc<Plane>>,
     cache: StageCache,
-}
-
-/// The focus maps, as the pipeline's mattes need them.
-struct FocusMattes {
-    subject: Plane,
-    depth: Plane,
 }
 
 impl std::fmt::Debug for Renderer {
@@ -92,7 +78,7 @@ impl std::fmt::Debug for Renderer {
             .field("width", &self.source.width)
             .field("height", &self.source.height)
             .field("alpha", &self.alpha.is_some())
-            .field("focus", &self.mattes.is_some())
+            .field("depth", &self.depth.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -121,28 +107,51 @@ impl Renderer {
                 }
             }
         }
-        Ok(Renderer { source: Arc::new(source), alpha, color: image.color_space().clone(), mattes: None, cache: StageCache::default() })
+        Ok(Renderer {
+            source: Arc::new(source),
+            alpha,
+            color: image.color_space().clone(),
+            subject: Arc::default(),
+            depth: None,
+            cache: StageCache::default(),
+        })
     }
 
-    /// Gives the renderer the stack's focus, for the subject, background and depth masks.
-    pub fn with_focus(mut self, focus: &Focus) -> Result<Renderer, EditError> {
-        let plane = |map: &Image<f32>| -> Result<Plane, EditError> {
-            let (w, h) = (map.width(), map.height());
-            // The maps must cover the image: the same aspect ratio within a pixel of the map's rounding.
-            let expected = h as f64 * self.source.width as f64 / self.source.height as f64;
-            if map.channels() != 1 || (w as f64 - expected).abs() > 1.0 {
-                return Err(EditError::Guide { width: w, height: h });
+    /// A renderer of the same image with the stack's depth map, for the depth masks: one channel with the image's
+    /// aspect ratio, at any size (a quarter of the image's is plenty), from 0 (in focus in the stack's first frame) to
+    /// 1 (its last). The image is shared, not copied.
+    pub fn with_depth(&self, depth: &Image<f32>) -> Result<Renderer, EditError> {
+        let (w, h) = (depth.width(), depth.height());
+        // The map must cover the image: the same aspect ratio within a pixel of the map's rounding.
+        let expected = h as f64 * self.source.width as f64 / self.source.height as f64;
+        if depth.channels() != 1 || (w as f64 - expected).abs() > 1.0 {
+            return Err(EditError::Guide { width: w, height: h });
+        }
+        let mut plane = Plane::new(w, h);
+        for (dst, src) in plane.data.chunks_exact_mut(w).zip(depth.rows()) {
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d = if s.is_finite() { s.clamp(0.0, 1.0) } else { 0.0 };
             }
-            let mut out = Plane::new(w, h);
-            for (dst, src) in out.data.chunks_exact_mut(w).zip(map.rows()) {
-                for (d, s) in dst.iter_mut().zip(src) {
-                    *d = if s.is_finite() { s.clamp(0.0, 1.0) } else { 0.0 };
-                }
-            }
-            Ok(out)
-        };
-        self.mattes = Some(FocusMattes { subject: plane(&focus.subject)?, depth: plane(&focus.depth)? });
-        Ok(self)
+        }
+        Ok(Renderer {
+            source: Arc::clone(&self.source),
+            alpha: self.alpha.clone(),
+            color: self.color.clone(),
+            subject: Arc::clone(&self.subject),
+            depth: Some(Arc::new(plane)),
+            cache: StageCache::default(),
+        })
+    }
+
+    /// How much each pixel belongs to the subject, from 0 to 1, at most [`crate::subject::WORKING_SIDE`] pixels on its
+    /// long side ([`crate::subject`]).
+    pub fn subject(&self) -> Result<Image<f32>, EditError> {
+        let plane = self.subject_plane();
+        Ok(Image::from_vec(plane.width, plane.height, 1, ColorSpace::LINEAR, plane.data.clone())?)
+    }
+
+    fn subject_plane(&self) -> &Plane {
+        self.subject.get_or_init(|| crate::subject::subject(&self.source))
     }
 
     pub fn width(&self) -> usize {
@@ -153,9 +162,9 @@ impl Renderer {
         self.source.height
     }
 
-    /// Whether the renderer has the stack's focus.
-    pub fn has_focus(&self) -> bool {
-        self.mattes.is_some()
+    /// Whether the renderer has the stack's depth map, which the depth masks need.
+    pub fn has_depth(&self) -> bool {
+        self.depth.is_some()
     }
 
     /// Renders `adjustments`: linear light in Rec. 2020 primaries, with the source's channels and color-space tag.
@@ -259,23 +268,13 @@ impl Renderer {
     fn lightcraft(&self, adjustments: &Adjustments) -> Result<(DevelopSettings, SourceInfo), EditError> {
         let ranges = adjustments.depth_ranges();
         let mut info = SourceInfo { raw: false, ..SourceInfo::default() };
-        if adjustments.needs_focus() {
-            let Some(focus) = &self.mattes else {
-                let shape = adjustments
-                    .masks
-                    .iter()
-                    .filter(|m| m.visible)
-                    .flat_map(|m| &m.components)
-                    .find_map(|c| match c.shape {
-                        Shape::Subject => Some("subject"),
-                        Shape::Background => Some("background"),
-                        Shape::Depth { .. } => Some("depth"),
-                        _ => None,
-                    })
-                    .unwrap_or("focus");
-                return Err(EditError::NoFocus { shape });
+        if adjustments.uses_subject() {
+            let depth = match (&self.depth, ranges.is_empty()) {
+                (Some(depth), _) => Some(depth.as_ref()),
+                (None, true) => None,
+                (None, false) => return Err(EditError::NoDepth),
             };
-            info.mattes = Some(Arc::new(focus.mattes(&ranges)));
+            info.mattes = Some(Arc::new(mattes(self.subject_plane(), depth, &ranges)));
         }
         let mut settings = global(&adjustments.global);
         settings.masks = adjustments
@@ -289,39 +288,38 @@ impl Renderer {
     }
 }
 
-impl FocusMattes {
-    /// The subject as the person matte, and each depth range as the matte of its slot.
-    fn mattes(&self, ranges: &[[f64; 3]]) -> Mattes {
-        let to_u8 = |p: &Plane, f: &dyn Fn(usize, f32) -> f32| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped to [0, 255] first.
-            let data = p.data.iter().enumerate().map(|(i, v)| (f(i, *v).clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
-            lightcraft_raster::Image { width: p.width, height: p.height, data }
-        };
-        let mut mattes = Mattes::default();
-        mattes.push(MatteKind::Person, to_u8(&self.subject, &|_, v| v));
-        for (range, kind) in ranges.iter().zip(DEPTH_SLOTS) {
-            #[allow(clippy::cast_possible_truncation)] // Fractions from 0 to 1.
-            let [near, far, feather] = range.map(|v| v as f32);
-            // The depth map's resolution can differ from the subject's: sample it at the same fraction of the image.
-            let (sw, sh, dw, dh) = (self.subject.width, self.subject.height, self.depth.width, self.depth.height);
-            let matte = to_u8(&self.subject, &|i, subject| {
-                let (x, y) = (i % sw, i / sw);
-                let depth = self.depth.data.get((y * dh / sh.max(1)) * dw + x * dw / sw.max(1)).copied().unwrap_or(0.0);
-                subject * window(depth, near, far, feather)
-            });
-            mattes.push(kind, matte);
-        }
-        mattes
+/// The subject as the person matte, and each depth range, the subject's part in it, as the matte of its slot.
+fn mattes(subject: &Plane, depth: Option<&Plane>, ranges: &[[f64; 3]]) -> Mattes {
+    let to_u8 = |f: &dyn Fn(usize, f32) -> f32| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped to [0, 255] first.
+        let data = subject.data.iter().enumerate().map(|(i, v)| (f(i, *v).clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
+        lightcraft_raster::Image { width: subject.width, height: subject.height, data }
+    };
+    let mut mattes = Mattes::default();
+    mattes.push(MatteKind::Person, to_u8(&|_, v| v));
+    let Some(depth) = depth else { return mattes };
+    for (range, kind) in ranges.iter().zip(DEPTH_SLOTS) {
+        #[allow(clippy::cast_possible_truncation)] // Fractions from 0 to 1.
+        let [from, to, feather] = range.map(|v| v as f32);
+        // The depth map's resolution can differ from the subject's: sample it at the same fraction of the image.
+        let (sw, sh, dw, dh) = (subject.width, subject.height, depth.width, depth.height);
+        let matte = to_u8(&|i, s| {
+            let (x, y) = (i % sw, i / sw);
+            let d = depth.data.get((y * dh / sh.max(1)) * dw + x * dw / sw.max(1)).copied().unwrap_or(0.0);
+            s * window(d, from, to, feather)
+        });
+        mattes.push(kind, matte);
     }
+    mattes
 }
 
-/// How much `depth` lies within `[near, far]`: 1 inside, fading smoothly to 0 over `feather` beyond either end.
-fn window(depth: f32, near: f32, far: f32, feather: f32) -> f32 {
+/// How much `depth` lies within `[from, to]`: 1 inside, fading smoothly to 0 over `feather` beyond either end.
+fn window(depth: f32, from: f32, to: f32, feather: f32) -> f32 {
     let fade = |d: f32| if feather > 0.0 { 1.0 - smoothstep((d / feather).clamp(0.0, 1.0)) } else { f32::from(u8::from(d <= 0.0)) };
-    if depth < near {
-        fade(near - depth)
-    } else if depth > far {
-        fade(depth - far)
+    if depth < from {
+        fade(from - depth)
+    } else if depth > to {
+        fade(depth - to)
     } else {
         1.0
     }
@@ -427,9 +425,9 @@ fn component(c: &Component, ranges: &[[f64; 3]]) -> MaskComponent {
         Shape::Color { samples, refine } => MaskShape::ColorRange { samples: samples.clone(), refine: *refine },
         Shape::Subject => MaskShape::Subject,
         Shape::Background => MaskShape::Background,
-        Shape::Depth { near, far, feather } => {
+        Shape::Depth { from, to, feather } => {
             #[allow(clippy::float_cmp)] // The same range, exactly: `Adjustments::depth_ranges` collected it from this shape.
-            let slot = ranges.iter().position(|r| *r == [*near, *far, *feather]).and_then(|i| DEPTH_SLOTS.get(i));
+            let slot = ranges.iter().position(|r| *r == [*from, *to, *feather]).and_then(|i| DEPTH_SLOTS.get(i));
             match slot {
                 Some(MatteKind::Sky) => MaskShape::Sky,
                 Some(kind) => {

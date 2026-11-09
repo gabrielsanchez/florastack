@@ -4,13 +4,16 @@
 
 use std::sync::Arc;
 
-use florastack_core::Monitor;
+use florastack_core::{AnyImage, Image, Monitor};
 use florastack_edit::{Adjustments, Component, Mask, Op, Request, Shape, Size, Stroke};
-use florastack_project::{Edit, OutputId};
+use florastack_project::{Area, CacheDir, CacheRef, Edit, Output, OutputId};
+use florastack_raw::Quality;
+use florastack_stack::{DepthSettings, PREVIEW_FACTOR, StackShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::adjust::{AdjustChanges, AdjustSession, adjustments, renderer};
+use super::stack::{Chosen, StackPlan, Units, Warping, each};
+use crate::adjust::{AdjustChanges, AdjustSession, FOCUS_DEPTH, adjustments, renderer};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
@@ -61,7 +64,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                      (`subtract`) or intersected (`intersect`). Shapes: `whole`, `linear` (`start`, `end`), `radial` \
                      (`center`, `radius_x`, `radius_y`, `angle`, `feather`), `brush` (`strokes`), `luminance` (`low`, \
                      `high`, `low_feather`, `high_feather`), `color` (`samples`, from `adjust.sampleColor`, and \
-                     `refine`), and from the stack's focus `subject`, `background` and `depth` (`near`, `far`, \
+                     `refine`), and from the stack's focus `subject`, `background` and `depth` (`from`, `to`, \
                      `feather`). Coordinates are fractions of the output's width and height.",
                 )
                 .undoable()
@@ -118,6 +121,19 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 .examples(&[r#"{ "output": 3 }"#]),
             Lane::Preview,
             open,
+        ),
+        CommandSpec::job(
+            Meta::new("adjust.mapDepth", "Map the stack's depth", "Measures the depth of the output open for adjusting from its frames' focus, for its depth masks.")
+                .help(
+                    "Measures the output's frames' focus at a quarter of their size, as the depth-map method's first pass \
+                     does, and keeps the depth map it makes as the output's `focus-depth` map: at each point, which frame \
+                     was in focus there. A depth-map output needs none: its own depth map tells. Exports that need it and \
+                     find none measure it themselves. The subject and background masks need no map: the subject is found \
+                     in the output itself. Runs beside other jobs.",
+                )
+                .requires(Requires::Project),
+            Lane::Preview,
+            map_depth,
         ),
         CommandSpec::instant(
             Meta::new("adjust.close", "Close adjusting", "Closes the output open for adjusting.").requires(Requires::Project),
@@ -402,6 +418,138 @@ fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandErro
     Ok(Stroked { mask: p.mask, component, strokes })
 }
 
+/// Where an output's depth map comes from: the map it has, or its frames, measured. See `crate::adjust`.
+pub(super) enum DepthSource {
+    /// A depth map: 0 to 65535 over the frames, a 16-bit gray image.
+    Map(CacheRef),
+    /// The output's frames, to measure at a quarter of their size.
+    Measure(Box<Measuring>),
+}
+
+/// What measuring an output's depth needs.
+pub(super) struct Measuring {
+    plan: StackPlan,
+    depth: DepthSettings,
+    output: OutputId,
+}
+
+impl DepthSource {
+    /// Where the output's depth map comes from, for `command`.
+    pub(super) fn of(session: &Session, output: &Output, command: &'static str) -> Result<DepthSource, CommandError> {
+        let map = |name: &str| crate::retouch::map_name(name).ok().and_then(|n| output.maps.get(&n).cloned());
+        if output.method == "depth-map"
+            && let Some(depth) = map("depth")
+        {
+            return Ok(DepthSource::Map(depth));
+        }
+        if let Some(depth) = map(FOCUS_DEPTH) {
+            return Ok(DepthSource::Map(depth));
+        }
+        let project = session.project()?;
+        let frames = crate::retouch::output_frames(project, output);
+        if frames.is_empty() {
+            return Err(session.unavailable("the output has no frames to measure the depth of"));
+        }
+        let depth = crate::project::stack_settings(project)?.depth_map;
+        let plan = StackPlan::of_frames(
+            session,
+            command,
+            Chosen::DepthMap(depth.clone()),
+            Quality::Preview,
+            &frames,
+            crate::retouch::output_framing(output),
+        )?;
+        Ok(DepthSource::Measure(Box::new(Measuring { plan, depth, output: output.id() })))
+    }
+
+    /// The depth map, read or measured for an output of `size`, with the map newly written to the cache when it was
+    /// measured.
+    pub(super) fn read(self, cache: &CacheDir, ctx: &dyn Monitor, size: (usize, usize)) -> Result<(Image<u16>, Option<CacheRef>), CommandError> {
+        match self {
+            DepthSource::Map(depth) => Ok((read_u16(cache, &depth)?, None)),
+            DepthSource::Measure(m) => {
+                let Measuring { mut plan, depth, output } = *m;
+                if (plan.canvas.width, plan.canvas.height) != size {
+                    return Err(CommandError::Unavailable {
+                        command: "adjust".to_owned(),
+                        reason: "the frames, as aligned now, don't make this output's canvas, so its depth can't be measured: they were aligned or framed again since it was stacked".to_owned(),
+                    });
+                }
+                plan.reader.load_mask()?;
+                let n = plan.frames.len();
+                let mut units = Units::new(n);
+                #[allow(clippy::cast_precision_loss)] // A small constant.
+                let reduced = depth.reduced(PREVIEW_FACTOR as f64);
+                let mut estimator = reduced.estimator(&plan.tiling)?;
+                let mut feed = Warping { plan: &mut plan, range: 0..n, reduced: true };
+                each(&mut feed, ctx, &mut units, |loaded, progress, first| {
+                    loaded.source(|source| {
+                        if first {
+                            estimator.begin(StackShape::of(source))?;
+                        }
+                        Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
+                    })
+                })?;
+                let stats = estimator.finish(ctx)?;
+                let map = stats.resolve(reduced.contrast_threshold(), reduced.smoothing, None)?.depth_u16()?;
+                let name = format!("{FOCUS_DEPTH}-{}", output.get());
+                let written = crate::project::write_image_in(&plan.cache, Area::Cache, &name, &AnyImage::U16(map.clone()), None)?;
+                Ok((map, Some(written)))
+            }
+        }
+    }
+}
+
+/// A 16-bit gray map from the cache.
+fn read_u16(cache: &CacheDir, reference: &CacheRef) -> Result<Image<u16>, CommandError> {
+    match crate::project::read_image(cache, reference)? {
+        AnyImage::U16(image) if image.channels() == 1 => Ok(image),
+        other => Err(CommandError::Unavailable {
+            command: "adjust".to_owned(),
+            reason: format!("a depth map has {} channels of {:?} samples, not one of 16 bits", other.channels(), other.format()),
+        }),
+    }
+}
+
+/// The depth mapped.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DepthMapped {
+    output: OutputId,
+    /// The map's size, a quarter of the output's for a measured one.
+    width: usize,
+    height: usize,
+    /// Whether the frames were measured (`false`: the output's map was there already).
+    measured: bool,
+}
+
+fn map_depth(session: &Session, _: NoParams) -> Result<JobPlan<DepthMapped>, CommandError> {
+    let open = open_session(session)?;
+    let id = open.output;
+    let size = (open.renderer.width(), open.renderer.height());
+    let output = find(session, id)?;
+    let source = DepthSource::of(session, output, "adjust.mapDepth")?;
+    let measured = matches!(source, DepthSource::Measure(_));
+    let renderer = Arc::clone(&open.renderer);
+    let cache = session.cache_dir()?;
+    let job = JobPlan::new(move |ctx| {
+        let (map, written) = source.read(&cache, ctx, size)?;
+        ctx.stage(1);
+        let with_depth = Arc::new(renderer.with_depth(&crate::adjust::depth(&map)?)?);
+        let mapped = DepthMapped { output: id, width: map.width(), height: map.height(), measured };
+        Ok(commit(move |session: &mut Session| {
+            if let Some(depth) = written {
+                session.apply_system(Edit::SetOutputMap { output: id, name: crate::retouch::map_name(FOCUS_DEPTH)?, map: Some(depth) })?;
+            }
+            if let Some(open) = session.adjust.as_mut().filter(|s| s.output == id) {
+                open.renderer = with_depth;
+            }
+            Ok(mapped)
+        }))
+    });
+    Ok(job.stages(&[("Measuring focus", 0.95), ("Mapping", 0.05)]))
+}
+
 fn open_session(session: &Session) -> Result<&AdjustSession, CommandError> {
     session.adjust.as_ref().ok_or_else(|| session.unavailable("no output is open for adjusting: open one with `adjust.open`"))
 }
@@ -413,8 +561,8 @@ struct Opened {
     output: OutputId,
     width: usize,
     height: usize,
-    /// Whether the stack's focus is known, for the subject, background and depth masks.
-    focus: bool,
+    /// Whether the stack's depth map is known, for the depth masks.
+    depth: bool,
 }
 
 fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandError> {
@@ -422,6 +570,10 @@ fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandEr
     let base = crate::retouch::render_key(output, &crate::retouch::visible_strokes(output));
     let mut notes = Vec::new();
     let pixels = super::output::Pixels::base(session, p.output, &mut notes)?;
+    let map = match DepthSource::of(session, output, "adjust.open") {
+        Ok(DepthSource::Map(depth)) => Some(depth),
+        _ => None,
+    };
     let cache = session.cache_dir()?;
     let id = p.output;
     let job = JobPlan::new(move |ctx| {
@@ -431,7 +583,15 @@ fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandEr
         }
         ctx.checkpoint()?;
         let (renderer, working) = renderer(result)?;
-        let opened = Opened { output: id, width: renderer.width(), height: renderer.height(), focus: renderer.has_focus() };
+        let renderer = match map.map(|d| read_u16(&cache, &d).and_then(|m| crate::adjust::depth(&m))) {
+            Some(Ok(depth)) => renderer.with_depth(&depth)?,
+            Some(Err(e)) => {
+                tracing::warn!("the output's depth map can't be read, so its depth masks wait for `adjust.mapDepth`: {e}");
+                renderer
+            }
+            None => renderer,
+        };
+        let opened = Opened { output: id, width: renderer.width(), height: renderer.height(), depth: renderer.has_depth() };
         Ok(commit(move |session: &mut Session| {
             session.adjust = Some(AdjustSession {
                 output: id,

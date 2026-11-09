@@ -9,11 +9,11 @@ pub enum EditError {
     /// The image isn't one the renderer takes.
     #[error("cannot adjust this image: {reason}")]
     Image { reason: String },
-    /// A mask needs the stack's focus, which wasn't given.
-    #[error("the {shape} mask needs the stack's focus map, which this output doesn't have")]
-    NoFocus { shape: &'static str },
-    /// A focus map has another shape than the image's.
-    #[error("the focus map is {width}x{height}: it must have one channel and the image's aspect ratio")]
+    /// A depth mask needs the stack's depth map, which wasn't given.
+    #[error("a depth mask needs the stack's depth map, which this output doesn't have yet: map the stack's focus first")]
+    NoDepth,
+    /// A depth map has another shape than the image's.
+    #[error("the depth map is {width}x{height}: it must have one channel and the image's aspect ratio")]
     Guide { width: usize, height: usize },
     #[error(transparent)]
     Core(#[from] florastack_core::ImageError),

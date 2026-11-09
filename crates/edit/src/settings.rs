@@ -322,18 +322,20 @@ pub enum Shape {
         #[schemars(range(min = 0.0, max = 100.0))]
         refine: f64,
     },
-    /// The subject: where some frame of the stack was in focus.
+    /// The subject: where the stack has fine detail, which some frame had in focus.
     Subject,
-    /// The background: where no frame of the stack was in focus.
+    /// The background: where the stack has no fine detail, which no frame had in focus.
     Background,
-    /// A range of depth: the parts of the subject in focus in a range of the stack's frames.
+    /// A range of depth: the parts of the subject in focus in a range of the stack's frames, counted in the order they
+    /// are stacked: 0 is the first frame, 1 the last (the nearest and the farthest, or the other way round, as the
+    /// stack was taken).
     Depth {
-        /// The nearest depth it selects fully, from 0 (the nearest frame) to 1 (the farthest).
+        /// Where the range starts, from 0 (the first frame) to 1 (the last).
         #[schemars(range(min = 0.0, max = 1.0))]
-        near: f64,
-        /// The farthest depth it selects fully.
+        from: f64,
+        /// Where it ends, at or after `from`.
         #[schemars(range(min = 0.0, max = 1.0))]
-        far: f64,
+        to: f64,
         /// How far beyond the range the selection fades out, from 0 to 1.
         #[schemars(range(min = 0.0, max = 1.0))]
         feather: f64,
@@ -387,9 +389,14 @@ impl Adjustments {
         self.masks.iter().map(|m| m.id.saturating_add(1)).max().unwrap_or(1).max(1)
     }
 
-    /// Whether some visible mask uses the stack's focus (a subject, background or depth component).
-    pub fn needs_focus(&self) -> bool {
+    /// Whether some visible mask selects from the subject (a subject, background or depth component).
+    pub fn uses_subject(&self) -> bool {
         self.shapes().any(|s| matches!(s, Shape::Subject | Shape::Background | Shape::Depth { .. }))
+    }
+
+    /// Whether some visible mask needs the stack's depth map (a depth component).
+    pub fn needs_depth(&self) -> bool {
+        self.shapes().any(|s| matches!(s, Shape::Depth { .. }))
     }
 
     /// The shapes of the visible masks.
@@ -401,8 +408,8 @@ impl Adjustments {
     pub(crate) fn depth_ranges(&self) -> Vec<[f64; 3]> {
         let mut ranges: Vec<[f64; 3]> = Vec::new();
         for shape in self.shapes() {
-            if let Shape::Depth { near, far, feather } = *shape {
-                let range = [near, far, feather];
+            if let Shape::Depth { from, to, feather } = *shape {
+                let range = [from, to, feather];
                 if !ranges.contains(&range) {
                     ranges.push(range);
                 }
@@ -586,12 +593,12 @@ impl Shape {
                 }
                 check("refine", *refine, 0.0, 100.0)
             }
-            Shape::Depth { near, far, feather } => {
-                check("near", *near, 0.0, 1.0)?;
-                check("far", *far, 0.0, 1.0)?;
+            Shape::Depth { from, to, feather } => {
+                check("from", *from, 0.0, 1.0)?;
+                check("to", *to, 0.0, 1.0)?;
                 check("feather", *feather, 0.0, 1.0)?;
-                if near > far {
-                    return Err(EditError::invalid("a depth range's near end must not be beyond its far end"));
+                if from > to {
+                    return Err(EditError::invalid("a depth range must not end before it starts"));
                 }
                 Ok(())
             }
