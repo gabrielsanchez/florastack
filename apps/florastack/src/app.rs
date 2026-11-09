@@ -174,6 +174,7 @@ pub struct FloraStackApp {
     pub preview_method: &'static str,
     /// The Retouch tab's brush, view and stroke being drawn.
     pub retouch: crate::retouch_tab::RetouchUi,
+    pub adjust: crate::adjust_tab::AdjustUi,
     /// The Export tab's estimate and template being typed.
     pub export: crate::export_tab::ExportUi,
     #[cfg(not(target_arch = "wasm32"))]
@@ -245,6 +246,7 @@ impl FloraStackApp {
             shown_threshold: None,
             preview_method: "pyramid",
             retouch: crate::retouch_tab::RetouchUi::default(),
+            adjust: crate::adjust_tab::AdjustUi::default(),
             export: crate::export_tab::ExportUi::default(),
             #[cfg(not(target_arch = "wasm32"))]
             capture: crate::capture_tab::CaptureUi::default(),
@@ -631,7 +633,7 @@ impl FloraStackApp {
         if self.shell.poll() {
             ctx.request_repaint();
         }
-        crate::retouch_tab::sync(self);
+        self.sync_tabs();
         for opened in std::mem::take(&mut self.shell.opened) {
             if self.temporary.as_ref().is_none_or(|t| !opened.starts_with(t)) {
                 self.prefs.remember(&opened);
@@ -733,6 +735,12 @@ impl FloraStackApp {
         if self.shell.busy() || self.loading.is_some() || (reading && cfg!(target_arch = "wasm32")) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+
+    /// Brings the Retouch and Adjust tabs up to date with the engine's sessions.
+    fn sync_tabs(&mut self) {
+        crate::retouch_tab::sync(self);
+        crate::adjust_tab::sync(self);
     }
 
     /// Saves the project when autosave says it is time.

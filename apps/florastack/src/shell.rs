@@ -83,6 +83,8 @@ pub struct Shell {
     pub export_settings: Value,
     /// What changed in the retouch session since the Retouch tab last drew it.
     pub retouch: Option<florastack_engine::retouch::RetouchChanges>,
+    /// What changed in the adjust session since the Adjust tab last drew it.
+    pub adjust: Option<florastack_engine::adjust::AdjustChanges>,
     /// Projects opened or saved elsewhere since last asked, for the recent projects.
     pub opened: Vec<PathBuf>,
     /// The engine's compute device (`compute.info`), once asked.
@@ -118,6 +120,7 @@ impl Shell {
             relief: None,
             tested: None,
             retouch: None,
+            adjust: None,
             stack_settings: Value::Null,
             align_settings: Value::Null,
             alignment: Value::Null,
@@ -169,6 +172,18 @@ impl Shell {
         }
     }
 
+    /// Folds what changed in the adjust session into [`Shell::adjust`].
+    fn take_adjust(&mut self) {
+        if let Some(new) = self.engine.take_adjust_changes() {
+            let old = self.adjust.take().unwrap_or_default();
+            self.adjust = Some(florastack_engine::adjust::AdjustChanges {
+                preview: old.preview || new.preview,
+                opened: old.opened || new.opened,
+                closed: (old.closed && !new.opened) || new.closed,
+            });
+        }
+    }
+
     /// Dispatches `name` with `params`: an instant command's or a query's result, or `None` for a job (which the top
     /// bar then follows) or a failure (which is shown).
     pub fn run(&mut self, name: &str, params: Value) -> Option<Value> {
@@ -196,6 +211,7 @@ impl Shell {
     fn dispatch_with(&mut self, name: &str, params: Value, coalesce: Option<String>) -> Result<Dispatched, CommandError> {
         let done = self.engine.dispatch_with(name, params, DispatchOptions { coalesce });
         self.take_retouch();
+        self.take_adjust();
         if let Ok(Dispatched::Started(job)) = &done
             && let Some(info) = self.engine.job(*job)
         {
@@ -232,6 +248,7 @@ impl Shell {
     pub fn poll(&mut self) -> bool {
         let mut changed = self.engine.poll() > 0;
         self.take_retouch();
+        self.take_adjust();
         while let Ok(event) = self.events.try_recv() {
             changed = true;
             match event {

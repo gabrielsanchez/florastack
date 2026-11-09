@@ -31,6 +31,11 @@ use florastack_project::{Output, OutputId};
 use crate::error::CommandError;
 use crate::view::DisplayImage;
 
+pub use florastack_edit::Adjustments as Settings;
+pub use florastack_edit::settings::MAX_SAMPLES;
+/// What the apps edit: florastack-edit's settings.
+pub use florastack_edit::{Component, Global, Local, Mask, Op, Shape, Stroke};
+
 /// An output's adjustments, the defaults when it has none; refused when they don't read or aren't valid.
 pub(crate) fn adjustments(output: &Output) -> Result<Adjustments, CommandError> {
     let Some(value) = &output.adjustments else { return Ok(Adjustments::default()) };
@@ -115,8 +120,10 @@ pub(crate) struct AdjustSession {
     pub working: Arc<Working>,
     /// What the renderer was made from: the output's image and its visible strokes (`crate::retouch::render_key`).
     pub base: String,
-    /// The last preview rendered, and the adjustments it shows.
+    /// The last preview rendered, and the adjustments it shows; and the output without them, at the same size, when
+    /// asked for.
     pub preview: Option<Arc<DisplayImage>>,
+    pub before: Option<Arc<DisplayImage>>,
     pub shown: Option<Adjustments>,
     pub changes: AdjustChanges,
 }
@@ -149,6 +156,16 @@ impl AdjustView<'_> {
     /// The last preview rendered (`adjust.preview`), linear light in sRGB's primaries.
     pub fn preview(&self) -> Option<&DisplayImage> {
         self.session.preview.as_deref()
+    }
+
+    /// The output without its adjustments, at the last preview's size, when `adjust.preview` was asked for it.
+    pub fn before(&self) -> Option<&DisplayImage> {
+        self.session.before.as_deref()
+    }
+
+    /// The previews, shared: the last one, and the output without its adjustments.
+    pub fn previews(&self) -> (Option<Arc<DisplayImage>>, Option<Arc<DisplayImage>>) {
+        (self.session.preview.clone(), self.session.before.clone())
     }
 
     /// Whether the session has the stack's depth map, which the depth masks need.

@@ -21,6 +21,10 @@ single exposure allows, for macro, microscopy, product and landscape photography
   of focus flagged, sensor dust and hot pixels painted out, and stacks that were shot out of order sorted.
 - **Non-destructive retouching**: paint from any frame onto the result, with brushes that match brightness and color,
   in layers, with full undo.
+- **Adjustments and masks**: exposure, white balance, contrast, highlights and shadows, texture, clarity, dehaze,
+  vibrance, saturation, sharpening and noise reduction, for the whole image and within masks: the subject or its
+  background, found from what the stack has in focus, a range of its depth, gradients, brush strokes, luminance and color
+  ranges.
 - **Camera RAW** files developed linearly for the whole stack, and TIFF, JPEG, PNG, WebP, OpenEXR and DNG out with
   their metadata; depth and confidence maps, calibrated depth, scale bars, 3D reliefs and stereo pairs.
 - **Batches, watch folders and tethered capture**, a command-line tool, MCP and Python bindings, all over the same
@@ -49,6 +53,7 @@ The guide is an mdBook in [`book/`](book/src/SUMMARY.md):
 - **User guide**: [installing](book/src/user/install.md), [in the browser](book/src/user/browser.md),
   [a first stack](book/src/user/first-stack.md),
   [choosing a method](book/src/user/methods.md), [retouching](book/src/user/retouching.md),
+  [adjusting the image](book/src/user/adjusting.md),
   [slabbing](book/src/user/slabbing.md), [shooting advice](book/src/user/shooting.md),
   [batch and watch folders](book/src/user/batch-and-watch.md), [capture](book/src/user/capture.md),
   [scientific exports](book/src/user/scientific-exports.md), [automation, MCP and Python](book/src/user/automation.md)

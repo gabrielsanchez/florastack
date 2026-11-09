@@ -68,7 +68,7 @@ read its `state`, `progress`, `result` and `error`. Cancel through `command.disp
 | `job.get` | `{"job":ID}` → current job state |
 | `resources.list` / `resources.read` | `{}` / `{"uri":"florastack://project"}` → MCP-shaped resources/contents |
 | `ui.state` | `{}` → tab, zoom, viewer readiness, frame/output counts |
-| `ui.setView` | Optional `tab` (`stack`, `retouch`, `export`, `batch`, `capture`), `frame` or `output` ID, and `zoom` |
+| `ui.setView` | Optional `tab` (`stack`, `retouch`, `adjust`, `export`, `batch`, `capture`), `frame` or `output` ID, and `zoom` |
 | `ui.screenshot` | `{"path":"/absolute/path/ui.png","overwrite":false}` → path, width, height after the PNG is complete |
 | `ui.close` | `{"discardChanges":false}`; dirty projects require saving or explicit discard |
 

@@ -12,6 +12,7 @@
 //! and saving projects elsewhere, recent projects, batches, capture, the control channel) is left out.
 
 pub mod actions;
+pub mod adjust_tab;
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capture_tab;

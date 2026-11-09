@@ -30,13 +30,14 @@ pub enum Tab {
     #[default]
     Stack,
     Retouch,
+    Adjust,
     Export,
     Batch,
     Capture,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [Tab::Stack, Tab::Retouch, Tab::Export, Tab::Batch, Tab::Capture];
+    pub const ALL: [Tab; 6] = [Tab::Stack, Tab::Retouch, Tab::Adjust, Tab::Export, Tab::Batch, Tab::Capture];
 
     /// The tabs this build shows: all of them on the desktop; in a browser, not the batch's (which reads and writes
     /// folders) nor capture's (which needs the user's devices).
@@ -48,6 +49,7 @@ impl Tab {
         match self {
             Tab::Stack => "tab-stack",
             Tab::Retouch => "tab-retouch",
+            Tab::Adjust => "tab-adjust",
             Tab::Export => "tab-export",
             Tab::Batch => "tab-batch",
             Tab::Capture => "tab-capture",

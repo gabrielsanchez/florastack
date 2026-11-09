@@ -10,6 +10,7 @@
 - [Choosing a method](user/methods.md)
 - [The Stack tab](user/stack-tab.md)
 - [Retouching](user/retouching.md)
+- [Adjusting the image](user/adjusting.md)
 - [Slabbing deep stacks](user/slabbing.md)
 - [Shooting for focus stacking](user/shooting.md)
 - [Exporting, presets and preferences](user/export.md)

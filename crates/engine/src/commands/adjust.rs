@@ -143,13 +143,18 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             Meta::new("adjust.preview", "Preview adjustments", "Renders the output open for adjusting with its adjustments, reduced to fit a view.")
                 .help(
                     "The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a \
-                     slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red. \
+                     slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; \
+                     `before` also renders the output without its adjustments at the same size, for comparing. \
                      Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call \
                      replaces one still running.",
                 )
                 .requires(Requires::Project)
                 .supersede()
-                .examples(&[r#"{ "width": 1600, "height": 1000 }"#, r#"{ "width": 800, "height": 600, "draft": true, "overlay": 2 }"#]),
+                .examples(&[
+                    r#"{ "width": 1600, "height": 1000 }"#,
+                    r#"{ "width": 800, "height": 600, "draft": true, "overlay": 2 }"#,
+                    r#"{ "width": 1600, "height": 1000, "before": true }"#,
+                ]),
             Lane::Preview,
             preview,
         ),
@@ -599,6 +604,7 @@ fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandEr
                 working: Arc::new(working),
                 base,
                 preview: None,
+                before: None,
                 shown: None,
                 changes: AdjustChanges { opened: true, ..AdjustChanges::default() },
             });
@@ -637,6 +643,9 @@ struct PreviewParams {
     /// A mask whose region is shown tinted red, by id.
     #[serde(default)]
     overlay: Option<u32>,
+    /// Also renders the output without its adjustments, at the same size, for comparing.
+    #[serde(default)]
+    before: bool,
 }
 
 impl Params for PreviewParams {
@@ -669,16 +678,23 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
     let adjustments = adjustments(output)?;
     let (renderer, working, id) = (Arc::clone(&open.renderer), Arc::clone(&open.working), open.output);
     let request = Request { size: Size::Fit { width: p.width, height: p.height }, draft: p.draft, overlay: p.overlay };
+    let with_before = p.before;
     let job = JobPlan::new(move |ctx| {
-        let mut image = renderer.render(&adjustments, &request)?;
+        let shown = |adjustments: &Adjustments, request: &Request| -> Result<crate::view::DisplayImage, CommandError> {
+            let mut image = renderer.render(adjustments, request)?;
+            working.back(&mut image)?;
+            crate::view::display(&image, None).map_err(|e| CommandError::Unavailable { command: "adjust.preview".to_owned(), reason: e.to_string() })
+        };
+        let display = shown(&adjustments, &request)?;
         ctx.checkpoint()?;
-        working.back(&mut image)?;
-        let display = crate::view::display(&image, None)
-            .map_err(|e| CommandError::Unavailable { command: "adjust.preview".to_owned(), reason: e.to_string() })?;
+        let before = if with_before { Some(Arc::new(shown(&Adjustments::default(), &Request { overlay: None, ..request })?)) } else { None };
         let previewed = Previewed { output: id, width: display.width, height: display.height };
         Ok(commit(move |session: &mut Session| {
             if let Some(open) = session.adjust.as_mut().filter(|s| s.output == id) {
                 open.preview = Some(Arc::new(display));
+                if before.is_some() {
+                    open.before = before;
+                }
                 open.shown = Some(adjustments);
                 open.changes.preview = true;
             }

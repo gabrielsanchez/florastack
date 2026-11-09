@@ -44,6 +44,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| match app.prefs.tab {
             Tab::Stack => crate::stack_tab::show(app, ui),
             Tab::Retouch => crate::retouch_tab::panel(app, ui),
+            Tab::Adjust => crate::adjust_tab::panel(app, ui),
             Tab::Export => crate::export_tab::show(app, ui),
             Tab::Batch => batch_tab(app, ui),
             #[cfg(not(target_arch = "wasm32"))]
@@ -57,6 +58,11 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         if app.prefs.tab == Tab::Retouch {
             crate::retouch_tab::view(app, ui);
             if app.shell.retouch.is_some() {
+                ui.ctx().request_repaint();
+            }
+        } else if app.prefs.tab == Tab::Adjust {
+            crate::adjust_tab::view(app, ui);
+            if app.shell.adjust.is_some() {
                 ui.ctx().request_repaint();
             }
         } else if app.prefs.tab == Tab::Export
