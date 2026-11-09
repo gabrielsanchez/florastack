@@ -69,5 +69,7 @@ drag the photos onto `florastack-cli.exe` in Explorer: it stacks them with the d
 - **Help > Keyboard shortcuts** (F1) lists the shortcuts, and Ctrl+K (⌘K on macOS) opens the command palette, which
   runs any of FloraStack's [commands](../reference/commands.md) by name.
 - [Retouching](retouching.md) repairs what no method gets right by itself, by painting from the frames.
+- [Adjusting the image](adjusting.md) finishes it: tone, color and detail, for the whole image and within masks such as
+  the subject or a range of its depth.
 - [The Stack tab](stack-tab.md) explains every setting.
 - [Shooting for focus stacking](shooting.md) makes the next stack easier to stack.

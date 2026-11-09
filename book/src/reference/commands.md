@@ -236,7 +236,7 @@ Example:
 
 **Preview adjustments.** Renders the output open for adjusting with its adjustments, reduced to fit a view.
 
-The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
+The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; `before` also renders the output without its adjustments at the same size, for comparing. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -246,6 +246,7 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
+| `before` | boolean | Also renders the output without its adjustments, at the same size, for comparing. Default: `false`. |
 | `draft` | boolean | A quick render while a slider moves. Default: `false`. |
 | `height` | integer, from 1 to 16384 | **Required.** The largest height, in pixels, from 1 to 16384. |
 | `overlay` | integer | A mask whose region is shown tinted red, by id. |
@@ -264,6 +265,7 @@ Examples:
 ```json
 {"height":1000,"width":1600}
 {"draft":true,"height":600,"overlay":2,"width":800}
+{"before":true,"height":1000,"width":1600}
 ```
 
 ### `adjust.removeMask`
