@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 520" width="1080" height="520" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">FloraStack's crates and what each may depend on</title>
-  <desc id="desc">The three apps (florastack, florastack-cli, florastack-python) depend on florastack-engine alone. The engine depends on the eight library crates: florastack-codecs, florastack-raw, florastack-align, florastack-stack, florastack-gpu, florastack-project, florastack-retouch and florastack-capture. florastack-retouch also depends on florastack-project, and florastack-gpu uses florastack-align and florastack-stack in its tests only. Every library depends on florastack-core, which depends on no FloraStack crate. florastack-metrics (on florastack-core) and florastack-testkit are dev-dependencies only, and xtask, the developer tooling, depends on no FloraStack crate. This diagram is checked against xtask/src/layers.rs by a test.</desc>
+  <desc id="desc">The three apps (florastack, florastack-cli, florastack-python) depend on florastack-engine alone. The engine depends on the nine library crates: florastack-codecs, florastack-raw, florastack-align, florastack-stack, florastack-gpu, florastack-project, florastack-retouch, florastack-edit and florastack-capture. florastack-retouch also depends on florastack-project, and florastack-gpu uses florastack-align and florastack-stack in its tests only. Every library depends on florastack-core, which depends on no FloraStack crate. florastack-metrics (on florastack-core) and florastack-testkit are dev-dependencies only, and xtask, the developer tooling, depends on no FloraStack crate. This diagram is checked against xtask/src/layers.rs by a test.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5a52"/>
@@ -17,103 +17,107 @@
     .devedge { stroke: #4a5a52; stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow); }
     .layer { font-size: 11px; fill: #6b7a72; font-style: italic; }
   </style>
-  <rect x="0" y="0" width="960" height="520" rx="10" fill="#ffffff"/>
+  <rect x="0" y="0" width="1080" height="520" rx="10" fill="#ffffff"/>
 
   <text class="layer" x="16" y="56">apps</text>
   <text class="layer" x="16" y="162">engine</text>
   <text class="layer" x="16" y="238">libraries</text>
 
   <!-- The apps -->
-  <rect class="box" x="150" y="24" width="200" height="56" rx="6"/>
-  <text class="name" x="250" y="48">florastack</text>
-  <text class="what" x="250" y="66">desktop app (egui)</text>
-  <rect class="box" x="380" y="24" width="200" height="56" rx="6"/>
-  <text class="name" x="480" y="48">florastack-cli</text>
-  <text class="what" x="480" y="66">command-line tool, MCP server</text>
-  <rect class="box" x="610" y="24" width="200" height="56" rx="6"/>
-  <text class="name" x="710" y="48">florastack-python</text>
-  <text class="what" x="710" y="66">Python package (PyO3)</text>
+  <rect class="box" x="210" y="24" width="200" height="56" rx="6"/>
+  <text class="name" x="310" y="48">florastack</text>
+  <text class="what" x="310" y="66">desktop app (egui)</text>
+  <rect class="box" x="440" y="24" width="200" height="56" rx="6"/>
+  <text class="name" x="540" y="48">florastack-cli</text>
+  <text class="what" x="540" y="66">command-line tool, MCP server</text>
+  <rect class="box" x="670" y="24" width="200" height="56" rx="6"/>
+  <text class="name" x="770" y="48">florastack-python</text>
+  <text class="what" x="770" y="66">Python package (PyO3)</text>
 
-  <path class="edge" d="M 250 80 L 420 130"/>
-  <path class="edge" d="M 480 80 L 480 130"/>
-  <path class="edge" d="M 710 80 L 540 130"/>
+  <path class="edge" d="M 310 80 L 480 130"/>
+  <path class="edge" d="M 540 80 L 540 130"/>
+  <path class="edge" d="M 770 80 L 600 130"/>
 
   <!-- The engine -->
-  <rect class="box engine" x="330" y="130" width="300" height="56" rx="6"/>
-  <text class="name" x="480" y="154">florastack-engine</text>
-  <text class="what" x="480" y="172">commands, jobs, sessions, orchestration</text>
-
-  <path class="edge" d="M 345 186 L 67 250"/>
-  <path class="edge" d="M 385 186 L 185 250"/>
-  <path class="edge" d="M 425 186 L 303 250"/>
-  <path class="edge" d="M 465 186 L 421 250"/>
-  <path class="edge" d="M 495 186 L 539 250"/>
-  <path class="edge" d="M 535 186 L 657 250"/>
-  <path class="edge" d="M 575 186 L 775 250"/>
-  <path class="edge" d="M 615 186 L 893 250"/>
+  <rect class="box engine" x="390" y="130" width="300" height="56" rx="6"/>
+  <text class="name" x="540" y="154">florastack-engine</text>
+  <text class="what" x="540" y="172">commands, jobs, sessions, orchestration</text>
+  <path class="edge" d="M 405 186 L 68 250"/>
+  <path class="edge" d="M 438.8 186 L 186 250"/>
+  <path class="edge" d="M 472.5 186 L 304 250"/>
+  <path class="edge" d="M 506.2 186 L 422 250"/>
+  <path class="edge" d="M 540 186 L 540 250"/>
+  <path class="edge" d="M 573.8 186 L 658 250"/>
+  <path class="edge" d="M 607.5 186 L 776 250"/>
+  <path class="edge" d="M 641.2 186 L 894 250"/>
+  <path class="edge" d="M 675 186 L 1012 250"/>
 
   <!-- The libraries -->
-  <rect class="box" x="11" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="67" y="274">florastack-codecs</text>
-  <text class="what" x="67" y="292">image files</text>
-  <rect class="box" x="129" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="185" y="274">florastack-raw</text>
-  <text class="what" x="185" y="292">camera RAW files</text>
-  <rect class="box" x="247" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="303" y="274">florastack-align</text>
-  <text class="what" x="303" y="292">alignment, dust</text>
-  <rect class="box" x="365" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="421" y="274">florastack-stack</text>
-  <text class="what" x="421" y="292">stacking methods</text>
-  <rect class="box" x="483" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="539" y="274">florastack-gpu</text>
-  <text class="what" x="539" y="292">GPU kernels (wgpu)</text>
-  <rect class="box" x="601" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="657" y="274">florastack-project</text>
-  <text class="what" x="657" y="292">projects, undo</text>
-  <rect class="box" x="719" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="775" y="274">florastack-retouch</text>
-  <text class="what" x="775" y="292">brushes, strokes</text>
-  <rect class="box" x="837" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="893" y="274">florastack-capture</text>
-  <text class="what" x="893" y="292">cameras, rails</text>
+  <rect class="box" x="12" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="68" y="274">florastack-codecs</text>
+  <text class="what" x="68" y="292">image files</text>
+  <rect class="box" x="130" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="186" y="274">florastack-raw</text>
+  <text class="what" x="186" y="292">camera RAW files</text>
+  <rect class="box" x="248" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="304" y="274">florastack-align</text>
+  <text class="what" x="304" y="292">alignment, dust</text>
+  <rect class="box" x="366" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="422" y="274">florastack-stack</text>
+  <text class="what" x="422" y="292">stacking methods</text>
+  <rect class="box" x="484" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="540" y="274">florastack-gpu</text>
+  <text class="what" x="540" y="292">GPU kernels (wgpu)</text>
+  <rect class="box" x="602" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="658" y="274">florastack-project</text>
+  <text class="what" x="658" y="292">projects, undo</text>
+  <rect class="box" x="720" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="776" y="274">florastack-retouch</text>
+  <text class="what" x="776" y="292">brushes, strokes</text>
+  <rect class="box" x="838" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="894" y="274">florastack-edit</text>
+  <text class="what" x="894" y="292">adjustments, masks</text>
+  <rect class="box" x="956" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="1012" y="274">florastack-capture</text>
+  <text class="what" x="1012" y="292">cameras, rails</text>
 
   <!-- retouch on project, and gpu's tests on align and stack -->
-  <path class="edge" d="M 775 250 Q 716 222 663 247"/>
-  <path class="devedge" d="M 530 250 Q 476 222 427 247"/>
-  <path class="devedge" d="M 548 250 Q 430 200 309 247"/>
+  <path class="edge" d="M 776 250 Q 718 222 664 247"/>
+  <path class="devedge" d="M 531 250 Q 477 222 428 247"/>
+  <path class="devedge" d="M 549 250 Q 431 200 310 247"/>
 
-  <path class="edge" d="M 67 306 L 345 400"/>
-  <path class="edge" d="M 185 306 L 385 400"/>
-  <path class="edge" d="M 303 306 L 425 400"/>
-  <path class="edge" d="M 421 306 L 465 400"/>
-  <path class="edge" d="M 539 306 L 495 400"/>
-  <path class="edge" d="M 657 306 L 535 400"/>
-  <path class="edge" d="M 775 306 L 575 400"/>
-  <path class="edge" d="M 893 306 L 615 400"/>
+  <path class="edge" d="M 68 306 L 405 400"/>
+  <path class="edge" d="M 186 306 L 438.8 400"/>
+  <path class="edge" d="M 304 306 L 472.5 400"/>
+  <path class="edge" d="M 422 306 L 506.2 400"/>
+  <path class="edge" d="M 540 306 L 540 400"/>
+  <path class="edge" d="M 658 306 L 573.8 400"/>
+  <path class="edge" d="M 776 306 L 607.5 400"/>
+  <path class="edge" d="M 894 306 L 641.2 400"/>
+  <path class="edge" d="M 1012 306 L 675 400"/>
 
   <!-- The core -->
-  <rect class="box core" x="330" y="400" width="300" height="56" rx="6"/>
-  <text class="name" x="480" y="424">florastack-core</text>
-  <text class="what" x="480" y="442">images, geometry, tiles, basic operations</text>
+  <rect class="box core" x="390" y="400" width="300" height="56" rx="6"/>
+  <text class="name" x="540" y="424">florastack-core</text>
+  <text class="what" x="540" y="442">images, geometry, tiles, basic operations</text>
 
   <!-- Test and developer tooling -->
-  <rect class="box dev" x="20" y="400" width="140" height="56" rx="6"/>
-  <text class="name" x="90" y="424">florastack-testkit</text>
-  <text class="what" x="90" y="442">skip!, fixtures</text>
-  <rect class="box dev" x="170" y="400" width="140" height="56" rx="6"/>
-  <text class="name" x="240" y="424">florastack-metrics</text>
-  <text class="what" x="240" y="442">quality metrics</text>
-  <path class="edge" d="M 310 428 L 328 428"/>
-  <rect class="box dev" x="800" y="400" width="140" height="56" rx="6"/>
-  <text class="name" x="870" y="424">xtask</text>
-  <text class="what" x="870" y="442">cargo xtask</text>
+  <rect class="box dev" x="80" y="400" width="140" height="56" rx="6"/>
+  <text class="name" x="150" y="424">florastack-testkit</text>
+  <text class="what" x="150" y="442">skip!, fixtures</text>
+  <rect class="box dev" x="230" y="400" width="140" height="56" rx="6"/>
+  <text class="name" x="300" y="424">florastack-metrics</text>
+  <text class="what" x="300" y="442">quality metrics</text>
+  <path class="edge" d="M 370 428 L 388 428"/>
+  <rect class="box dev" x="860" y="400" width="140" height="56" rx="6"/>
+  <text class="name" x="930" y="424">xtask</text>
+  <text class="what" x="930" y="442">cargo xtask</text>
 
   <!-- Legend -->
-  <path class="edge" d="M 330 492 L 370 492"/>
-  <text class="what" x="378" y="496" style="text-anchor: start">depends on</text>
-  <path class="devedge" d="M 470 492 L 510 492"/>
-  <text class="what" x="518" y="496" style="text-anchor: start">in tests only</text>
-  <rect class="box dev" x="610" y="482" width="28" height="18" rx="3"/>
-  <text class="what" x="646" y="496" style="text-anchor: start">dev-dependencies and tooling only</text>
+  <path class="edge" d="M 390 492 L 430 492"/>
+  <text class="what" x="438" y="496" style="text-anchor: start">depends on</text>
+  <path class="devedge" d="M 530 492 L 570 492"/>
+  <text class="what" x="578" y="496" style="text-anchor: start">in tests only</text>
+  <rect class="box dev" x="670" y="482" width="28" height="18" rx="3"/>
+  <text class="what" x="706" y="496" style="text-anchor: start">dev-dependencies and tooling only</text>
 </svg>

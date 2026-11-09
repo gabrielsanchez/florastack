@@ -1,0 +1,29 @@
+[package]
+name = "florastack-edit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+florastack-core.workspace = true
+rayon.workspace = true
+schemars.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+# LightCraft's develop pipeline renders the adjustments and evaluates the masks (book/src/dev/lightcraft.md); its
+# types stay inside this crate.
+lightcraft-pipeline.workspace = true
+lightcraft-develop.workspace = true
+lightcraft-raster.workspace = true
+lightcraft-color.workspace = true
+lightcraft-geom.workspace = true
+
+[dev-dependencies]
+florastack-core = { workspace = true, features = ["testutil"] }
+proptest.workspace = true
+serde_json.workspace = true

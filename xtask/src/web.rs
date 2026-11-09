@@ -193,7 +193,7 @@ fn check_tools(root: &Path) -> Result<(), String> {
 }
 
 /// The crates the browser build compiles, which Clippy checks for its target.
-const CRATES: [&str; 11] = [
+const CRATES: [&str; 12] = [
     "florastack-core",
     "florastack-codecs",
     "florastack-raw",
@@ -202,6 +202,7 @@ const CRATES: [&str; 11] = [
     "florastack-gpu",
     "florastack-project",
     "florastack-retouch",
+    "florastack-edit",
     "florastack-capture",
     "florastack-engine",
     "florastack",

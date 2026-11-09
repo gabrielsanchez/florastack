@@ -24,7 +24,8 @@ tour; read AGENTS.md before your first change.
     `florastack-gpu` runs the hot paths of both on the GPU, each kernel checked against its
     [CPU reference](cpu-oracle.md).
   - `florastack-project` is the project model and its folder, with every change a value that can be undone.
-    `florastack-retouch` paints brush strokes. `florastack-capture` talks to cameras and rails.
+    `florastack-retouch` paints brush strokes. `florastack-edit` renders the adjustments and masks users make to an
+    output, with LightCraft's develop pipeline. `florastack-capture` talks to cameras and rails.
 - **The engine** (`florastack-engine`) ties them together: the command registry, the session that holds the open
   project and its undo history, the job engine, and the orchestration of a stack from files to export.
 - **The apps** (`florastack`, the egui desktop app; `florastack-cli`; `florastack-python`) depend on the engine alone.
