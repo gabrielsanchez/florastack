@@ -236,7 +236,7 @@ Example:
 
 **Preview adjustments.** Renders the output open for adjusting with its adjustments, reduced to fit a view.
 
-The preview fits in `width` by `height` pixels (never enlarged). `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; `before` also renders the output without its adjustments at the same size, for comparing. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
+The preview fits in `width` by `height` pixels (never enlarged). When the output's retouch strokes changed since it was read, it is read again first. `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; `before` also renders the output without its adjustments at the same size, for comparing. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|

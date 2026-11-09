@@ -123,13 +123,24 @@ fn the_session_previews_what_is_set() {
     // An overlay tints a mask's region.
     let added = run(&mut engine, "adjust.addMask", &json!({"output": output, "mask": {"components": [{"shape": {"kind": "whole"}}]}}).to_string());
     run(&mut engine, "adjust.preview", &json!({"width": 80, "height": 80, "overlay": added["mask"]}).to_string());
-    // A stroke changes what adjusting starts from: the preview asks to open the output again.
+    // A stroke changes what adjusting starts from: the next preview reads the output again, with the stroke.
+    let shown = |engine: &Engine| engine.adjust().unwrap().preview().unwrap().rgba.clone();
+    run(&mut engine, "adjust.reset", &json!({"output": output}).to_string());
+    run(&mut engine, "adjust.preview", r#"{ "width": 160, "height": 120 }"#);
+    let unretouched = shown(&engine);
     run(&mut engine, "retouch.open", &json!({"output": output}).to_string());
-    run(&mut engine, "retouch.stroke", r#"{ "stroke": { "brush": "eraser", "size": 10, "hardness": 0.5, "opacity": 1, "samples": [[20, 20, 1]] } }"#);
-    let e = engine.dispatch("adjust.preview", json!({"width": 80, "height": 80})).unwrap_err();
-    assert_eq!(e.code(), "unavailable", "{e}");
-    run(&mut engine, "adjust.open", &json!({"output": output}).to_string());
-    run(&mut engine, "adjust.preview", r#"{ "width": 80, "height": 80 }"#);
+    run(&mut engine, "retouch.setSource", r#"{ "frame": 1 }"#);
+    run(
+        &mut engine,
+        "retouch.stroke",
+        r#"{ "stroke": { "brush": "pixels", "source": { "frame": 1 }, "size": 60, "hardness": 1, "opacity": 1, "samples": [[80, 60, 1]] } }"#,
+    );
+    run(&mut engine, "adjust.preview", r#"{ "width": 160, "height": 120 }"#);
+    assert_ne!(shown(&engine), unretouched, "the preview shows the stroke");
+    // And again after an undo.
+    run(&mut engine, "edit.undo", "{}");
+    run(&mut engine, "adjust.preview", r#"{ "width": 160, "height": 120 }"#);
+    assert_eq!(shown(&engine), unretouched, "the stroke undone");
     assert_eq!(run(&mut engine, "adjust.close", "{}")["closed"], true);
     assert!(engine.take_adjust_changes().unwrap().closed);
     assert!(engine.adjust().is_none());
