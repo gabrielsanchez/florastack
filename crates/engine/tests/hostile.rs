@@ -82,6 +82,8 @@ fn hostile_values_are_refused_with_what_is_wrong() {
             json!({"output":fixture.output,"mask":{"components":[{"shape":{"kind":"brush","strokes":[{"points":[[0.5,0.5]],"size":0}]}}]}}),
         ),
         ("adjust.setMask", json!({"output":fixture.output,"mask":{"id":1,"adjust":{"amount":-1}}})),
+        ("adjust.stroke", json!({"output":fixture.output,"mask":1,"stroke":{"points":[[0.5,0.5]],"size":2}})),
+        ("adjust.stroke", json!({"output":fixture.output,"mask":1,"stroke":{"points":[[1e300,0.5]],"size":0.1}})),
         ("adjust.preview", json!({"width":0,"height":10})),
         ("adjust.preview", json!({"width":10,"height":usize::MAX})),
         ("adjust.sampleColor", json!({"x":f64::MAX,"y":0.5})),

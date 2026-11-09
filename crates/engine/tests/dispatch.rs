@@ -264,6 +264,11 @@ fn every_command_dispatches_from_json() {
     let moved = calls.run("adjust.moveMask", &format!(r#"{{ "output": {target}, "mask": {}, "index": 0 }}"#, second["mask"]));
     assert_eq!(moved["adjustments"]["masks"][0]["id"], second["mask"], "{moved}");
     calls.run("adjust.removeMask", &format!(r#"{{ "output": {target}, "mask": {} }}"#, second["mask"]));
+    let stroked = calls.run(
+        "adjust.stroke",
+        &format!(r#"{{ "output": {target}, "mask": {mask}, "stroke": {{ "points": [[0.2, 0.3], [0.4, 0.35]], "size": 0.05 }} }}"#),
+    );
+    assert_eq!((&stroked["component"], &stroked["strokes"]), (&json!(1), &json!(1)), "a brush component added after the radial one: {stroked}");
     assert_eq!(calls.run("adjust.get", &format!(r#"{{ "output": {target} }}"#))["adjustments"]["masks"].as_array().unwrap().len(), 1);
     let opened = calls.run("adjust.open", &format!(r#"{{ "output": {target} }}"#));
     assert!(opened["width"].as_u64().unwrap() > 0, "{opened}");

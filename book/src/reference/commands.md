@@ -10,7 +10,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 
 | Area | Commands |
 |---|---|
-| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.get`](#adjustget), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask) |
+| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.get`](#adjustget), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask), [`adjust.stroke`](#adjuststroke) |
 | [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
@@ -430,6 +430,45 @@ Example:
 
 ```json
 {"mask":{"adjust":{"clarity":30},"components":[{"shape":{"kind":"whole"}}],"id":1,"name":"Center","visible":false},"output":3}
+```
+
+### `adjust.stroke`
+
+**Brush stroke.** Paints a brush stroke onto a mask, as one undo step.
+
+The stroke goes on top of the mask's brush component `component` (an index into its components), or of its last brush component, or of a new one added when it has none. Its `points` are fractions of the output's width and height, its `size` a fraction of its long edge; `erase` takes away what earlier strokes of the component painted.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `component` | integer | The brush component it goes onto, by its index among the mask's components; its last brush component when left out, or a new one when it has none. |
+| `mask` | integer | **Required.** The mask's id, as `adjust.get` lists it. |
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+| `stroke` | object | **Required.** The stroke. |
+| `stroke.erase` | boolean | Whether it erases what earlier strokes painted. Default: `false`. |
+| `stroke.feather` | number, from 0.0 to 100.0 | How softly its edge fades, from 0 (hard) to 100. Default: `50.0`. |
+| `stroke.flow` | number, from 0.0 to 100.0 | How much each dab adds, from 0 to 100. Default: `100.0`. |
+| `stroke.points` | array of array of number | The pointer's path, as fractions of the image's width and height. Default: `[]`. |
+| `stroke.size` | number, from 0.0 to 1.0 | The brush's radius, as a fraction of the image's long edge, above 0 and at most 1. Default: `0.03`. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `component` | integer |  |
+| `mask` | integer | The mask's id, and the index of the component the stroke went onto. |
+| `strokes` | integer | How many strokes the component has now. |
+
+Examples:
+
+```json
+{"mask":1,"output":3,"stroke":{"feather":60,"flow":100,"points":[[0.2,0.3],[0.25,0.32],[0.3,0.36]],"size":0.04}}
+{"component":0,"mask":1,"output":3,"stroke":{"erase":true,"points":[[0.22,0.31]],"size":0.02}}
 ```
 
 ## align

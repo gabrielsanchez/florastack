@@ -166,6 +166,14 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             ),
         },
         Case {
+            name: "adjust.stroke",
+            setup: vec![
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ] }} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: format!(r#"{{ "output": {output}, "mask": 1, "stroke": {{ "points": [[0.1, 0.1], [0.5, 0.5]], "size": 0.1, "erase": true }} }}"#),
+        },
+        Case {
             name: "adjust.removeMask",
             setup: vec![
                 ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ] }} }}"#)),
