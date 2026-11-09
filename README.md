@@ -1,10 +1,90 @@
-# FloraStack
+<p align="center">
+  <img src="book/src/images/florastacklogo.png" width="160" alt="FloraStack's logo: three stacked rounded tiles, the top one green with a leaf's veins">
+</p>
 
-FloraStack is a free, open-source focus-stacking application written in pure Rust. It aligns a series of photos
-focused at different distances and merges the sharp parts of each into one image with more depth of field than any
-single exposure allows, for macro, microscopy, product and landscape photography.
+<h1 align="center">FloraStack</h1>
 
-![The Stack tab: the frames on the left, a stacked insect's head in the viewer, the settings on the right](book/src/images/stack.webp)
+<p align="center">
+  <b>Focus stacking; free and open source, written in pure Rust.</b><br>
+  Align a series of photos focused at different distances and merge the sharp parts of each<br>
+  into one image with more depth of field than any single exposure allows. Offline, and yours.
+</p>
+
+<p align="center">
+  <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-b7410e?style=flat-square&logo=rust">
+  <img alt="Windows · macOS · Linux · Web" src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Web-native-2f7bf5?style=flat-square">
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-3a3a3a?style=flat-square">
+  <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-d69e2e?style=flat-square">
+  <br>
+  <a href="https://github.com/gabrielsanchez/florastack/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/gabrielsanchez/florastack/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <a href="https://github.com/gabrielsanchez/florastack/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/gabrielsanchez/florastack?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/gabrielsanchez/florastack/releases/latest"><b>Download the latest release</b></a> ·
+  <a href="book/src/user/first-stack.md">Your first stack in five minutes</a> ·
+  <a href="book/src/SUMMARY.md">The guide</a>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="book/src/images/stack.webp" alt="The Stack tab: the frames on the left, a stacked insect's head in the viewer, the settings on the right" width="100%">
+  <br>
+  <sub>The Stack tab: the frames on the left, the stacked result in the viewer, its settings on the right.</sub>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#downloads">Downloads</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#building">Building</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
+
+<br>
+
+<table>
+  <tr>
+    <td width="25%" valign="top">
+      <h3>🔬 Four methods</h3>
+      The pyramid for hair and bristles, the depth map for smooth subjects, a fast weighted average and a wavelet method for the last fine detail, with previews in seconds and stacks of hundreds of frames.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🎯 Careful alignment</h3>
+      Shift, scale, rotation, brightness and white balance, each frame's match shown, frames that moved or are out of focus flagged, and sensor dust painted out.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🖌️ Retouch and adjust</h3>
+      Paint from any frame onto the result, then finish it with exposure, color and detail, for the whole image or within masks of the subject, its depth, gradients and brush strokes. Nothing is destructive.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🤖 Every action is a command</h3>
+      The same engine runs the app, the command line, batches and watch folders, a JSON control channel, an MCP server and Python.
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top">
+      <h3>📷 RAW in, science out</h3>
+      Camera RAW files developed linearly for the whole stack; TIFF, JPEG, PNG, OpenEXR and DNG out, with depth maps, calibrated depth, scale bars, 3D reliefs and stereo pairs.
+    </td>
+    <td width="25%" valign="top">
+      <h3>⚡ GPU or CPU</h3>
+      Stacks on the GPU when one passes a self-test and on the CPU otherwise, in memory that depends on the image size, not the number of frames.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🌐 In a browser too</h3>
+      The same app compiled to WebAssembly, stacking on the page's threads or with WebGPU, as a static site you can host yourself.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🔒 Offline</h3>
+      FloraStack sends nothing anywhere: no account, no telemetry. Your photos stay on your computer.
+    </td>
+  </tr>
+</table>
+
+<br>
 
 | Retouching from the frames | Exporting |
 |---|---|
@@ -14,11 +94,14 @@ single exposure allows, for macro, microscopy, product and landscape photography
 [`scripts/readme_screenshots.py`](scripts/readme_screenshots.py). The photos are the maintainer's, under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).*
 
+## Features
+
 - **Four stacking methods**: the pyramid for hair, bristles and overlapping detail, the depth map for smooth subjects
   and exact tones, a fast weighted average, and a slower wavelet method for the last bit of fine detail, with
   quarter-size previews in seconds and slabbing for stacks of hundreds of frames.
-- **Alignment** of shift, scale, rotation and brightness, with each frame's match shown, frames that moved or are out
-  of focus flagged, sensor dust and hot pixels painted out, and stacks that were shot out of order sorted.
+- **Alignment** of shift, scale, rotation, brightness and white balance, with each frame's match shown, frames that
+  moved or are out of focus flagged, sensor dust and hot pixels painted out, and stacks that were shot out of order
+  sorted.
 - **Non-destructive retouching**: paint from any frame onto the result, with brushes that match brightness and color,
   in layers, with full undo.
 - **Adjustments and masks**: exposure, white balance, contrast, highlights and shadows, texture, clarity, dehaze,
@@ -34,10 +117,9 @@ single exposure allows, for macro, microscopy, product and landscape photography
 - **In a browser** too: the same app compiled to WebAssembly, stacking on the page's threads or with WebGPU, as a
   static site you can host yourself, with a Dockerfile to serve it ([In the browser](book/src/user/browser.md)).
 
-FloraStack is in early development. Its release workflow builds packages for Windows, macOS and Linux from each
-version tag.
+FloraStack is in early development.
 
-## Getting started
+## Get started
 
 [Install FloraStack](book/src/user/install.md), drop a folder of photos on its window, press **Align**, then **Stack
 frames**: [Your first stack in five minutes](book/src/user/first-stack.md) walks through it. From a terminal:
@@ -45,6 +127,14 @@ frames**: [Your first stack in five minutes](book/src/user/first-stack.md) walks
 ```sh
 florastack-cli stack path/to/photos --out result.tif
 ```
+
+## Downloads
+
+Each [release](https://github.com/gabrielsanchez/florastack/releases) has packages for Windows (`.msi` and a portable
+`.zip`, x64 and Arm), macOS (a universal `.dmg` for Apple silicon and Intel) and Linux (`.deb`, `.rpm`, Flatpak,
+AppImage and `.tar.gz`, x86_64 and aarch64), the command-line tool on its own, and Python wheels, with
+`SHA256SUMS.txt` to check them. [Installing
+FloraStack](book/src/user/install.md) walks through each.
 
 ## Documentation
 
