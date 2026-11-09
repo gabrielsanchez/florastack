@@ -10,7 +10,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 
 | Area | Commands |
 |---|---|
-| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.get`](#adjustget), [`adjust.mapDepth`](#adjustmapdepth), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask), [`adjust.stroke`](#adjuststroke) |
+| [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.describe`](#adjustdescribe), [`adjust.get`](#adjustget), [`adjust.mapDepth`](#adjustmapdepth), [`adjust.model`](#adjustmodel), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.select`](#adjustselect), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask), [`adjust.setModel`](#adjustsetmodel), [`adjust.stroke`](#adjuststroke) |
 | [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
@@ -111,6 +111,37 @@ Example:
 {}
 ```
 
+### `adjust.describe`
+
+**AI describe.** Selects everything a description names in the output open for adjusting, with the AI model, into a mask, as one undo step.
+
+A short noun phrase works best: `insect`, `flower`, `the red berries`. The selection goes into the mask's first `described` shape, or a new one. Fails, changing nothing, when nothing matches. Needs the model (`adjust.model`).
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the heavy lane | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `mask` | integer | **Required.** The mask's id, as `adjust.get` lists it. |
+| `text` | string | **Required.** What to select, at most 200 characters: a short noun phrase. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `component` | integer |  |
+| `loaded` | boolean | Whether the model had to load or read the image first (the slow part). |
+| `mask` | integer | The mask, and the index of the shape the selection went into. |
+
+Example:
+
+```json
+{"mask":1,"text":"insect"}
+```
+
 ### `adjust.get`
 
 **Adjustments.** An output's adjustments: the whole image's and its masks'.
@@ -161,6 +192,36 @@ Result:
 | `measured` | boolean | Whether the frames were measured (`false`: the output's map was there already). |
 | `output` | integer | An output's id in its project. |
 | `width` | integer | The map's size, a quarter of the output's for a measured one. |
+
+Example:
+
+```json
+{}
+```
+
+### `adjust.model`
+
+**AI model.** Whether Meta's SAM 3 model, which AI selections need, is installed, and where.
+
+FloraStack doesn't ship the model: its files (`model.safetensors`, `vocab.json`, `merges.txt`) are the `facebook/sam3` checkpoint on Hugging Face, under Meta's SAM License, which you accept there before downloading them. Then `adjust.setModel` names their folder.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Query | No | Nothing | Nothing |
+
+Parameters: none.
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `bytes` | integer |  |
+| `download` | string | Where the files come from, and their license. |
+| `files` | array of string | The files, and the weights' size in bytes. |
+| `folder` | string | The folder named, if any. |
+| `installed` | boolean | Whether the folder named holds the model's files (their sizes; `adjust.setModel` checked their hash). |
+| `license` | string |  |
+| `problem` | string | Why the folder named doesn't hold the model, when it doesn't. |
 
 Example:
 
@@ -355,6 +416,38 @@ Example:
 {"x":0.42,"y":0.6}
 ```
 
+### `adjust.select`
+
+**AI select.** Selects an object of the output open for adjusting from clicks on it, with the AI model, into a mask, as one undo step.
+
+The clicks (`at`: fractions of the output's width and height) are on the object, or, with `include` false, on what to leave out of it; send them all each time. The selection goes into the mask's first `object` shape, or a new one. The first selection on an output loads the model and reads the image, which takes tens of seconds on a CPU; later ones about a second. Needs the model (`adjust.model`).
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the heavy lane | Yes | A project open for editing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `clicks` | array of object | **Required.** The clicks, all of them, at most 64: on the object, or with `include` false on what to leave out of it. |
+| `mask` | integer | **Required.** The mask's id, as `adjust.get` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `component` | integer |  |
+| `loaded` | boolean | Whether the model had to load or read the image first (the slow part). |
+| `mask` | integer | The mask, and the index of the shape the selection went into. |
+
+Examples:
+
+```json
+{"clicks":[{"at":[0.48,0.52]}],"mask":1}
+{"clicks":[{"at":[0.48,0.52]},{"at":[0.7,0.2],"include":false}],"mask":1}
+```
+
 ### `adjust.set`
 
 **Set adjustments.** Replaces an output's adjustments, the whole image's and its masks', in one undo step.
@@ -459,6 +552,34 @@ Example:
 
 ```json
 {"mask":{"adjust":{"clarity":30},"components":[{"shape":{"kind":"whole"}}],"id":1,"name":"Center","visible":false},"output":3}
+```
+
+### `adjust.setModel`
+
+**Set the AI model's folder.** Checks a folder of SAM 3's files and remembers it for AI selections.
+
+Checks that the folder holds `model.safetensors` (the official checkpoint: its size and SHA-256, which takes a while over 3.4 GB), `vocab.json` and `merges.txt`, then remembers it in the user's settings. The files stay where they are.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | Nothing | Nothing |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `folder` | string | **Required.** The folder holding `model.safetensors`, `vocab.json` and `merges.txt`. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `folder` | string |  |
+
+Example:
+
+```json
+{"folder":"C:/Users/me/Downloads/sam3"}
 ```
 
 ### `adjust.stroke`

@@ -21,6 +21,16 @@ impl Calls<'_> {
         self.names.insert(name.to_owned());
         run(self.engine, name, params)
     }
+
+    /// Runs a command that must fail here, and its error.
+    fn fails(&mut self, name: &str, params: &str) -> CommandError {
+        self.names.insert(name.to_owned());
+        match self.engine.dispatch_json(name, params) {
+            Ok(florastack_engine::Dispatched::Started(job)) => self.engine.wait(job).unwrap_err(),
+            Ok(florastack_engine::Dispatched::Done(v)) => panic!("{name} {params}: {v}"),
+            Err(e) => e,
+        }
+    }
 }
 
 fn quoted(path: &Path) -> String {
@@ -277,6 +287,19 @@ fn every_command_dispatches_from_json() {
     assert!(previewed["width"].as_u64().unwrap() <= 64, "{previewed}");
     assert!(calls.engine.adjust().unwrap().preview().is_some());
     assert!(calls.run("adjust.sampleColor", r#"{ "x": 0.5, "y": 0.5 }"#)["color"].is_array());
+    // AI selections: the model isn't installed here, so they say what they need.
+    let model = calls.run("adjust.model", "{}");
+    assert_eq!((&model["installed"], &model["bytes"]), (&json!(false), &json!(3_439_938_512u64)), "{model}");
+    let e = calls.fails("adjust.setModel", &format!(r#"{{ "folder": {} }}"#, quoted(dir.path())));
+    assert!(e.to_string().contains("SAM 3"), "{e}");
+    for (name, params) in [
+        ("adjust.select", format!(r#"{{ "mask": {mask}, "clicks": [ {{ "at": [0.5, 0.5] }} ] }}"#)),
+        ("adjust.describe", format!(r#"{{ "mask": {mask}, "text": "insect" }}"#)),
+    ] {
+        let e = calls.fails(name, &params);
+        assert_eq!(e.code(), "unavailable", "{name}: {e}");
+        assert!(e.to_string().contains("huggingface.co/facebook/sam3"), "{name}: {e}");
+    }
     assert_eq!(calls.run("adjust.close", "{}")["closed"], true);
     assert_eq!(calls.run("adjust.reset", &format!(r#"{{ "output": {target} }}"#))["neutral"], true);
     // In slabs: three slabs of three frames, sharing one, stacked by pyramid, then by weighted average; each slab is

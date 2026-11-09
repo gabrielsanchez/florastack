@@ -23,7 +23,12 @@ lightcraft-raster.workspace = true
 lightcraft-color.workspace = true
 lightcraft-geom.workspace = true
 
+# SAM 3, for the AI selections: native only, as the model doesn't run in the browser (saved selections still render).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+florastack-sam.workspace = true
+
 [dev-dependencies]
+florastack-testkit.workspace = true
 florastack-core = { workspace = true, features = ["testutil"] }
 proptest.workspace = true
 serde_json.workspace = true

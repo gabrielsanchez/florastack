@@ -26,7 +26,7 @@ use lightcraft_raster::resample::{Filter, resize};
 use lightcraft_raster::{Plane, Rgb32f};
 
 use crate::error::EditError;
-use crate::settings::{Adjustments, Component, Global, Local, MAX_DEPTH_RANGES, Mask, Op, Shape, Stroke};
+use crate::settings::{Adjustments, Component, Global, Local, MAX_DEPTH_RANGES, Mask, Op, Selection, Shape, Stroke};
 
 /// How many stops white is above middle gray (0.18), from which LightCraft's luminance ranges count: their 0 to 1 spans
 /// 8 stops below middle gray to 4 above it.
@@ -59,8 +59,13 @@ impl Request {
     pub const FULL: Request = Request { size: Size::Full, draft: false, overlay: None };
 }
 
+/// Gives each image a renderer is made for an id of its own.
+static NEXT_IMAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// One image to adjust, with what its renders reuse.
 pub struct Renderer {
+    /// The image's id: the same for the renderers [`Renderer::with_depth`] makes from this one.
+    id: u64,
     source: Arc<Rgb32f>,
     /// The coverage channel of an RGBA image, which adjustments leave as it is.
     alpha: Option<Plane>,
@@ -108,6 +113,7 @@ impl Renderer {
             }
         }
         Ok(Renderer {
+            id: NEXT_IMAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             source: Arc::new(source),
             alpha,
             color: image.color_space().clone(),
@@ -134,6 +140,7 @@ impl Renderer {
             }
         }
         Ok(Renderer {
+            id: self.id,
             source: Arc::clone(&self.source),
             alpha: self.alpha.clone(),
             color: self.color.clone(),
@@ -156,6 +163,33 @@ impl Renderer {
 
     pub fn width(&self) -> usize {
         self.source.width
+    }
+
+    /// The image's id: another for every image, the same for a renderer made from this one with a depth map.
+    pub fn image_id(&self) -> u64 {
+        self.id
+    }
+
+    /// The image without adjustments, reduced to fit in `side` by `side` pixels, as 8-bit sRGB: what a model of
+    /// photos sees. RGB, rows from the top, with its width and height.
+    pub fn rgb8(&self, side: usize) -> Result<(Vec<u8>, usize, usize), EditError> {
+        let (w, h) = self.output_size(Size::Fit { width: side, height: side });
+        let req = RenderRequest {
+            max_w: w,
+            max_h: h,
+            quality: Quality::Full,
+            apply_crop: true,
+            overlay: Overlay::None,
+            space: OutputSpace::Srgb,
+            depth: OutputDepth::U8,
+            proof: None,
+            window: None,
+            display: None,
+        };
+        let (settings, info) = self.lightcraft(&Adjustments::default())?;
+        let image = lightcraft_pipeline::render(&self.source, &info, &settings, &req).image;
+        let rgb = image.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+        Ok((rgb, image.width, image.height))
     }
 
     pub fn height(&self) -> usize {
@@ -425,6 +459,18 @@ fn component(c: &Component, ranges: &[[f64; 3]]) -> MaskComponent {
         Shape::Color { samples, refine } => MaskShape::ColorRange { samples: samples.clone(), refine: *refine },
         Shape::Subject => MaskShape::Subject,
         Shape::Background => MaskShape::Background,
+        // An AI selection the model hasn't made yet selects nothing (LightCraft's pipeline would guess one).
+        Shape::Object { clicks, selection: Some(selection) } => MaskShape::Object {
+            hint: clicks.iter().filter(|c| c.include).map(|c| point(c.at)).collect(),
+            exclude: clicks.iter().filter(|c| !c.include).map(|c| point(c.at)).collect(),
+            seg: Some(seg_mask(selection)),
+            detail: Vec::new(),
+            edge: 0.0,
+        },
+        Shape::Described { text, selection: Some(selection) } => {
+            MaskShape::Prompt { text: text.clone(), seg: Some(seg_mask(selection)), detail: Vec::new(), edge: 0.0 }
+        }
+        Shape::Object { selection: None, .. } | Shape::Described { selection: None, .. } => nothing(),
         Shape::Depth { from, to, feather } => {
             #[allow(clippy::float_cmp)] // The same range, exactly: `Adjustments::depth_ranges` collected it from this shape.
             let slot = ranges.iter().position(|r| *r == [*from, *to, *feather]).and_then(|i| DEPTH_SLOTS.get(i));
@@ -440,11 +486,21 @@ fn component(c: &Component, ranges: &[[f64; 3]]) -> MaskComponent {
                     MaskShape::People { person: 0, parts: vec![part.to_owned()] }
                 }
                 // Validation allows no more ranges than slots; select nothing rather than another range.
-                None => MaskShape::Linear { start: Point::new(0.0, -2.0), end: Point::new(0.0, -1.0) },
+                None => nothing(),
             }
         }
     };
     MaskComponent { name: None, op, invert: c.invert, shape }
+}
+
+/// A shape that selects nothing: a gradient wholly above the image.
+fn nothing() -> MaskShape {
+    MaskShape::Linear { start: Point::new(0.0, -2.0), end: Point::new(0.0, -1.0) }
+}
+
+/// A stored selection as LightCraft's pipeline reads it.
+fn seg_mask(s: &Selection) -> lightcraft_develop::SegMask {
+    lightcraft_develop::SegMask { side: s.side, data: s.data.clone(), rect: None }
 }
 
 fn stroke(s: &Stroke) -> BrushStroke {

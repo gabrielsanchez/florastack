@@ -73,6 +73,9 @@ pub enum Need {
     Gpu,
     /// Files from the test corpus, which lives in the gitignored `corpus/` folder.
     Corpus,
+    /// The SAM 3 model's files, which the folder `FLORASTACK_SAM3_MODEL` names: Meta's weights, which FloraStack doesn't
+    /// ship.
+    Model,
 }
 
 impl Need {
@@ -81,6 +84,7 @@ impl Need {
         match self {
             Need::Gpu => "gpu",
             Need::Corpus => "corpus",
+            Need::Model => "model",
         }
     }
 }

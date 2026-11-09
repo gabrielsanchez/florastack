@@ -279,6 +279,17 @@ struct MaskChanged {
 }
 
 /// The output's adjustments with `change` made to them, checked and stored as one undo step.
+/// Mask `mask` of output `id` with `change` made to it, checked and stored as one undo step.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn change_mask(session: &mut Session, id: OutputId, mask: u32, change_it: impl FnOnce(&mut Mask)) -> Result<(), CommandError> {
+    change(session, id, |a| {
+        let m = a.mask_mut(mask).ok_or_else(|| no_mask(id, mask))?;
+        change_it(m);
+        Ok(())
+    })
+    .map(drop)
+}
+
 fn change(
     session: &mut Session,
     id: OutputId,
@@ -648,6 +659,8 @@ struct Closed {
 fn close(session: &mut Session, _: NoParams) -> Result<Closed, CommandError> {
     let closed = session.adjust.take().is_some();
     session.adjust_closed |= closed;
+    // The AI model, several gigabytes, goes with the session.
+    session.unload_model();
     Ok(Closed { closed })
 }
 

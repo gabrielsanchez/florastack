@@ -16,6 +16,14 @@ struct Case {
     params: String,
 }
 
+/// The undoable commands that run the AI model.
+const NEEDS_MODEL: [&str; 2] = ["adjust.select", "adjust.describe"];
+
+/// The SAM 3 model's folder, from `FLORASTACK_SAM3_MODEL`.
+fn model_folder() -> String {
+    std::env::var("FLORASTACK_SAM3_MODEL").unwrap_or_default()
+}
+
 #[allow(clippy::too_many_lines)] // One case per undoable command.
 fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
     let [a, b, c] = [fixture.frames[0].get(), fixture.frames[1].get(), fixture.frames[2].get()];
@@ -165,6 +173,27 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
                 r#"{{ "output": {output}, "mask": {{ "id": 1, "invert": true, "components": [ {{ "shape": {{ "kind": "linear", "start": [0, 0], "end": [1, 1] }} }} ], "adjust": {{ "exposure": -1 }} }} }}"#
             ),
         },
+        // The AI selections, with the model that `FLORASTACK_SAM3_MODEL` names (skipped without it).
+        Case {
+            name: "adjust.select",
+            setup: vec![
+                ("adjust.setModel", serde_json::json!({ "folder": model_folder() }).to_string()),
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [], "adjust": {{ "exposure": 1 }} }} }}"#)),
+                ("adjust.open", format!(r#"{{ "output": {output} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: r#"{ "mask": 1, "clicks": [ { "at": [0.5, 0.5] } ] }"#.into(),
+        },
+        Case {
+            name: "adjust.describe",
+            setup: vec![
+                ("adjust.setModel", serde_json::json!({ "folder": model_folder() }).to_string()),
+                ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [], "adjust": {{ "exposure": 1 }} }} }}"#)),
+                ("adjust.open", format!(r#"{{ "output": {output} }}"#)),
+                ("project.save", "{}".into()),
+            ],
+            params: r#"{ "mask": 1, "text": "object" }"#.into(),
+        },
         Case {
             name: "adjust.stroke",
             setup: vec![
@@ -210,6 +239,11 @@ fn every_undoable_command_is_undone_and_redone_exactly() {
         cases(&fixture, dir.path()).iter().map(|c| c.name).collect()
     };
     for name in names {
+        if NEEDS_MODEL.contains(&name) && std::env::var_os("FLORASTACK_SAM3_MODEL").is_none() {
+            florastack_testkit::skip!(Model, "{name}'s undo needs the SAM 3 model, which FLORASTACK_SAM3_MODEL doesn't name");
+            covered.insert(name);
+            continue;
+        }
         let dir = TempDir::new("undo");
         let (mut engine, fixture) = open_fixture(dir.path(), test_registry(&gate));
         let case = cases(&fixture, dir.path()).into_iter().find(|c| c.name == name).unwrap();
