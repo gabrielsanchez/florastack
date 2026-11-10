@@ -45,7 +45,8 @@ pub const RULES: Rules = Rules {
         ("florastack-gpu", &[CORE]),
         ("florastack-project", &[CORE]),
         ("florastack-retouch", &[CORE, "florastack-project"]),
-        ("florastack-edit", &[CORE]),
+        ("florastack-sam", &[]),
+        ("florastack-edit", &[CORE, "florastack-sam"]),
         ("florastack-capture", &[CORE]),
         (
             ENGINE,

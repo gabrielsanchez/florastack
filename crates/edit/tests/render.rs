@@ -480,3 +480,40 @@ fn a_color_sample_is_in_oklab() {
     let all = |_, _| true;
     assert!(mean_luma(&out, all) > 1.01 * mean_luma(&scene().0, all));
 }
+
+#[test]
+fn a_stored_ai_selection_renders_without_the_model() {
+    use florastack_edit::{Click, Selection};
+    let (image, _) = scene();
+    let r = Renderer::new(&image).unwrap();
+    // A selection of the left half: logits far positive there, far negative elsewhere.
+    let side = 64;
+    let logits: Vec<f32> = (0..side * side).map(|i| if i % side < side / 2 { 12.0 } else { -12.0 }).collect();
+    let selection = Some(Selection::from_logits(side, &logits));
+    let clicks = vec![Click { at: [0.25, 0.5], include: true }];
+    let darker = Local { exposure: -1.0, ..Local::default() };
+    let (left, right) = (|x: usize, _| x < W / 2 - 4, |x: usize, _| x > W / 2 + 4);
+    for shape in [Shape::Object { clicks: clicks.clone(), selection: selection.clone() }, Shape::Described { text: "the left".into(), selection }] {
+        let out = render(&r, &masked(shape, darker));
+        let (l, rt) = (mean_luma(&out, left) / mean_luma(&image, left), mean_luma(&out, right) / mean_luma(&image, right));
+        assert!(l < 0.6 && (rt - 1.0).abs() < 0.01, "left {l}, right {rt}");
+    }
+    // Before the model has selected anything, the shape selects nothing.
+    let out = render(&r, &masked(Shape::Object { clicks, selection: None }, darker));
+    assert!(max_difference(&out, &image) < 1.0 / 65535.0);
+    // Hostile selections and prompts are refused.
+    for bad in [
+        Shape::Object { clicks: vec![], selection: Some(Selection { side: 5000, data: String::new() }) },
+        Shape::Object { clicks: vec![], selection: Some(Selection { side: 4, data: "A".repeat(10_000) }) },
+        Shape::Object { clicks: vec![Click { at: [f64::NAN, 0.5], include: true }], selection: None },
+        Shape::Object { clicks: vec![Click { at: [0.5, 0.5], include: true }; 65], selection: None },
+        Shape::Described { text: String::new(), selection: None },
+        Shape::Described { text: "x".repeat(201), selection: None },
+        Shape::Described { text: "bee\n".into(), selection: None },
+    ] {
+        assert!(matches!(r.render(&masked(bad.clone(), darker), &Request::FULL), Err(EditError::Invalid { .. })), "{bad:?}");
+    }
+    // Damaged data that passes the checks selects nothing rather than failing.
+    let damaged = Shape::Object { clicks: vec![], selection: Some(Selection { side: 8, data: "not base64!".into() }) };
+    r.render(&masked(damaged, darker), &Request::FULL).unwrap();
+}

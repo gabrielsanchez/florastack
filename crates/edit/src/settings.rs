@@ -29,6 +29,12 @@ pub const MAX_SAMPLES: usize = 16;
 pub const MAX_DEPTH_RANGES: usize = 5;
 /// The longest name a mask may have, in characters.
 pub const MAX_NAME: usize = 64;
+/// The most clicks an AI selection may take.
+pub const MAX_CLICKS: usize = 64;
+/// The longest description an AI selection may take, in characters.
+pub const MAX_DESCRIPTION: usize = 200;
+/// The largest grid a stored AI selection may claim (a hostile project can't make rendering allocate without bound).
+pub const MAX_SELECTION_SIDE: u32 = 1024;
 /// How far outside the image a coordinate may lie, in fractions of it: a gradient may start off the image.
 const COORDINATE_LIMIT: f64 = 10.0;
 
@@ -322,10 +328,27 @@ pub enum Shape {
         #[schemars(range(min = 0.0, max = 100.0))]
         refine: f64,
     },
-    /// The subject: where the stack has fine detail, which some frame had in focus.
+    /// Sharp areas: where the stack has fine detail, which some frame had in focus. Found without a model; it works
+    /// for a subject in front of a blurred background, not on a surface in focus (`object` selects a subject there).
     Subject,
-    /// The background: where the stack has no fine detail, which no frame had in focus.
+    /// Soft areas: where the stack has no fine detail, which no frame had in focus.
     Background,
+    /// An object, selected by the AI model (SAM 3) from clicks on it, and kept: rendering needs no model.
+    Object {
+        /// The clicks: on the object (`include`) or on what to leave out of it, as fractions of the image.
+        clicks: Vec<Click>,
+        /// What the model selected for them; none until it has (the shape selects nothing until then).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<Selection>,
+    },
+    /// Everything a description names ("insect", "the red flower"), selected by the AI model (SAM 3), and kept.
+    Described {
+        /// The description, at most 200 characters.
+        text: String,
+        /// What the model selected for it; none until it has.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<Selection>,
+    },
     /// A range of depth: the parts of the subject in focus in a range of the stack's frames, counted in the order they
     /// are stacked: 0 is the first frame, 1 the last (the nearest and the farthest, or the other way round, as the
     /// stack was taken).
@@ -340,6 +363,34 @@ pub enum Shape {
         #[schemars(range(min = 0.0, max = 1.0))]
         feather: f64,
     },
+}
+
+/// One click of an AI selection.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Click {
+    /// Where, as fractions of the image's width and height.
+    pub at: [f64; 2],
+    /// Whether the click is on what to select (`true`) or on what to leave out.
+    #[serde(default = "yes")]
+    pub include: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A selection the AI model made, kept with its mask: the model's logits over the image stretched to a square,
+/// `side` by `side`, rounded to an eighth, deflated and base64-encoded (LightCraft's format, which its pipeline
+/// renders: each point's coverage is the logit's sigmoid, so edges stay smooth at any size).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Selection {
+    /// The grid's side, at most 1024.
+    #[schemars(range(min = 1, max = 1024))]
+    pub side: u32,
+    /// The logits, quantized, deflated and base64-encoded.
+    pub data: String,
 }
 
 /// One brush stroke.
@@ -555,6 +606,19 @@ impl Shape {
     fn validate(&self, points: &mut usize) -> Result<(), EditError> {
         match self {
             Shape::Whole | Shape::Subject | Shape::Background => Ok(()),
+            Shape::Object { clicks, selection } => {
+                if clicks.len() > MAX_CLICKS {
+                    return Err(EditError::invalid(format!("an AI selection takes at most {MAX_CLICKS} clicks, not {}", clicks.len())));
+                }
+                clicks.iter().try_for_each(|c| check_point("a click", c.at))?;
+                selection.as_ref().map_or(Ok(()), Selection::validate)
+            }
+            Shape::Described { text, selection } => {
+                if text.trim().is_empty() || text.chars().count() > MAX_DESCRIPTION || text.chars().any(char::is_control) {
+                    return Err(EditError::invalid(format!("a description has 1 to {MAX_DESCRIPTION} characters, none of them control characters")));
+                }
+                selection.as_ref().map_or(Ok(()), Selection::validate)
+            }
             Shape::Linear { start, end } => {
                 check_point("start", *start)?;
                 check_point("end", *end)
@@ -603,6 +667,28 @@ impl Shape {
                 Ok(())
             }
         }
+    }
+}
+
+impl Selection {
+    /// A selection from `side` by `side` logits over the image stretched to a square (row by row; positive inside):
+    /// what the model gives, and what tests make.
+    pub fn from_logits(side: usize, logits: &[f32]) -> Selection {
+        let seg = lightcraft_develop::SegMask::from_logits(side, logits);
+        Selection { side: seg.side, data: seg.data }
+    }
+
+    /// Checks the grid's size and that the data is no larger than its grid could deflate to (base64 of at most one byte
+    /// a cell, with room for the deflate stream's overhead).
+    fn validate(&self) -> Result<(), EditError> {
+        if !(1..=MAX_SELECTION_SIDE).contains(&self.side) {
+            return Err(EditError::invalid(format!("a selection's grid is 1 to {MAX_SELECTION_SIDE} cells a side, not {}", self.side)));
+        }
+        let cells = u64::from(self.side) * u64::from(self.side);
+        if self.data.len() as u64 > cells * 2 + 1024 {
+            return Err(EditError::invalid("a selection's data is larger than its grid"));
+        }
+        Ok(())
     }
 }
 

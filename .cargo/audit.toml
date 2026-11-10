@@ -5,4 +5,17 @@
 # LightCraft pin moves past storytold/lightcraft#1464, which bumps quick-xml to 0.41.
 # zbus 5's companion crates through AccessKit's Linux backend, "unmaintained" since zbus 6 merged them. Drop the
 # three when eframe's AccessKit moves to zbus 6.
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
+# zip 7 (four advisories, all in ZipArchive::extract, never called) and paste (unmaintained) through candle-core 0.9.2,
+# florastack-sam's SAM 3 inference (deny.toml has the reasons).
+ignore = [
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+    "RUSTSEC-2024-0436",
+]

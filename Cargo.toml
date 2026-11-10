@@ -22,6 +22,7 @@ florastack-gpu = { path = "crates/gpu" }
 florastack-project = { path = "crates/project" }
 florastack-retouch = { path = "crates/retouch" }
 florastack-edit = { path = "crates/edit" }
+florastack-sam = { path = "crates/sam" }
 florastack-capture = { path = "crates/capture" }
 florastack-engine = { path = "crates/engine" }
 florastack-metrics = { path = "crates/metrics" }
@@ -145,6 +146,11 @@ lightcraft-develop = { git = "https://github.com/storytold/lightcraft", rev = "a
 lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
 # The points that florastack-edit's linear and radial masks and brush strokes are given to the develop pipeline as.
 lightcraft-geom = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+# SAM 3 inference (florastack-sam, adapted from LightCraft's lightcraft-segment), pinned as LightCraft pins them: later
+# releases pull `tokenizers` with the Oniguruma C library into candle-core. Without default features: no CUDA, no MKL,
+# nothing compiled from C.
+candle-core = { version = "=0.9.2", default-features = false }
+candle-nn = { version = "=0.9.2", default-features = false }
 
 # The browser build (roadmap 7.3, `cargo xtask web`). Clocks that work there too: `std::time`'s own on native targets,
 # the page's `performance.now()` and `Date.now()` in a browser, where the standard library's would panic. MIT OR

@@ -38,6 +38,8 @@
 #![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 
 pub mod adjust;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod adjust_ai;
 pub mod align;
 pub mod annotation;
 #[cfg(not(target_arch = "wasm32"))]
@@ -102,6 +104,7 @@ pub(crate) fn all() -> Vec<CommandSpec> {
     all.extend(cache::specs());
     #[cfg(not(target_arch = "wasm32"))]
     {
+        all.extend(adjust_ai::specs());
         all.extend(batch::specs());
         all.extend(watch::specs());
         all.extend(capture::specs());

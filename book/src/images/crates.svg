@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 520" width="1080" height="520" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" width="1200" height="520" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">FloraStack's crates and what each may depend on</title>
-  <desc id="desc">The three apps (florastack, florastack-cli, florastack-python) depend on florastack-engine alone. The engine depends on the nine library crates: florastack-codecs, florastack-raw, florastack-align, florastack-stack, florastack-gpu, florastack-project, florastack-retouch, florastack-edit and florastack-capture. florastack-retouch also depends on florastack-project, and florastack-gpu uses florastack-align and florastack-stack in its tests only. Every library depends on florastack-core, which depends on no FloraStack crate. florastack-metrics (on florastack-core) and florastack-testkit are dev-dependencies only, and xtask, the developer tooling, depends on no FloraStack crate. This diagram is checked against xtask/src/layers.rs by a test.</desc>
+  <desc id="desc">The three apps (florastack, florastack-cli, florastack-python) depend on florastack-engine alone. The engine depends on the ten library crates: florastack-codecs, florastack-raw, florastack-align, florastack-stack, florastack-gpu, florastack-project, florastack-retouch, florastack-edit, florastack-sam and florastack-capture. florastack-retouch also depends on florastack-project, florastack-edit on florastack-sam, and florastack-gpu uses florastack-align and florastack-stack in its tests only. Every library but florastack-sam depends on florastack-core, which depends on no FloraStack crate. florastack-metrics (on florastack-core) and florastack-testkit are dev-dependencies only, and xtask, the developer tooling, depends on no FloraStack crate. This diagram is checked against xtask/src/layers.rs by a test.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5a52"/>
@@ -17,107 +17,112 @@
     .devedge { stroke: #4a5a52; stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow); }
     .layer { font-size: 11px; fill: #6b7a72; font-style: italic; }
   </style>
-  <rect x="0" y="0" width="1080" height="520" rx="10" fill="#ffffff"/>
+  <rect x="0" y="0" width="1200" height="520" rx="10" fill="#ffffff"/>
 
   <text class="layer" x="16" y="56">apps</text>
   <text class="layer" x="16" y="162">engine</text>
   <text class="layer" x="16" y="238">libraries</text>
 
   <!-- The apps -->
-  <rect class="box" x="210" y="24" width="200" height="56" rx="6"/>
-  <text class="name" x="310" y="48">florastack</text>
-  <text class="what" x="310" y="66">desktop app (egui)</text>
-  <rect class="box" x="440" y="24" width="200" height="56" rx="6"/>
-  <text class="name" x="540" y="48">florastack-cli</text>
-  <text class="what" x="540" y="66">command-line tool, MCP server</text>
-  <rect class="box" x="670" y="24" width="200" height="56" rx="6"/>
-  <text class="name" x="770" y="48">florastack-python</text>
-  <text class="what" x="770" y="66">Python package (PyO3)</text>
+  <rect class="box" x="270" y="24" width="200" height="56" rx="6"/>
+  <text class="name" x="370" y="48">florastack</text>
+  <text class="what" x="370" y="66">desktop app (egui)</text>
+  <rect class="box" x="500" y="24" width="200" height="56" rx="6"/>
+  <text class="name" x="600" y="48">florastack-cli</text>
+  <text class="what" x="600" y="66">command-line tool, MCP server</text>
+  <rect class="box" x="730" y="24" width="200" height="56" rx="6"/>
+  <text class="name" x="830" y="48">florastack-python</text>
+  <text class="what" x="830" y="66">Python package (PyO3)</text>
 
-  <path class="edge" d="M 310 80 L 480 130"/>
-  <path class="edge" d="M 540 80 L 540 130"/>
-  <path class="edge" d="M 770 80 L 600 130"/>
+  <path class="edge" d="M 370 80 L 540 130"/>
+  <path class="edge" d="M 600 80 L 600 130"/>
+  <path class="edge" d="M 830 80 L 660 130"/>
 
   <!-- The engine -->
-  <rect class="box engine" x="390" y="130" width="300" height="56" rx="6"/>
-  <text class="name" x="540" y="154">florastack-engine</text>
-  <text class="what" x="540" y="172">commands, jobs, sessions, orchestration</text>
-  <path class="edge" d="M 405 186 L 68 250"/>
-  <path class="edge" d="M 438.8 186 L 186 250"/>
-  <path class="edge" d="M 472.5 186 L 304 250"/>
-  <path class="edge" d="M 506.2 186 L 422 250"/>
-  <path class="edge" d="M 540 186 L 540 250"/>
-  <path class="edge" d="M 573.8 186 L 658 250"/>
-  <path class="edge" d="M 607.5 186 L 776 250"/>
-  <path class="edge" d="M 641.2 186 L 894 250"/>
-  <path class="edge" d="M 675 186 L 1012 250"/>
+  <rect class="box engine" x="450" y="130" width="300" height="56" rx="6"/>
+  <text class="name" x="600" y="154">florastack-engine</text>
+  <text class="what" x="600" y="172">commands, jobs, sessions, orchestration</text>
+  <path class="edge" d="M 465 186 L 69 250"/>
+  <path class="edge" d="M 495 186 L 187 250"/>
+  <path class="edge" d="M 525 186 L 305 250"/>
+  <path class="edge" d="M 555 186 L 423 250"/>
+  <path class="edge" d="M 585 186 L 541 250"/>
+  <path class="edge" d="M 615 186 L 659 250"/>
+  <path class="edge" d="M 645 186 L 777 250"/>
+  <path class="edge" d="M 675 186 L 895 250"/>
+  <path class="edge" d="M 705 186 L 1013 250"/>
+  <path class="edge" d="M 735 186 L 1131 250"/>
 
   <!-- The libraries -->
-  <rect class="box" x="12" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="68" y="274">florastack-codecs</text>
-  <text class="what" x="68" y="292">image files</text>
-  <rect class="box" x="130" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="186" y="274">florastack-raw</text>
-  <text class="what" x="186" y="292">camera RAW files</text>
-  <rect class="box" x="248" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="304" y="274">florastack-align</text>
-  <text class="what" x="304" y="292">alignment, dust</text>
-  <rect class="box" x="366" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="422" y="274">florastack-stack</text>
-  <text class="what" x="422" y="292">stacking methods</text>
-  <rect class="box" x="484" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="540" y="274">florastack-gpu</text>
-  <text class="what" x="540" y="292">GPU kernels (wgpu)</text>
-  <rect class="box" x="602" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="658" y="274">florastack-project</text>
-  <text class="what" x="658" y="292">projects, undo</text>
-  <rect class="box" x="720" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="776" y="274">florastack-retouch</text>
-  <text class="what" x="776" y="292">brushes, strokes</text>
-  <rect class="box" x="838" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="894" y="274">florastack-edit</text>
-  <text class="what" x="894" y="292">adjustments, masks</text>
-  <rect class="box" x="956" y="250" width="112" height="56" rx="6"/>
-  <text class="name" x="1012" y="274">florastack-capture</text>
-  <text class="what" x="1012" y="292">cameras, rails</text>
+  <rect class="box" x="13" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="69" y="274">florastack-codecs</text>
+  <text class="what" x="69" y="292">image files</text>
+  <rect class="box" x="131" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="187" y="274">florastack-raw</text>
+  <text class="what" x="187" y="292">camera RAW files</text>
+  <rect class="box" x="249" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="305" y="274">florastack-align</text>
+  <text class="what" x="305" y="292">alignment, dust</text>
+  <rect class="box" x="367" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="423" y="274">florastack-stack</text>
+  <text class="what" x="423" y="292">stacking methods</text>
+  <rect class="box" x="485" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="541" y="274">florastack-gpu</text>
+  <text class="what" x="541" y="292">GPU kernels (wgpu)</text>
+  <rect class="box" x="603" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="659" y="274">florastack-project</text>
+  <text class="what" x="659" y="292">projects, undo</text>
+  <rect class="box" x="721" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="777" y="274">florastack-retouch</text>
+  <text class="what" x="777" y="292">brushes, strokes</text>
+  <rect class="box" x="839" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="895" y="274">florastack-edit</text>
+  <text class="what" x="895" y="292">adjustments, masks</text>
+  <rect class="box" x="957" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="1013" y="274">florastack-sam</text>
+  <text class="what" x="1013" y="292">SAM 3 selections</text>
+  <rect class="box" x="1075" y="250" width="112" height="56" rx="6"/>
+  <text class="name" x="1131" y="274">florastack-capture</text>
+  <text class="what" x="1131" y="292">cameras, rails</text>
 
-  <!-- retouch on project, and gpu's tests on align and stack -->
-  <path class="edge" d="M 776 250 Q 718 222 664 247"/>
-  <path class="devedge" d="M 531 250 Q 477 222 428 247"/>
-  <path class="devedge" d="M 549 250 Q 431 200 310 247"/>
+  <!-- retouch on project, edit on sam, and gpu's tests on align and stack -->
+  <path class="edge" d="M 777 250 Q 719 222 665 247"/>
+  <path class="edge" d="M 895 250 Q 954 222 1007 247"/>
+  <path class="devedge" d="M 532 250 Q 478 222 429 247"/>
+  <path class="devedge" d="M 550 250 Q 432 200 311 247"/>
 
-  <path class="edge" d="M 68 306 L 405 400"/>
-  <path class="edge" d="M 186 306 L 438.8 400"/>
-  <path class="edge" d="M 304 306 L 472.5 400"/>
-  <path class="edge" d="M 422 306 L 506.2 400"/>
-  <path class="edge" d="M 540 306 L 540 400"/>
-  <path class="edge" d="M 658 306 L 573.8 400"/>
-  <path class="edge" d="M 776 306 L 607.5 400"/>
-  <path class="edge" d="M 894 306 L 641.2 400"/>
-  <path class="edge" d="M 1012 306 L 675 400"/>
+  <path class="edge" d="M 69 306 L 465 400"/>
+  <path class="edge" d="M 187 306 L 495 400"/>
+  <path class="edge" d="M 305 306 L 525 400"/>
+  <path class="edge" d="M 423 306 L 555 400"/>
+  <path class="edge" d="M 541 306 L 585 400"/>
+  <path class="edge" d="M 659 306 L 615 400"/>
+  <path class="edge" d="M 777 306 L 645 400"/>
+  <path class="edge" d="M 895 306 L 675 400"/>
+  <path class="edge" d="M 1131 306 L 735 400"/>
 
   <!-- The core -->
-  <rect class="box core" x="390" y="400" width="300" height="56" rx="6"/>
-  <text class="name" x="540" y="424">florastack-core</text>
-  <text class="what" x="540" y="442">images, geometry, tiles, basic operations</text>
+  <rect class="box core" x="450" y="400" width="300" height="56" rx="6"/>
+  <text class="name" x="600" y="424">florastack-core</text>
+  <text class="what" x="600" y="442">images, geometry, tiles, basic operations</text>
 
   <!-- Test and developer tooling -->
-  <rect class="box dev" x="80" y="400" width="140" height="56" rx="6"/>
-  <text class="name" x="150" y="424">florastack-testkit</text>
-  <text class="what" x="150" y="442">skip!, fixtures</text>
-  <rect class="box dev" x="230" y="400" width="140" height="56" rx="6"/>
-  <text class="name" x="300" y="424">florastack-metrics</text>
-  <text class="what" x="300" y="442">quality metrics</text>
-  <path class="edge" d="M 370 428 L 388 428"/>
-  <rect class="box dev" x="860" y="400" width="140" height="56" rx="6"/>
-  <text class="name" x="930" y="424">xtask</text>
-  <text class="what" x="930" y="442">cargo xtask</text>
+  <rect class="box dev" x="140" y="400" width="140" height="56" rx="6"/>
+  <text class="name" x="210" y="424">florastack-testkit</text>
+  <text class="what" x="210" y="442">skip!, fixtures</text>
+  <rect class="box dev" x="290" y="400" width="140" height="56" rx="6"/>
+  <text class="name" x="360" y="424">florastack-metrics</text>
+  <text class="what" x="360" y="442">quality metrics</text>
+  <path class="edge" d="M 430 428 L 448 428"/>
+  <rect class="box dev" x="920" y="400" width="140" height="56" rx="6"/>
+  <text class="name" x="990" y="424">xtask</text>
+  <text class="what" x="990" y="442">cargo xtask</text>
 
   <!-- Legend -->
-  <path class="edge" d="M 390 492 L 430 492"/>
-  <text class="what" x="438" y="496" style="text-anchor: start">depends on</text>
-  <path class="devedge" d="M 530 492 L 570 492"/>
-  <text class="what" x="578" y="496" style="text-anchor: start">in tests only</text>
-  <rect class="box dev" x="670" y="482" width="28" height="18" rx="3"/>
-  <text class="what" x="706" y="496" style="text-anchor: start">dev-dependencies and tooling only</text>
+  <path class="edge" d="M 450 492 L 490 492"/>
+  <text class="what" x="498" y="496" style="text-anchor: start">depends on</text>
+  <path class="devedge" d="M 590 492 L 630 492"/>
+  <text class="what" x="638" y="496" style="text-anchor: start">in tests only</text>
+  <rect class="box dev" x="730" y="482" width="28" height="18" rx="3"/>
+  <text class="what" x="766" y="496" style="text-anchor: start">dev-dependencies and tooling only</text>
 </svg>

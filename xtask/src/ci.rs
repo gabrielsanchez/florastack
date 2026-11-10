@@ -309,6 +309,7 @@ fn hint(need: &str) -> &'static str {
     match need {
         "gpu" => "a GPU adapter that passes the self-test",
         "corpus" => "files in the gitignored corpus/ folder, which `cargo xtask corpus` fetches",
+        "model" => "the SAM 3 model's files, in the folder FLORASTACK_SAM3_MODEL names (book/src/user/adjusting.md)",
         _ => "what the reasons name",
     }
 }

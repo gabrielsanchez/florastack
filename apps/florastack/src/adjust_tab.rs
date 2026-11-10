@@ -57,6 +57,8 @@ fn shape_label(shape: &Shape) -> &'static str {
         Shape::Luminance { .. } => "adjust-shape-luminance",
         Shape::Color { .. } => "adjust-shape-color",
         Shape::Whole => "adjust-shape-whole",
+        Shape::Object { .. } => "adjust-shape-object",
+        Shape::Described { .. } => "adjust-shape-described",
     }
 }
 
@@ -556,6 +558,12 @@ fn shape_settings(ui: &mut egui::Ui, shape: &mut Shape) -> Option<(&'static str,
         }
         Shape::Linear { .. } => {
             ui.weak(tr("adjust-linear-hint"));
+        }
+        Shape::Object { selection, .. } => {
+            ui.weak(if selection.is_some() { tr("adjust-object-selected") } else { tr("adjust-object-hint") });
+        }
+        Shape::Described { text, .. } => {
+            ui.weak(tr_args("adjust-described", &[("text", text.clone().into())]));
         }
         Shape::Subject | Shape::Background | Shape::Whole => {}
     }

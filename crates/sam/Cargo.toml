@@ -1,0 +1,31 @@
+[package]
+name = "florastack-sam"
+version.workspace = true
+edition.workspace = true
+# Apache-2.0 only, not the workspace's MIT OR Apache-2.0: the code is LightCraft's port of Hugging Face Transformers'
+# SAM 3 code, which is under the Apache License 2.0 (NOTICE, ATTRIBUTION.md).
+license = "Apache-2.0"
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# The model runs natively only: the browser build has no AI selections (saved ones still render).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core.workspace = true
+candle-nn.workspace = true
+
+# On macOS the model runs on the GPU through Metal, as LightCraft's does.
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+florastack-testkit.workspace = true

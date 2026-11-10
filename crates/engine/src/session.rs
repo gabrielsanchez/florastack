@@ -64,6 +64,12 @@ pub struct Session {
     /// The output open for adjusting (`crate::adjust`), and whether a session closed since an app last asked.
     pub(crate) adjust: Option<crate::adjust::AdjustSession>,
     pub(crate) adjust_closed: bool,
+    /// The user's model settings (`models.json`, beside the calibration profiles), and the AI model, loaded when a
+    /// selection first needs it (`commands::adjust_ai`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) models_path: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) model: crate::commands::adjust_ai::SharedModel,
     pub(crate) capture: Arc<std::sync::Mutex<florastack_capture::Devices>>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) capture_preview: Arc<std::sync::Mutex<Option<tempfile::TempPath>>>,
@@ -85,6 +91,8 @@ const STOP_POLL: Duration = Duration::from_millis(20);
 impl Session {
     pub(crate) fn new(host: Host, jobs: Jobs) -> Session {
         let calibration_path = host.temporary_projects.as_ref().and_then(|p| p.parent()).map(|p| p.join("calibrations.json"));
+        #[cfg(not(target_arch = "wasm32"))]
+        let models_path = calibration_path.as_ref().and_then(|p| p.parent()).map(|p| p.join("models.json"));
         Session {
             host,
             calibration_path,
@@ -100,6 +108,10 @@ impl Session {
             retouch_closed: false,
             adjust: None,
             adjust_closed: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            models_path,
+            #[cfg(not(target_arch = "wasm32"))]
+            model: Arc::default(),
             capture: Arc::default(),
             #[cfg(not(target_arch = "wasm32"))]
             capture_preview: Arc::default(),
@@ -330,6 +342,15 @@ impl Session {
         cleaned
     }
 
+    /// Lets the AI model go, if it is loaded: several gigabytes of memory.
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))] // The browser build has no model.
+    pub(crate) fn unload_model(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            *self.model.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+
     /// Closes the retouch session, its result cached first when it can be, and the adjust session.
     fn close_retouch(&mut self) {
         if self.retouch.is_some() {
@@ -342,6 +363,7 @@ impl Session {
         if self.adjust.take().is_some() {
             self.adjust_closed = true;
         }
+        self.unload_model();
     }
 
     /// Closes the open project: refused when it has unsaved changes, unless `discard`. Its jobs are cancelled first,
