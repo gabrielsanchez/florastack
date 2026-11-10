@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-codecs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "exr",
  "florastack-core",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rayon",
  "serde",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-raw"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "florastack-core",
  "lightcraft-codecs",

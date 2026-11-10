@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "florastack"
-version = "0.2.0"
+version = "0.3.0"
 description = "Focus stacking through the FloraStack Rust engine"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.23,<3"]
