@@ -1,7 +1,8 @@
 # Adjusting the image
 
 Once an output is stacked and retouched, the Adjust tab finishes it: tone, color and detail for the whole image, and
-the same within masks, regions such as the subject, the background, a part of the subject at some depth, a gradient,
+the same within masks, regions such as the subject, which an AI model outlines from a click, the background, a part
+of the subject at some depth, a gradient,
 an ellipse or brush strokes. Adjustments are non-destructive: they are settings kept with the output in the project, the
 output itself never changes, and every change is one undo step. Exports write the output with its adjustments, after
 its retouch strokes and before its annotations.
@@ -47,12 +48,18 @@ added to it, subtracted from it or intersected with it (**Add**, **Subtract**, *
 a shape, or the whole mask, leaves out. **Refine edges** makes the mask's edges follow the image's, which a subject or
 a brushed mask needs most.
 
-- **Subject** and **Background**: what the stack has in focus, and what it doesn't. FloraStack finds the subject in
-  the stacked image itself: a focus stack brings everything its frames had in focus into one sharp image and leaves
-  the rest as soft as the frames saw it, so the subject is where the image has fine detail. It needs no map and no
-  frames. A smooth part of a subject (a shiny shell, a wing's membrane) larger than a small gap can be left out, and a
-  backdrop with fine detail of its own taken in: brush them in or out with a brush shape, subtracted or added.
-- **Depth range**: the part of the subject in focus in a range of the stack's frames, **From** 0, the first frame, **To**
+- **Subject (AI)** and **Background (AI)**: click the subject on the image, and the AI model (Meta's SAM 3) outlines
+  it; click again to add a part it missed, Alt-click to leave out one it took. Background is the same selection,
+  inverted. The selection is kept with the mask, so previews and exports never need the model again. It needs the model
+  (below); the first selection on an output loads the model and reads the image, which can take a minute on a
+  computer without a supported GPU, and each one after takes about a second.
+- **Described (AI)**: type what to select, a short noun phrase such as *insect*, *flower* or *the red berries*, and
+  the model selects everything it names.
+- **Sharp areas** and **Soft areas**: where the stack has fine detail, and where it hasn't, found without a model. A
+  focus stack brings everything its frames had in focus into one sharp image and leaves the rest as soft as the frames
+  saw it, so these separate a subject from a blurred background well. They can't when the subject stands on a surface
+  that was in focus too, a textured floor or a leaf: use Subject (AI) there.
+- **Depth range**: the part of the sharp areas in focus in a range of the stack's frames, **From** 0, the first frame, **To**
   1, the last (the nearest and the farthest, or the other way round, as the stack was shot), fading over **Feather**.
   It needs the stack's depth map: a depth-map output has its own; for the other methods, **Map the depth** measures the
   frames' focus once, at a quarter of their size, and keeps the map with the output (adding a depth range does it for
@@ -68,10 +75,27 @@ a brushed mask needs most.
   a **Tolerance**.
 - **Whole image**: everything, for adjustments that should come after other masks.
 
+## Installing the AI model
+
+FloraStack doesn't include the AI model, and can't download it for you: its maker, Meta, asks each person to accept
+its license (the [SAM License](https://github.com/facebookresearch/sam3/blob/main/LICENSE), not an open-source one)
+on Hugging Face before downloading it. Once:
+
+1. Open [facebook/sam3 on Hugging Face](https://huggingface.co/facebook/sam3), sign in, and accept the license.
+2. From its **Files** tab, download `model.safetensors` (3.4 GB), `vocab.json` and `merges.txt` into one folder.
+3. In the Adjust tab, add a Subject (AI) mask and press **Choose the model's folder…**. FloraStack checks the files
+   (that the weights are the official ones, which takes a moment over 3.4 GB) and remembers the folder; the files stay
+   where they are.
+
+The model takes about 3.5 GB of memory while an output is open for adjusting, and lets it go when you close the
+project. On a Mac it runs on the GPU; elsewhere on the CPU. AI selections aren't available in the browser version,
+though selections made on the desktop show there.
+
 ## Scripting
 
 Every change goes through the engine's `adjust.*` commands (the [command reference](../reference/commands.md)), so
 scripts, the control channel and MCP clients adjust outputs as the tab does: `adjust.set` takes all the settings at
-once, `adjust.addMask`, `adjust.setMask`, `adjust.removeMask`, `adjust.moveMask` and `adjust.stroke` change masks, and
+once, `adjust.addMask`, `adjust.setMask`, `adjust.removeMask`, `adjust.moveMask` and `adjust.stroke` change masks,
+`adjust.select` and `adjust.describe` make AI selections (`adjust.setModel` names the model's folder), and
 `output.save` or `export.run` write the result. The adjustments are part of an export's reproducibility sidecar, so
 `export.reproduce` writes the same file again.

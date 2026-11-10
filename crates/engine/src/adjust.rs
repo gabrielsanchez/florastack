@@ -32,9 +32,10 @@ use crate::error::CommandError;
 use crate::view::DisplayImage;
 
 pub use florastack_edit::Adjustments as Settings;
-pub use florastack_edit::settings::MAX_SAMPLES;
+pub use florastack_edit::Click;
+pub use florastack_edit::settings::{MAX_CLICKS, MAX_SAMPLES};
 /// What the apps edit: florastack-edit's settings.
-pub use florastack_edit::{Component, Global, Local, Mask, Op, Shape, Stroke};
+pub use florastack_edit::{Component, Global, Local, Mask, Op, Selection, Shape, Stroke};
 
 /// An output's adjustments, the defaults when it has none; refused when they don't read or aren't valid.
 pub(crate) fn adjustments(output: &Output) -> Result<Adjustments, CommandError> {
