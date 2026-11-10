@@ -35,6 +35,20 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             remove,
         ),
         CommandSpec::job(
+            Meta::new("output.render", "Render output", "Renders an output as it is written: with its visible retouch strokes and its adjustments.")
+                .help(
+                    "For viewers: the result is a lossless image in the project's cache, whose `path` the result gives, \
+                     kept as the output's `result` map and keyed by what it is made from, so that rendering it again \
+                     reads it back until a stroke or an adjustment changes. An output with neither is its own image, \
+                     with nothing rendered. Runs beside other jobs; a newer call replaces one still running.",
+                )
+                .requires(Requires::Project)
+                .supersede()
+                .examples(&[r#"{ "output": 4 }"#]),
+            Lane::Preview,
+            render,
+        ),
+        CommandSpec::job(
             Meta::new("output.save", "Save output", "Writes an output to an image file, in the format, depth and color profile given.")
                 .help(
                     "The metadata (EXIF, IPTC, XMP) comes from `metadataFrom`, or by default from the first of the \
@@ -143,6 +157,68 @@ impl Params for RenameParams {
 struct Renamed {
     output: OutputId,
     name: String,
+}
+
+/// The output map that keeps an output rendered with its strokes and adjustments (`output.render`).
+pub(crate) const RESULT: &str = "result";
+
+/// What an output's result is made from: its image, its visible strokes and its adjustments; `None` when it has
+/// neither strokes nor adjustments that change anything, and its result is its image.
+pub(crate) fn result_key(output: &florastack_project::Output) -> Result<Option<String>, CommandError> {
+    let strokes = crate::retouch::visible_strokes(output);
+    let adjustments = crate::adjust::to_apply(output)?;
+    if strokes.is_empty() && adjustments.is_none() {
+        return Ok(None);
+    }
+    let text = serde_json::to_string(&(&output.image.hash, &strokes, &adjustments)).unwrap_or_default();
+    Ok(Some(format!("result {}", florastack_project::ContentHash::of(text.as_bytes()))))
+}
+
+/// The output rendered.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Rendered {
+    output: OutputId,
+    /// The image file to show: the result in the cache, or the output's own image.
+    path: String,
+    /// How it came: `stacked` (nothing to render: the output's image), `cached` (rendered before) or `rendered`.
+    how: &'static str,
+}
+
+fn render(session: &Session, p: OutputParams) -> Result<JobPlan<Rendered>, CommandError> {
+    let output = find(session, p.output)?;
+    let root = session.folder()?.path().to_path_buf();
+    let id = p.output;
+    let done = move |path: &Path, how| Rendered { output: id, path: display(path), how };
+    let Some(key) = result_key(output)? else {
+        let rendered = done(&output.image.path.resolve(&root), "stacked");
+        return Ok(JobPlan::new(move |_| Ok(commit(move |_: &mut Session| Ok(rendered)))));
+    };
+    let name = crate::retouch::map_name(RESULT)?;
+    if let Some(cached) = output.maps.get(&name).filter(|r| r.key.as_deref() == Some(key.as_str())) {
+        let rendered = done(&cached.path.resolve(&root), "cached");
+        return Ok(JobPlan::new(move |_| Ok(commit(move |_: &mut Session| Ok(rendered)))));
+    }
+    let mut notes = Vec::new();
+    let spec = OutputSpec::new(florastack_codecs::Format::Tiff)?;
+    let pixels = Pixels::of(session, id, None, OutputSpec { extended_range: false, ..spec }, &mut notes)?;
+    let cache = session.cache_dir()?;
+    let job = JobPlan::new(move |ctx| {
+        let image = pixels.read(&cache, &mut notes)?;
+        ctx.checkpoint()?;
+        let reference =
+            crate::project::write_image_in(&cache, florastack_project::Area::Cache, &format!("result-{}", id.get()), &image, Some(key.clone()))?;
+        let rendered = done(&reference.path.resolve(&root), "rendered");
+        Ok(commit(move |session: &mut Session| {
+            // Kept only when the output is still what it was rendered from.
+            let current = session.project()?.output(id).map(result_key).transpose()?.flatten();
+            if current.as_deref() == Some(key.as_str()) {
+                session.apply_system(Edit::SetOutputMap { output: id, name, map: Some(reference) })?;
+            }
+            Ok(rendered)
+        }))
+    });
+    Ok(job.stages(&[("Rendering", 1.0)]))
 }
 
 fn find(session: &Session, output: OutputId) -> Result<&florastack_project::Output, CommandError> {

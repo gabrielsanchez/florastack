@@ -411,3 +411,38 @@ fn depth_where(engine: &Engine, id: u64, name: &str, keep: &dyn Fn(usize, usize)
     }
     sum / n
 }
+
+#[test]
+fn an_output_renders_as_it_is_written_and_is_kept() {
+    let dir = TempDir::new("adjust-render");
+    let (mut engine, output) = stacked(dir.path());
+    let render = |engine: &mut Engine| run(engine, "output.render", &json!({"output": output}).to_string());
+    let plain = render(&mut engine);
+    assert_eq!(plain["how"], "stacked", "{plain}");
+    // Adjusted: rendered once, then read back.
+    run(&mut engine, "adjust.set", &json!({"output": output, "adjustments": {"global": {"exposure": 1.0}}}).to_string());
+    let first = render(&mut engine);
+    assert_eq!(first["how"], "rendered", "{first}");
+    assert_eq!(render(&mut engine)["how"], "cached");
+    let read = |path: &str| match florastack_codecs::read_file(Path::new(path), &florastack_engine::ReadOptions::default()).unwrap().image {
+        florastack_engine::AnyImage::F32(i) => i,
+        florastack_engine::AnyImage::U16(i) => i.to_linear_f32().unwrap(),
+        florastack_engine::AnyImage::U8(i) => i.to_linear_f32().unwrap(),
+    };
+    let (before, after) = (read(plain["path"].as_str().unwrap()), read(first["path"].as_str().unwrap()));
+    assert!(mean(&after) > 1.6 * mean(&before), "the render is adjusted");
+    // The same pixels a file is written with, once a 16-bit file has clipped them to [0, 1].
+    let saved = saved(&mut engine, output, &dir.path().join("saved.tif"));
+    assert_eq!((after.width(), after.height(), after.channels()), (saved.width(), saved.height(), saved.channels()));
+    let d = after.as_raw().iter().zip(saved.as_raw()).map(|(a, b)| (a.clamp(0.0, 1.0) - b).abs()).fold(0.0f32, f32::max);
+    assert!(d < 1.0 / 16384.0, "{d}");
+    // A stroke changes it; undoing the stroke brings the cached one back.
+    run(&mut engine, "retouch.open", &json!({"output": output}).to_string());
+    run(&mut engine, "retouch.stroke", r#"{ "stroke": { "brush": "eraser", "size": 10, "hardness": 0.5, "opacity": 1, "samples": [[20, 20, 1]] } }"#);
+    // (An eraser over an unretouched output changes no pixel, but the strokes are part of what it is made from.)
+    assert_eq!(render(&mut engine)["how"], "rendered");
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(render(&mut engine)["how"], "rendered", "the map kept is the latest render's");
+    run(&mut engine, "adjust.reset", &json!({"output": output}).to_string());
+    assert_eq!(render(&mut engine)["how"], "stacked");
+}

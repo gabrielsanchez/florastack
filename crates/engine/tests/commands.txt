@@ -61,6 +61,7 @@ job.list
 output.list
 output.remove
 output.rename
+output.render
 output.save
 parallax.animate
 parallax.mesh

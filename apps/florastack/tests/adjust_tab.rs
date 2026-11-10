@@ -129,3 +129,31 @@ fn an_ai_mask_asks_for_the_model_it_needs() {
     drop(harness);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_export_tab_shows_the_output_with_its_adjustments() {
+    let (dir, mut harness) = app("adjust-tab-export");
+    drop_files(&mut harness, &frames(&dir.join("photos")));
+    until(&mut harness, "the frames", |app| app.shell.frames.len() == 4);
+    harness.get_by_label("Align").click();
+    until(&mut harness, "the alignment", |app| app.aligned() && !app.shell.busy());
+    harness.get_by_label("Stack frames").click();
+    until(&mut harness, "the output", |app| app.shell.outputs.len() == 1 && !app.shell.busy());
+    let id = harness.state().shell.outputs[0].id;
+    let shown = |app: &FloraStackApp| app.loading.as_ref().map(|(path, ..)| path.clone());
+    // Without edits, the output's own image.
+    harness.get_by_label("Export").click();
+    harness.state_mut().select(florastack_app::app::Selection::Output(id));
+    until(&mut harness, "the plain output", |app| app.loading.is_none() && app.rendering.is_none() && !app.viewer.is_empty());
+    // Adjusted: the render, made and loaded.
+    harness.state_mut().shell.run("adjust.set", florastack_engine::json!({ "output": id, "adjustments": { "global": { "exposure": 1.0 } } }));
+    until(&mut harness, "the render asked for", |app| {
+        app.rendering.is_some() || shown(app).is_some_and(|p| p.display().to_string().contains("result-"))
+    });
+    until(&mut harness, "the render shown", |app| app.rendering.is_none() && app.loading.is_none() && !app.shell.busy());
+    let rendered = harness.state().shell.engine().project().unwrap().outputs[0].maps.keys().any(|k| k.as_str() == "result");
+    assert!(rendered, "kept as the output's result map");
+    assert!(harness.state().shell.notices.iter().all(|n| !n.error), "{:?}", harness.state().shell.notices);
+    drop(harness);
+    let _ = std::fs::remove_dir_all(dir);
+}

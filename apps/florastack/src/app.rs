@@ -162,6 +162,10 @@ pub struct FloraStackApp {
     /// What the viewer is loading, which selection it is for, and whether the view stays where it is (an image
     /// replacing one of its size, such as the next preview).
     pub loading: Option<(PathBuf, Selection, bool)>,
+    /// An output with strokes or adjustments being rendered to be shown (`output.render`), with the selection to
+    /// show it as; and the fingerprint of the output's edits shown (`OutputRow::edits`).
+    pub rendering: Option<(u64, Selection, bool)>,
+    shown_edits: Option<(u64, u64)>,
     /// The outputs picked for comparing, at most two.
     pub compare: Vec<u64>,
     /// The filmstrip, while it is shown instead of the viewer.
@@ -240,6 +244,8 @@ impl FloraStackApp {
             pair: [None, None],
             thumb_loader: Loader::every("thumbnails", ctx),
             loading: None,
+            rendering: None,
+            shown_edits: None,
             compare: Vec::new(),
             film: None,
             threshold_step: false,
@@ -507,6 +513,19 @@ impl FloraStackApp {
             }
         }
         self.selection = selection.clone();
+        self.rendering = None;
+        self.shown_edits = None;
+        // An output with strokes or adjustments is shown as it is written: rendered, then loaded.
+        if let Selection::Output(id) = selection
+            && let Some(row) = self.shell.outputs.iter().find(|o| o.id == id)
+        {
+            self.shown_edits = Some((id, row.edits));
+            if row.edited {
+                self.rendering = Some((id, selection.clone(), keep));
+                self.shell.run("output.render", json!({ "output": id }));
+                return;
+            }
+        }
         if let Some(path) = path {
             self.view_loader.request(Request { path: path.clone(), max_side: Some(self.viewer.max_side()) });
             self.loading = Some((path, selection, keep));
@@ -658,9 +677,7 @@ impl FloraStackApp {
         }
         self.found_stacks();
         self.exported();
-        if let Some(output) = self.shell.made.take() {
-            self.select(Selection::Output(output));
-        }
+        self.show_outputs();
         // With nothing picked, the viewer shows the first frame.
         if self.selection == Selection::Nothing
             && let Some(first) = self.shell.frames.first().map(|f| f.id)
@@ -741,6 +758,29 @@ impl FloraStackApp {
     fn sync_tabs(&mut self) {
         crate::retouch_tab::sync(self);
         crate::adjust_tab::sync(self);
+    }
+
+    /// Shows the output a stack just made; the output that `output.render` just rendered, when it is still the one
+    /// wanted; and renders the output shown again when its strokes or adjustments changed.
+    fn show_outputs(&mut self) {
+        if let Some(output) = self.shell.made.take() {
+            self.select(Selection::Output(output));
+        }
+        if let Some(rendered) = self.shell.rendered.take()
+            && let Some((id, selection, keep)) = self.rendering.clone()
+            && rendered["output"].as_u64() == Some(id)
+            && let Some(path) = rendered["path"].as_str().map(PathBuf::from)
+        {
+            self.rendering = None;
+            self.view_loader.request(Request { path: path.clone(), max_side: Some(self.viewer.max_side()) });
+            self.loading = Some((path, selection, keep));
+        }
+        if let (Selection::Output(id), Some((shown, edits))) = (self.selection.clone(), self.shown_edits)
+            && id == shown
+            && self.shell.outputs.iter().find(|o| o.id == id).is_some_and(|o| o.edits != edits)
+        {
+            self.select_keeping(Selection::Output(id), true);
+        }
     }
 
     /// Saves the project when autosave says it is time.

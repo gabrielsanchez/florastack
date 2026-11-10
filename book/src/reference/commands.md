@@ -24,7 +24,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [export](#export) | [`export.estimate`](#exportestimate), [`export.get`](#exportget), [`export.reproduce`](#exportreproduce), [`export.reset`](#exportreset), [`export.run`](#exportrun), [`export.set`](#exportset) |
 | [filmstrip](#filmstrip) | [`filmstrip.list`](#filmstriplist), [`filmstrip.update`](#filmstripupdate) |
 | [job](#job) | [`job.cancel`](#jobcancel), [`job.list`](#joblist) |
-| [output](#output) | [`output.list`](#outputlist), [`output.remove`](#outputremove), [`output.rename`](#outputrename), [`output.save`](#outputsave) |
+| [output](#output) | [`output.list`](#outputlist), [`output.remove`](#outputremove), [`output.rename`](#outputrename), [`output.render`](#outputrender), [`output.save`](#outputsave) |
 | [parallax](#parallax) | [`parallax.animate`](#parallaxanimate), [`parallax.mesh`](#parallaxmesh), [`parallax.preview`](#parallaxpreview), [`parallax.stereo`](#parallaxstereo) |
 | [preset](#preset) | [`preset.apply`](#presetapply), [`preset.list`](#presetlist), [`preset.read`](#presetread), [`preset.save`](#presetsave) |
 | [project](#project) | [`project.addFrames`](#projectaddframes), [`project.checkFrames`](#projectcheckframes), [`project.close`](#projectclose), [`project.findOrphans`](#projectfindorphans), [`project.findStacks`](#projectfindstacks), [`project.frames`](#projectframes), [`project.info`](#projectinfo), [`project.moveFrames`](#projectmoveframes), [`project.new`](#projectnew), [`project.open`](#projectopen), [`project.removeFrames`](#projectremoveframes), [`project.rename`](#projectrename), [`project.save`](#projectsave), [`project.saveAs`](#projectsaveas), [`project.setFramesEnabled`](#projectsetframesenabled), [`project.trashOrphans`](#projecttrashorphans) |
@@ -2059,6 +2059,36 @@ Example:
 
 ```json
 {"name":"Pyramid, grit 0.5","output":4}
+```
+
+### `output.render`
+
+**Render output.** Renders an output as it is written: with its visible retouch strokes and its adjustments.
+
+For viewers: the result is a lossless image in the project's cache, whose `path` the result gives, kept as the output's `result` map and keyed by what it is made from, so that rendering it again reads it back until a stroke or an adjustment changes. An output with neither is its own image, with nothing rendered. Runs beside other jobs; a newer call replaces one still running.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | Nothing |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `output` | integer | **Required.** The output's id, as `output.list` lists it. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `how` | string | How it came: `stacked` (nothing to render: the output's image), `cached` (rendered before) or `rendered`. |
+| `output` | integer | An output's id in its project. |
+| `path` | string | The image file to show: the result in the cache, or the output's own image. |
+
+Example:
+
+```json
+{"output":4}
 ```
 
 ### `output.save`
