@@ -301,6 +301,7 @@ fn every_command_dispatches_from_json() {
         assert!(e.to_string().contains("huggingface.co/facebook/sam3"), "{name}: {e}");
     }
     assert_eq!(calls.run("adjust.close", "{}")["closed"], true);
+    assert_eq!(calls.run("output.render", &format!(r#"{{ "output": {target} }}"#))["how"], "rendered");
     assert_eq!(calls.run("adjust.reset", &format!(r#"{{ "output": {target} }}"#))["neutral"], true);
     // In slabs: three slabs of three frames, sharing one, stacked by pyramid, then by weighted average; each slab is
     // an output of its own, and the final output is made from them.

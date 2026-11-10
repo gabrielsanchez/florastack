@@ -40,6 +40,18 @@ pub struct OutputRow {
     pub image: PathBuf,
     /// The method's parameters it was made with.
     pub parameters: Value,
+    /// A fingerprint of its retouch layers and adjustments, and whether it has any: an output with them is shown
+    /// rendered (`output.render`), again when the fingerprint changes.
+    pub edits: u64,
+    pub edited: bool,
+}
+
+/// A fingerprint of `value`'s JSON.
+fn fingerprint(value: &impl serde::Serialize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(value).unwrap_or_default().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Something to tell the user: a result, or what went wrong.
@@ -71,6 +83,8 @@ pub struct Shell {
     pub threshold: Option<Value>,
     /// What an `export.run` job just wrote, for the app to tell.
     pub exported: Option<Value>,
+    /// What the latest `output.render` job gave: the output and the file to show.
+    pub rendered: Option<Value>,
     pub relief: Option<Value>,
     /// What the latest `compute.test` found, until the Preferences dialog opens again.
     pub tested: Option<Value>,
@@ -117,6 +131,7 @@ impl Shell {
             stacks_found: None,
             threshold: None,
             exported: None,
+            rendered: None,
             relief: None,
             tested: None,
             retouch: None,
@@ -306,6 +321,7 @@ impl Shell {
                 JobState::Done if job.command == "project.findStacks" => self.stacks_found.clone_from(&job.result),
                 JobState::Done if job.command == "stack.threshold" => self.threshold.clone_from(&job.result),
                 JobState::Done if job.command == "export.run" => self.exported.clone_from(&job.result),
+                JobState::Done if job.command == "output.render" => self.rendered.clone_from(&job.result),
                 JobState::Done if job.command == "parallax.preview" => self.relief.clone_from(&job.result),
                 JobState::Done if job.command.starts_with("parallax.") => self.notify(crate::i18n::tr("parallax-exported"), false),
                 JobState::Done if job.command == "compute.test" => {
@@ -345,6 +361,8 @@ impl Shell {
                 method: o.method.clone(),
                 image: o.image.path.resolve(&root),
                 parameters: o.parameters.clone(),
+                edits: fingerprint(&(&o.retouch, &o.adjustments)),
+                edited: o.adjustments.is_some() || o.retouch.iter().any(|l| l.visible && !l.strokes.is_empty()),
             })
             .collect();
         self.stack_settings = self.engine.run("stack.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());

@@ -384,7 +384,8 @@ Each frame's color and tone matched to the master's, and the geometry beyond a s
 - [ ] Follow-up: disk: each frame used as a source is cached warped at 32 bits (about 300 MB at 24 MP); evict them with 5.4's cache size
 - [ ] Follow-up: a stroke whose source frame was removed from the project is left out when the strokes are painted again (with a warning in the log); say so in the Retouch tab
 - [ ] Follow-up: undo and redo paint the uncovered region again on the engine's thread, loading the sources it needs there; with many sources out of memory that pauses the window, so move it to a job
-- [ ] Follow-up: output thumbnails and the Stack tab's views show outputs without their strokes
+- [x] Follow-up: the Stack and Export tabs' views show outputs without their strokes (reported again on 2026-11-09, with adjustments): an output with strokes or adjustments is shown rendered by `output.render`, with the same pixels a file is written with, kept as its `result` map keyed by its image, strokes and adjustments, and rendered again when they change. Comparing two outputs still shows them as stacked
+- [ ] Follow-up: comparing two outputs (Compare) shows them as stacked, without their strokes and adjustments
 - [ ] Follow-up: above the GPU's largest texture (8192 pixels a side), the retouch views show the output reduced, and brushes smaller than the reduction's blocks are hard to place
 
 ### 5.4 Export, presets and preferences
@@ -419,7 +420,7 @@ Editing the stacked image after stacking and retouching: tone, color and detail 
 - [ ] Follow-up: zoom and pan in the Adjust tab's view, which fits the image, rendering a window of the full image for a zoomed view (the pipeline's `PixelWindow`) instead of the whole image
 - [ ] Follow-up: run the Adjust tab on a real 24 MP stack and time its previews and exports: the subject is found once per renderer at 1024 px, and a full-size render holds the image and the pipeline's planes in memory
 - [ ] Follow-up: GPU rendering, with LightCraft's GPU renderer checked against the CPU one as the CPU oracle requires
-- [ ] Follow-up: cache an adjusted output's full-size render (as the `retouched` map is), for thumbnails, the other tabs' views and repeated exports; exports render it again each time
+- [ ] Follow-up: exports read the `result` map that `output.render` keeps, instead of rendering an adjusted output again each time
 - [ ] Follow-up: adjustments of an output's extended range: the renderer brings the result into [0, 1], so an adjusted 32-bit export keeps no values beyond it
 - [ ] Follow-up: the subject on real stacks: a smooth subject (a shiny shell, a wing's membrane) larger than the gap filling reaches is left out, and a background with fine detail of its own (a textured backdrop in focus) is taken in; check on the corpus and consider the depth map's coherence as a second cue
 - [ ] Follow-up: a brush stroke's undo step keeps the output's whole adjustments, its other strokes included; an edit that pushes and pops one stroke, as retouch strokes have, would keep only the stroke
