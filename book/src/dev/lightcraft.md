@@ -34,7 +34,7 @@ The dependency needs three exceptions to the dependency policy, each in `deny.to
 - **The Independent JPEG Group's license**, allowed for `jpeg-encoder` alone, which `lightcraft-codecs` and `lightcraft-raw` use. It is permissive and asks only for the credit line that `NOTICE` gives.
 - **Two quick-xml advisories, ignored.** `lightcraft-meta` uses quick-xml 0.38.4, which RUSTSEC-2026-0194 and RUSTSEC-2026-0195 cover. Neither reaches it: it reads attributes with `with_checks(false)`, so it never runs the duplicate-attribute check of the first, and it never uses `NsReader`, the subject of the second. quick-xml 0.41 fixes both, and LightCraft has the bump open (storytold/lightcraft#1464, and Dependabot's #2265). `.cargo/audit.toml` ignores the same two ids for `cargo audit`.
 
-One more pin is FloraStack's own: `exr` is held at `=1.74.0`, because 1.74.1 and later depend on `pulp`, which brings in `paste`, an unmaintained crate (RUSTSEC-2024-0436). That dependency came with 1.74.1's DWA compression, so until the pin moves, DWA-compressed OpenEXR files are reported as unsupported, with the advice to save them with ZIP or PIZ compression. Revisit it when exr drops that dependency.
+`exr` was once held at `=1.74.0`, because 1.74.1 and 1.74.2 depended on `pulp`, which brings in `paste`, an unmaintained crate (RUSTSEC-2024-0436). 1.74.3 dropped that dependency, so the workspace asks for 1.74.3 or later, and DWA-compressed OpenEXR files are read.
 
 ## Moving the pin
 

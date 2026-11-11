@@ -24,7 +24,7 @@ pub enum CodecError {
     UnsupportedFormat(&'static str),
     #[error("{format} files with {what} are not supported")]
     Unsupported { format: Format, what: &'static str },
-    /// A valid file that uses a feature the decoder lacks, such as 12-bit TIFF samples or DWA-compressed OpenEXR.
+    /// A valid file that uses a feature the decoder lacks, such as 12-bit TIFF samples or HTJ2K-compressed OpenEXR.
     #[error("this kind of {format} file is not supported: {advice}")]
     UnsupportedVariant {
         format: Format,

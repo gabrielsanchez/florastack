@@ -183,9 +183,9 @@ image-webp = "0.2"
 gif = "0.14.2"
 # The BMP decoder only; LightCraft's codecs enable image's other formats for themselves.
 image = { version = "0.25", default-features = false, features = ["bmp"] }
-# Exactly 1.74.0: 1.74.1 added lossy DWA compression through `pulp`, which pulls in the unmaintained `paste`
-# (RUSTSEC-2024-0436). Without the default `rayon` feature; florastack-codecs turns it on for native targets only.
-exr = { version = "=1.74.0", default-features = false }
+# At least 1.74.3, which reads DWA-compressed files without `pulp` (1.74.1 and 1.74.2 brought it in, and with it the
+# unmaintained `paste`). Without the default `rayon` feature; florastack-codecs turns it on for native targets only.
+exr = { version = "1.74.3", default-features = false }
 # Deflate and LZW for the TIFF writer, as the tiff crate and LightCraft use them.
 miniz_oxide = "0.8"
 weezl = "0.1"

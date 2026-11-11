@@ -64,7 +64,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [ ] 12-bit TIFF: the tiff crate (0.11.3) rejects 12-bit samples with an "unsupported" error; read them once it supports them (the scaling to 16 bits is in place and tested)
 - [ ] Streaming TIFF and DNG writers that take the image a band of rows at a time, so that large outputs are never whole in memory
 - [ ] Float DNG and a preview IFD in the DNG writer
-- [ ] Revisit the `exr = "=1.74.0"` pin once exr no longer pulls in `paste` (RUSTSEC-2024-0436) through `pulp`: 1.74.0 can't read DWA-compressed files, which fail with an "unsupported" error that suggests ZIP or PIZ
+- [x] The `exr = "=1.74.0"` pin lifted: exr 1.74.3 no longer pulls in `paste` (RUSTSEC-2024-0436) through `pulp`, and DWA-compressed files are read (a test writes DWAA and DWAB files with the exr crate and reads them back)
 
 ### 1.3 RAW import through LightCraft
 

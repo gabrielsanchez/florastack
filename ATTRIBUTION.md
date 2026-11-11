@@ -48,7 +48,7 @@ When a change adds such a source, add its row in the same commit. Only permissiv
 | zune-jpeg | <https://github.com/etemesi254/zune-image> | MIT OR Apache-2.0 OR Zlib | Decoding JPEG, baseline and progressive, gray, RGB and CMYK. |
 | image-webp | <https://github.com/image-rs/image-webp> | MIT OR Apache-2.0 | Decoding WebP, lossy and lossless. |
 | image | <https://github.com/image-rs/image> | MIT OR Apache-2.0 | Decoding BMP, with its `bmp` feature alone. |
-| exr | <https://github.com/johannesvollmer/exrs> | BSD-3-Clause | Reading and writing OpenEXR. Pinned to 1.74.0: `book/src/dev/lightcraft.md` says why. |
+| exr | <https://github.com/johannesvollmer/exrs> | BSD-3-Clause | Reading and writing OpenEXR, DWA-compressed files included (1.74.3 or later); with multiversion (MIT OR Apache-2.0), which picks its SIMD code paths. |
 | miniz_oxide and weezl | <https://github.com/Frommi/miniz_oxide> and <https://github.com/image-rs/weezl> | MIT OR Zlib OR Apache-2.0, and MIT OR Apache-2.0 | The TIFF writer's Deflate and LZW compression. |
 | moxcms | <https://github.com/awxkee/moxcms> | BSD-3-Clause OR Apache-2.0 | ICC profiles that LightCraft's crates don't write: from a file's chromaticities (OpenEXR, PNG cHRM), gray, and the linear version of an input profile. |
 | jpeg-encoder | <https://github.com/vstroebel/jpeg-encoder> | (MIT OR Apache-2.0) AND IJG | The JPEG encoder inside LightCraft's codecs crate, which FloraStack's JPEG writer uses. The IJG license asks for the credit line that `NOTICE` gives; `deny.toml` allows it for this crate alone. |
