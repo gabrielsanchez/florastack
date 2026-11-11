@@ -175,6 +175,8 @@ impl Renderer {
     pub fn rgb8(&self, side: usize) -> Result<(Vec<u8>, usize, usize), EditError> {
         let (w, h) = self.output_size(Size::Fit { width: side, height: side });
         let req = RenderRequest {
+            // The size asked for, fitted: never LightCraft's snapping to a nearby exact size.
+            exact_size: false,
             max_w: w,
             max_h: h,
             quality: Quality::Full,
@@ -216,6 +218,8 @@ impl Renderer {
             .and_then(|i| u16::try_from(i + 1).ok())
             .map_or(Overlay::None, |id| Overlay::Mask { id, view: lightcraft_pipeline::MaskView::Color, color: [230, 40, 40], opacity: 60 });
         let req = RenderRequest {
+            // The size asked for, fitted: never LightCraft's snapping to a nearby exact size.
+            exact_size: false,
             max_w: w,
             max_h: h,
             quality: if request.draft { Quality::Draft } else { Quality::Full },
@@ -249,6 +253,8 @@ impl Renderer {
         let (settings, info) = self.lightcraft(adjustments)?;
         let (w, h) = self.output_size(Size::Fit { width: 1024, height: 1024 });
         let req = RenderRequest {
+            // The size asked for, fitted: never LightCraft's snapping to a nearby exact size.
+            exact_size: false,
             max_w: w,
             max_h: h,
             quality: Quality::Full,
@@ -427,6 +433,8 @@ fn mask(m: &Mask, id: u32, ranges: &[[f64; 3]]) -> LcMask {
         components: m.components.iter().map(|c| component(c, ranges)).collect(),
         adjust: local(&m.adjust),
         refine: m.refine,
+        // An output has no lens corrections or transform under its masks: the frame as rendered.
+        on_photo: false,
     }
 }
 
@@ -500,7 +508,7 @@ fn nothing() -> MaskShape {
 
 /// A stored selection as LightCraft's pipeline reads it.
 fn seg_mask(s: &Selection) -> lightcraft_develop::SegMask {
-    lightcraft_develop::SegMask { side: s.side, data: s.data.clone(), rect: None }
+    lightcraft_develop::SegMask { side: s.side, data: s.data.clone(), rect: None, grid: None }
 }
 
 fn stroke(s: &Stroke) -> BrushStroke {

@@ -125,27 +125,27 @@ egui_kittest = { version = "0.37.0", default-features = false, features = ["efra
 peak_alloc = "0.3"
 
 # LightCraft's low-level crates (MIT OR Apache-2.0, pure Rust). They aren't published on crates.io, so they come from
-# git, every one at the same commit: "Release 0.10.0" on main. book/src/dev/lightcraft.md says how to move the pin; deny.toml
+# git, every one at the same commit: "Release 0.20.0" on main. book/src/dev/lightcraft.md says how to move the pin; deny.toml
 # allows this one git source and requires a `rev`. FloraStack keeps their types out of its public APIs.
-lightcraft-tiff = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-tiff = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
 # Without the default `jxl` and `avif` features, which FloraStack doesn't use: `avif` brings in rav1e and, through it,
 # libfuzzer-sys, which compiles C++ with `cc`.
-lightcraft-codecs = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c", default-features = false, features = ["parallel"] }
-lightcraft-meta = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
-lightcraft-color = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-codecs = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071", default-features = false, features = ["parallel"] }
+lightcraft-meta = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
+lightcraft-color = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
 # Without the default `jxl` feature here: florastack-raw turns it on for JPEG XL compressed DNGs (DNG 1.7), which
 # florastack-codecs, using only the lossless-JPEG encoder, doesn't need.
-lightcraft-raw = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c", default-features = false }
+lightcraft-raw = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071", default-features = false }
 # The develop code florastack-raw uses besides lightcraft-raw's own (book/src/dev/lightcraft.md): noise reduction, lateral
 # chromatic-aberration estimation and automatic white balance from the develop pipeline (whose tone curves, filmic
 # shoulder and looks it never calls), the edit model that pipeline's noise-reduction parameters are read from, and
 # the raster image and resampler they work on. florastack-edit renders an output's adjustments with the pipeline's
 # renderer, as a rendered photo's (no camera look or filmic curve).
-lightcraft-pipeline = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
-lightcraft-develop = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
-lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-pipeline = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
+lightcraft-develop = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
+lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
 # The points that florastack-edit's linear and radial masks and brush strokes are given to the develop pipeline as.
-lightcraft-geom = { git = "https://github.com/storytold/lightcraft", rev = "a2a41383c4fd62fa85a46ccd00998639221f2d3c" }
+lightcraft-geom = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
 # SAM 3 inference (florastack-sam, adapted from LightCraft's lightcraft-segment), pinned as LightCraft pins them: later
 # releases pull `tokenizers` with the Oniguruma C library into candle-core. Without default features: no CUDA, no MKL,
 # nothing compiled from C.

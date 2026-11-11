@@ -36,7 +36,7 @@ pub struct LightCraftRaw;
 
 impl RawDecoder for LightCraftRaw {
     fn name(&self) -> &'static str {
-        "LightCraft lightcraft-raw 0.10.0 (a2a4138)"
+        "LightCraft lightcraft-raw 0.20.0 (192ff72)"
     }
 
     fn probe(&self, bytes: &[u8]) -> Option<RawFormat> {

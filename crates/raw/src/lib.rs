@@ -5,7 +5,7 @@
 //!
 //! - **Decoding** ([`RawDecoder`], [`decode`]): what LightCraft decodes at the pinned commit (its
 //!   `docs/raw-parity.md`): DNG (uncompressed, lossless and lossy JPEG, Deflate, JPEG XL; CFA and `LinearRaw`),
-//!   Canon CR2 and CR3 (lossless CRX and C-RAW), Nikon NEF (compressed included) and NRW, Sony ARW, Fujifilm RAF
+//!   Canon CR2, CR3 (lossless CRX and C-RAW) and CRW, Minolta MRW, Nikon NEF (compressed included) and NRW, Sony ARW, Fujifilm RAF
 //!   (Bayer and X-Trans), Panasonic RW2 and Leica RWL, Pentax PEF, uncompressed Olympus ORF and Samsung SRW, and Epson
 //!   ERF, Mamiya MEF and Hasselblad 3FR and FFF. Anything else, a variant inside those formats included, is a
 //!   [`RawError::Unsupported`] that says to convert the file to DNG or to a 16-bit TIFF first. A decoded file is a

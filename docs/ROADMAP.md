@@ -60,7 +60,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] Images whose ICC profile has another curve than sRGB's are linearized through the profile (`florastack_core::convert` knows linear and sRGB only, and carries the profile over unchanged)
 - [x] `cargo xtask corpus`: archive entries (PngSuite ships as one `.tgz`) and a place for format fixtures beside the stacks
 - [ ] Open a linear DNG written by FloraStack in Lightroom Classic or Adobe Camera Raw, and check it with the DNG SDK's `dng_validate`: the tests read it back with LightCraft's RAW decoder only, and the DNG specification couldn't be downloaded while the writer was built
-- [ ] Move the LightCraft pin to a commit with quick-xml 0.41 or later (storytold/lightcraft#1464) and drop the two advisory ignores in `deny.toml` and `.cargo/audit.toml`
+- [x] The LightCraft pin moved to release 0.20.0, which has quick-xml 0.41 (storytold/lightcraft#1464), and the two advisory ignores dropped from `deny.toml` and `.cargo/audit.toml`; `lightcraft-raw` now brings `craft-crw` from a second git source, `storytold/craft-libs`, which `deny.toml` allows
 - [ ] 12-bit TIFF: the tiff crate (0.11.3) rejects 12-bit samples with an "unsupported" error; read them once it supports them (the scaling to 16 bits is in place and tested)
 - [ ] Streaming TIFF and DNG writers that take the image a band of rows at a time, so that large outputs are never whole in memory
 - [ ] Float DNG and a preview IFD in the DNG writer
@@ -77,7 +77,7 @@ One checkbox per deliverable, grouped by phase and by the build step that delive
 - [x] Tests: one file per format (twelve CC0 files from raw.pixls.us, the `raw` fixture set, cached in CI), identical settings give identical output, preview and final demosaic agree on smooth regions, output stays linear (a gray step wedge)
 - [x] `lightcraft-raw`'s `jxl` feature turned on: JPEG XL compressed DNGs (DNG 1.7) through jxl-oxide, pure Rust
 - [ ] Camera color: eight of the ten pinned non-DNG cameras (all but the Canon EOS R6 and the Fujifilm X-S10) have no color matrix in LightCraft's low-level crates (`ColorSource::Fallback`, camera RGB taken for sRGB, flagged `DevelopWarning::ApproximateColor`); LightCraft's per-file camera-look fits and bundled profiles live in its engine crate. Find a permissible source of matrices for the popular bodies, or ask LightCraft to move its fits into a low-level crate
-- [ ] More samples: a lossless CRX CR3 (the pinned one is C-RAW), and RWL, NRW, ERF, MEF and 3FR or FFF files, which decode through paths the pinned files don't reach
+- [ ] More samples: a lossless CRX CR3 (the pinned one is C-RAW), and RWL, NRW, ERF, MEF and 3FR or FFF files, which decode through paths the pinned files don't reach, and CRW and MRW files, which LightCraft decodes since the pin moved to 0.20.0
 - [ ] Reduced-size development straight from the mosaic, for thumbnails, the filmstrip (2.3) and quarter-scale previews (3.1): `Quality::Preview` demosaics the whole frame
 - [ ] `RawDecoder::decode` checks the size from the headers before decoding, and LightCraft's header probe unpacks the samples of uncompressed ORF and PEF files to read them: those files are decoded twice
 - [ ] A truncated RAW file, such as one a camera is still writing, is a `Malformed` error like a damaged one: the watch folder (4.2) must wait until a file's size settles

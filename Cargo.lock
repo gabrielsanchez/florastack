@@ -1053,6 +1053,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crw"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f3b62ec61f45534392376492fc5ad33047375205#f3b62ec61f45534392376492fc5ad33047375205"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3271,8 +3279,8 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-codecs"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "bytemuck",
  "image",
@@ -3294,8 +3302,8 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-color"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "lightcraft-geom",
  "serde",
@@ -3303,47 +3311,48 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-develop"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
- "miniz_oxide 0.8.9",
+ "miniz_oxide 0.9.1",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "lightcraft-geom"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "lightcraft-inpaint"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "lightcraft-meta"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
+ "chrono",
  "lightcraft-geom",
  "lightcraft-tiff",
- "quick-xml 0.38.4",
+ "quick-xml",
  "serde",
 ]
 
 [[package]]
 name = "lightcraft-pipeline"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "lightcraft-color",
  "lightcraft-develop",
@@ -3357,8 +3366,8 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-raster"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
@@ -3368,9 +3377,11 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-raw"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
+ "chrono",
+ "craft-crw",
  "jpeg-encoder",
  "jxl-oxide",
  "lightcraft-color",
@@ -3378,7 +3389,7 @@ dependencies = [
  "lightcraft-meta",
  "lightcraft-raster",
  "lightcraft-tiff",
- "miniz_oxide 0.8.9",
+ "miniz_oxide 0.9.1",
  "rayon",
  "serde",
  "thiserror 2.0.21",
@@ -3388,8 +3399,8 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-tiff"
-version = "0.10.0"
-source = "git+https://github.com/storytold/lightcraft?rev=a2a41383c4fd62fa85a46ccd00998639221f2d3c#a2a41383c4fd62fa85a46ccd00998639221f2d3c"
+version = "0.20.0"
+source = "git+https://github.com/storytold/lightcraft?rev=192ff72923c39e6623f2c7ff67ab3a119deb8071#192ff72923c39e6623f2c7ff67ab3a119deb8071"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4722,15 +4733,6 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
-
-[[package]]
-name = "quick-xml"
-version = "0.38.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "quick-xml"
@@ -6386,7 +6388,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "338e30461b3a2b67d70eb30a6d89f8e0c93a833e07d2ae89085cd070c4a00ac0"
 dependencies = [
  "proc-macro2",
- "quick-xml 0.41.0",
+ "quick-xml",
  "quote",
 ]
 

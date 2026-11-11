@@ -236,7 +236,12 @@ mod tests {
                     AnyChannel::new(*name, FlatSamples::F16(plane))
                 })
                 .collect();
-            let layer = Layer::new((w, h), LayerAttributes::default(), Encoding { compression, ..Encoding::FAST_LOSSLESS }, AnyChannels::sort(channels.into()));
+            let layer = Layer::new(
+                (w, h),
+                LayerAttributes::default(),
+                Encoding { compression, ..Encoding::FAST_LOSSLESS },
+                AnyChannels::sort(channels.into()),
+            );
             let mut bytes = Cursor::new(Vec::new());
             ExrImage::from_layer(layer).write().to_buffered(&mut bytes).unwrap();
             let decoded = crate::read(bytes.get_ref(), &ReadOptions::default()).unwrap();

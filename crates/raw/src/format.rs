@@ -123,7 +123,7 @@ impl RawFormat {
 
     /// Whether the built-in decoder reads this format (some coding variants inside it aside).
     pub fn is_decoded(self) -> bool {
-        !matches!(self, RawFormat::Crw | RawFormat::Mrw | RawFormat::X3f | RawFormat::OtherTiff)
+        !matches!(self, RawFormat::X3f | RawFormat::OtherTiff)
     }
 
     pub(crate) fn from_lightcraft(format: lightcraft_raw::RawFormat) -> RawFormat {
