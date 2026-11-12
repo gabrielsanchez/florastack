@@ -66,7 +66,7 @@ pub enum BitDepth {
     U8,
     /// 16-bit integers.
     U16,
-    /// 32-bit floats (or 16-bit floats, for OpenEXR with `half`).
+    /// 32-bit floats (or 16-bit floats, for OpenEXR with `half`). In a DNG file, white is 1.
     F32,
 }
 
@@ -133,8 +133,36 @@ pub enum DngCompression {
     /// Every DNG reader reads it.
     #[default]
     Uncompressed,
-    /// Lossless JPEG tiles (ITU-T T.81 process 14), about half the size.
+    /// Lossless JPEG tiles (ITU-T T.81 process 14), about half the size. For 16-bit integers only.
     LosslessJpeg,
+    /// Deflate with the floating-point predictor, which DNG 1.4 allows for 32-bit float samples only.
+    Deflate,
+}
+
+impl DngCompression {
+    /// Whether DNG stores samples of `depth` this way: lossless JPEG holds integers, Deflate floats.
+    pub fn stores(self, depth: BitDepth) -> bool {
+        match self {
+            DngCompression::Uncompressed => matches!(depth, BitDepth::U16 | BitDepth::F32),
+            DngCompression::LosslessJpeg => depth == BitDepth::U16,
+            DngCompression::Deflate => depth == BitDepth::F32,
+        }
+    }
+
+    /// This compression, or the one that stores `depth` in its place: Deflate for floats where lossless JPEG was
+    /// asked for, and the other way around.
+    #[must_use]
+    pub fn for_depth(self, depth: BitDepth) -> DngCompression {
+        match (self, depth) {
+            (DngCompression::LosslessJpeg, BitDepth::F32) => DngCompression::Deflate,
+            (DngCompression::Deflate, BitDepth::U16) => DngCompression::LosslessJpeg,
+            (other, _) => other,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// What a raw converter should do with a DNG file's tones.
@@ -179,9 +207,14 @@ pub enum OutputFormat {
         compression: ExrCompression,
         half: bool,
     },
+    /// `preview`: a small sRGB picture of the image in the file's first IFD, with the image itself in a sub-IFD, as
+    /// Adobe's DNG files have it, so that file browsers show the picture without developing the file. On unless
+    /// turned off.
     Dng {
         compression: DngCompression,
         look: DngLook,
+        #[serde(default = "yes")]
+        preview: bool,
     },
 }
 
@@ -203,7 +236,7 @@ impl OutputFormat {
             OutputFormat::Png => &[BitDepth::U8, BitDepth::U16],
             OutputFormat::Tiff { .. } => &[BitDepth::U8, BitDepth::U16, BitDepth::F32],
             OutputFormat::OpenExr { .. } => &[BitDepth::F32],
-            OutputFormat::Dng { .. } => &[BitDepth::U16],
+            OutputFormat::Dng { .. } => &[BitDepth::U16, BitDepth::F32],
         }
     }
 }
@@ -231,7 +264,7 @@ impl OutputSpec {
             Format::Png => (OutputFormat::Png, BitDepth::U16),
             Format::Tiff => (OutputFormat::Tiff { compression: TiffCompression::default() }, BitDepth::U16),
             Format::OpenExr => (OutputFormat::OpenExr { compression: ExrCompression::default(), half: false }, BitDepth::F32),
-            Format::Dng => (OutputFormat::Dng { compression: DngCompression::default(), look: DngLook::default() }, BitDepth::U16),
+            Format::Dng => (OutputFormat::Dng { compression: DngCompression::default(), look: DngLook::default(), preview: true }, BitDepth::U16),
             Format::WebP | Format::Bmp => {
                 return Err(CodecError::UnsupportedFormat(if format == Format::WebP { "Writing WebP" } else { "Writing BMP" }));
             }
@@ -249,6 +282,12 @@ impl OutputSpec {
             && !(1..=100).contains(&quality)
         {
             return Err(CodecError::Unsupported { format, what: "a quality outside 1 to 100" });
+        }
+        if let OutputFormat::Dng { compression, .. } = self.format
+            && !compression.stores(self.depth)
+        {
+            let what = if compression == DngCompression::Deflate { "Deflate-compressed integer samples" } else { "lossless JPEG float samples" };
+            return Err(CodecError::Unsupported { format, what });
         }
         Ok(())
     }
@@ -272,6 +311,33 @@ mod tests {
         jpeg.depth = BitDepth::U8;
         jpeg.format = OutputFormat::Jpeg { quality: 0, subsampling: ChromaSubsampling::S420 };
         assert!(jpeg.validate().is_err());
+    }
+
+    #[test]
+    fn dng_compressions_go_with_their_depths() {
+        let dng = |compression, depth| OutputSpec {
+            format: OutputFormat::Dng { compression, look: DngLook::Rendered, preview: true },
+            depth,
+            profile: OutputProfile::Input,
+            extended_range: false,
+        };
+        for (compression, depth, ok) in [
+            (DngCompression::Uncompressed, BitDepth::U16, true),
+            (DngCompression::Uncompressed, BitDepth::F32, true),
+            (DngCompression::LosslessJpeg, BitDepth::U16, true),
+            (DngCompression::LosslessJpeg, BitDepth::F32, false),
+            (DngCompression::Deflate, BitDepth::F32, true),
+            (DngCompression::Deflate, BitDepth::U16, false),
+        ] {
+            assert_eq!(dng(compression, depth).validate().is_ok(), ok, "{compression:?} {depth:?}");
+            assert_eq!(compression.stores(depth), ok);
+            assert!(compression.for_depth(depth).stores(depth), "{compression:?} {depth:?}");
+        }
+        assert!(dng(DngCompression::Uncompressed, BitDepth::U8).validate().is_err());
+        // A spec stored before previews existed has one.
+        let old = r#"{ "format": { "format": "dng", "compression": "lossless-jpeg", "look": "raw" }, "depth": "u16" }"#;
+        let format = serde_json::from_str::<OutputSpec>(old).unwrap().format;
+        assert_eq!(format, OutputFormat::Dng { compression: DngCompression::LosslessJpeg, look: DngLook::Raw, preview: true });
     }
 
     #[test]

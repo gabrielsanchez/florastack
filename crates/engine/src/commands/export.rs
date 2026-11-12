@@ -119,8 +119,8 @@ impl FileFormat {
 pub struct OutputSettings {
     /// `tiff`, `png`, `jpeg`, `dng` or `open-exr`.
     pub format: FileFormat,
-    /// `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16,
-    /// OpenEXR 32-bit float.
+    /// `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or
+    /// 32-bit float, OpenEXR 32-bit float.
     pub depth: BitDepth,
     /// TIFF's compression: `none`, `lzw` or `deflate`.
     pub tiff_compression: TiffCompression,
@@ -133,8 +133,11 @@ pub struct OutputSettings {
     pub jpeg_quality: u8,
     /// JPEG's chroma subsampling: `s444`, `s422` or `s420`.
     pub jpeg_subsampling: ChromaSubsampling,
-    /// DNG's compression: `uncompressed` or `lossless-jpeg`.
+    /// DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of
+    /// the last two stands for the other at the depth it can't store.
     pub dng_compression: DngCompression,
+    /// A small sRGB picture of the image at the front of a DNG file, for file browsers to show.
+    pub dng_preview: bool,
     /// DNG's look: `rendered` or `raw`.
     pub dng_look: DngLook,
     /// The color profile: `input` (the frames' own), `srgb`, `{"wide": "pro-photo"}`, `{"wide": "rec2020"}` or
@@ -189,6 +192,7 @@ impl Default for OutputSettings {
             jpeg_subsampling: ChromaSubsampling::S444,
             dng_compression: DngCompression::LosslessJpeg,
             dng_look: DngLook::Rendered,
+            dng_preview: true,
             profile: OutputProfile::Input,
             metadata: true,
             metadata_frame: 1,
@@ -216,7 +220,9 @@ impl OutputSettings {
             FileFormat::Tiff => OutputFormat::Tiff { compression: self.tiff_compression },
             FileFormat::Png => OutputFormat::Png,
             FileFormat::Jpeg => OutputFormat::Jpeg { quality: self.jpeg_quality, subsampling: self.jpeg_subsampling },
-            FileFormat::Dng => OutputFormat::Dng { compression: self.dng_compression, look: self.dng_look },
+            FileFormat::Dng => {
+                OutputFormat::Dng { compression: self.dng_compression.for_depth(self.depth), look: self.dng_look, preview: self.dng_preview }
+            }
             FileFormat::OpenExr => OutputFormat::OpenExr { compression: self.exr_compression, half: self.exr_half },
         };
         OutputSpec { format, depth: self.depth, profile: self.profile, extended_range: self.extended_range }
@@ -423,9 +429,10 @@ fn file_bytes(pixels: u64, channels: u64, spec: OutputSpec) -> (u64, bool) {
     #[allow(clippy::cast_precision_loss)] // A size, estimated.
     let raw = pixels as f64 * channels as f64 * sample;
     let (ratio, exact) = match spec.format {
-        OutputFormat::Tiff { compression: TiffCompression::None } | OutputFormat::Dng { compression: DngCompression::Uncompressed, .. } => {
-            (1.0, true)
-        }
+        OutputFormat::Tiff { compression: TiffCompression::None } => (1.0, true),
+        // A preview adds up to 3 MB.
+        OutputFormat::Dng { compression: DngCompression::Uncompressed, preview, .. } => (1.0, !preview),
+        OutputFormat::Dng { compression: DngCompression::Deflate, .. } => (0.85, false),
         OutputFormat::Tiff { compression: TiffCompression::Lzw } => (0.75, false),
         OutputFormat::Tiff { compression: TiffCompression::Deflate } | OutputFormat::Png => {
             (if spec.depth == BitDepth::F32 { 0.85 } else { 0.6 }, false)

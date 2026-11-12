@@ -15,7 +15,7 @@ const FORMATS: [(&str, &str, &[&str]); 5] = [
     ("tiff", "TIFF", &["u16", "u8", "f32"]),
     ("png", "PNG", &["u16", "u8"]),
     ("jpeg", "JPEG", &["u8"]),
-    ("dng", "DNG", &["u16"]),
+    ("dng", "DNG", &["u16", "f32"]),
     ("open-exr", "OpenEXR", &["f32"]),
 ];
 
@@ -193,8 +193,14 @@ fn format(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             }
         }
         "dng" => {
-            let options = [("lossless-jpeg", tr("compression-lossless-jpeg")), ("uncompressed", tr("compression-none"))];
-            let current = settings["dng_compression"].as_str().unwrap_or("lossless-jpeg");
+            // Lossless JPEG holds 16-bit files and Deflate float ones: each stands for the other at the other depth,
+            // as the engine reads the setting.
+            let compressed = if depth == "f32" { ("deflate", tr("compression-deflate")) } else { ("lossless-jpeg", tr("compression-lossless-jpeg")) };
+            let options = [compressed.clone(), ("uncompressed", tr("compression-none"))];
+            let current = match settings["dng_compression"].as_str().unwrap_or("lossless-jpeg") {
+                "uncompressed" => "uncompressed",
+                _ => compressed.0,
+            };
             if let Some(picked) = choice(ui, "export.dng", "export-compression", "tip-dng-compression", current, &options) {
                 set(app, json!({ "dng_compression": picked }), None);
             }
@@ -203,6 +209,7 @@ fn format(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             if let Some(picked) = choice(ui, "export.look", "export-dng-look", "tip-dng-look", current, &options) {
                 set(app, json!({ "dng_look": picked }), None);
             }
+            toggle(app, ui, "dng_preview", "export-dng-preview", "tip-dng-preview", true);
         }
         _ => {}
     }

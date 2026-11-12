@@ -60,7 +60,7 @@ fn outputs() -> Vec<(OutputFormat, BitDepth, Vec<u8>, Vec<Warning>)> {
         (OutputFormat::Png, BitDepth::U16),
         (OutputFormat::Tiff { compression: TiffCompression::Deflate }, BitDepth::U16),
         (OutputFormat::OpenExr { compression: ExrCompression::Zip, half: false }, BitDepth::F32),
-        (OutputFormat::Dng { compression: DngCompression::Uncompressed, look: DngLook::Rendered }, BitDepth::U16),
+        (OutputFormat::Dng { compression: DngCompression::Uncompressed, look: DngLook::Rendered, preview: true }, BitDepth::U16),
     ]
     .into_iter()
     .map(|(format, depth)| {

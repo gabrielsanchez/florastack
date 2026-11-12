@@ -110,9 +110,10 @@ impl Sidecar {
         Ok(())
     }
 
-    pub(super) fn artifact(&mut self, main: &Path, file: &Path, kind: &str, bytes: &[u8]) {
+    /// Records a written file by the hash and length taken from it.
+    pub(super) fn artifact(&mut self, main: &Path, file: &Path, kind: &str, hash: ContentHash, bytes: u64) {
         let relative = main.parent().and_then(|p| file.strip_prefix(p).ok()).unwrap_or(file);
-        self.artifacts.push(Artifact { path: super::display(relative), kind: kind.into(), hash: ContentHash::of(bytes), bytes: bytes.len() as u64 });
+        self.artifacts.push(Artifact { path: super::display(relative), kind: kind.into(), hash, bytes });
     }
 
     pub(super) fn bytes(&self) -> Result<Vec<u8>, CommandError> {

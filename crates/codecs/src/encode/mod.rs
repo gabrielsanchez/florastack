@@ -1,6 +1,7 @@
 //! The encoders: one per output format. Each receives an image already in the output's depth and profile
 //! ([`crate::Codecs::write`] converts it) and the output's metadata.
 
+pub(crate) mod container;
 mod dng;
 mod exr;
 mod jpeg;

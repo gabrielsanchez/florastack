@@ -87,6 +87,9 @@ fn exported_files_reopen_with_their_depth_profile_and_metadata() {
         (json!({ "format": "png", "depth": "u8", "profile": "srgb", "metadata_frame": 9 }), 8, false, Some(NamedSpace::Srgb)),
         (json!({ "format": "jpeg", "depth": "u8", "profile": "input", "jpeg_quality": 90 }), 8, false, Some(NamedSpace::ProPhoto)),
         (json!({ "format": "dng", "depth": "u16", "metadata_frame": 4 }), 16, false, None),
+        (json!({ "format": "dng", "depth": "u16", "dng_compression": "uncompressed", "dng_preview": false }), 16, false, None),
+        // A float DNG, for which the settings' lossless JPEG stands for Deflate.
+        (json!({ "format": "dng", "depth": "f32", "extended_range": true, "metadata_frame": 2 }), 32, true, None),
         (json!({ "format": "open-exr", "depth": "f32", "extended_range": true, "metadata_frame": 2 }), 32, true, None),
     ];
     for (i, (settings, bits, float, named)) in cases.into_iter().enumerate() {
@@ -109,7 +112,7 @@ fn exported_files_reopen_with_their_depth_profile_and_metadata() {
         if format == "dng" {
             // A DNG is a RAW file, which the RAW importer reads.
             let info = florastack_raw::info(&bytes).unwrap();
-            assert_eq!((info.width, info.height, info.bits), (96, 72, 16), "{settings}");
+            assert_eq!((info.width, info.height, info.bits), (96, 72, u32::from(bits)), "{settings}");
         } else {
             let decoded = florastack_codecs::read(&bytes, &ReadOptions::default()).unwrap();
             assert_eq!((decoded.info.width, decoded.info.height), (96, 72), "{settings}: the canvas is the frames' size");

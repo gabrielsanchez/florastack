@@ -8,7 +8,7 @@ LightCraft doesn't publish its crates to crates.io (the `lightcraft` crate there
 
 | Crate | Features | Used by | What for |
 |---|---|---|---|
-| `lightcraft-tiff` | (has none) | codecs | Reading and writing TIFF directories: the EXIF block FloraStack writes, and the TIFF and DNG writers |
+| `lightcraft-tiff` | (has none) | codecs | Reading and writing TIFF directories: the EXIF block FloraStack writes, the IFDs of the TIFF and DNG writers (which FloraStack serializes itself, a band of rows at a time, in the layout of LightCraft's writer), and the layout of the 9 to 15-bit TIFF files it unpacks itself |
 | `lightcraft-codecs` | `parallel` only | codecs, raw | The JPEG and PNG encoders, format sniffing, ICC profile parsing and writing, and the color-managed decoder used for CMYK files and LUT-based profiles; for `florastack-raw`, the linear Rec. 2020 profile that developed frames are tagged with (the same bytes `florastack-codecs` writes for that space) |
 | `lightcraft-meta` | (has none) | codecs | Finding EXIF, IPTC and XMP in a file, parsing them, and merging XMP |
 | `lightcraft-color` | (has none) | codecs, raw, edit | Chromaticities, matrices, Bradford adaptation, and color temperature and tint |

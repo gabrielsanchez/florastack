@@ -7,10 +7,11 @@ use std::sync::OnceLock;
 use florastack_core::{AnyImage, Orientation};
 
 use crate::color::{self, ColorEngine, ColorHint, CurveKind, LightCraftColor, NamedSpace, Profile};
-use crate::error::{CodecError, Warning};
+use crate::error::{BackendError, CodecError, Warning};
 use crate::format::{Format, sniff};
 use crate::metadata::{Metadata, OutputMetadata, PreparedMetadata};
-use crate::options::{OrientationPolicy, OutputSpec, ReadOptions};
+use crate::options::{BitDepth, OrientationPolicy, OutputSpec, ReadOptions};
+use crate::stream::{self, Bands, RowSource, Sink, Written};
 use crate::{decode, encode};
 
 /// What a file holds, as its headers say.
@@ -96,6 +97,81 @@ pub trait ImageEncoder: Send + Sync {
     /// Writes `image`, whose samples are already in the output's depth and encoded for its profile; `profile` is the
     /// one to embed (none for an untagged file).
     fn encode(&self, image: &AnyImage, profile: Option<&Profile>, metadata: &PreparedMetadata, spec: &OutputSpec) -> Result<Encoded, CodecError>;
+
+    /// Whether [`ImageEncoder::encode_to`] writes this format a band of rows at a time.
+    fn streams(&self) -> bool {
+        false
+    }
+
+    /// Writes the image to `sink` a band at a time, never holding more than a band of it: what [`ImageEncoder::encode`]
+    /// writes, byte for byte. Only for encoders that say they stream; the others refuse.
+    fn encode_to(
+        &self,
+        sink: &mut dyn Sink,
+        bands: &mut dyn Bands,
+        profile: Option<&Profile>,
+        metadata: &PreparedMetadata,
+        spec: &OutputSpec,
+    ) -> Result<Written, CodecError> {
+        let _ = (sink, bands, profile, metadata, spec);
+        Err(CodecError::encode(self.format(), BackendError::message("this format isn't written in bands")))
+    }
+}
+
+/// A source's bands, each converted for the output as [`color::prepare`] converts a whole image: the conversion works
+/// pixel by pixel, so the bands hold what the whole image would.
+struct PreparedBands<'a> {
+    engine: &'a dyn ColorEngine,
+    source: &'a mut dyn RowSource,
+    spec: &'a OutputSpec,
+    linear: bool,
+    /// The source's first row, which every band must be like.
+    first: AnyImage,
+    channels: usize,
+}
+
+impl Bands for PreparedBands<'_> {
+    fn width(&self) -> usize {
+        self.source.width()
+    }
+
+    fn height(&self) -> usize {
+        self.source.height()
+    }
+
+    fn channels(&self) -> usize {
+        self.channels
+    }
+
+    fn depth(&self) -> BitDepth {
+        self.spec.depth
+    }
+
+    fn rows(&mut self, y: usize, rows: usize) -> Result<AnyImage, CodecError> {
+        let format = self.spec.format.format();
+        let band = self.source.rows(y, rows)?;
+        stream::check_band(&band, self.source.width(), rows, self.first.channels(), stream::depth_of(&self.first), format)?;
+        if band.color_space() != self.first.color_space() {
+            return Err(CodecError::encode(format, BackendError::message("a band of rows has another color space than the first")));
+        }
+        // The first row's warnings are every band's.
+        let mut repeated = Vec::new();
+        let prepared = color::prepare(self.engine, &band, self.spec.profile, self.spec.depth, self.spec.extended_range, self.linear, &mut repeated)?;
+        Ok(prepared.image)
+    }
+}
+
+/// Whether a prepared image is sRGB, as EXIF's `ColorSpace` tag asks.
+fn is_srgb(prepared: &color::Prepared) -> bool {
+    match &prepared.profile {
+        None => prepared.image.color_space().encoding == florastack_core::Encoding::Srgb,
+        Some(p) => p.named() == Some(NamedSpace::Srgb) && p.curve_kind() == CurveKind::Srgb,
+    }
+}
+
+/// DNG and OpenEXR hold linear light whatever the depth.
+fn holds_linear(format: Format) -> bool {
+    matches!(format, Format::Dng | Format::OpenExr)
 }
 
 /// The decoders, encoders and color engine that reading and writing use.
@@ -188,15 +264,46 @@ impl Codecs {
         let format = spec.format.format();
         let encoder = self.encoder(format)?;
         let mut warnings = Vec::new();
-        // DNG and OpenEXR hold linear light whatever the depth.
-        let linear = matches!(format, Format::Dng | Format::OpenExr);
-        let prepared = color::prepare(self.color.as_ref(), image, spec.profile, spec.depth, spec.extended_range, linear, &mut warnings)?;
-        let srgb = match &prepared.profile {
-            None => prepared.image.color_space().encoding == florastack_core::Encoding::Srgb,
-            Some(p) => p.named() == Some(NamedSpace::Srgb) && p.curve_kind() == CurveKind::Srgb,
-        };
-        let meta = PreparedMetadata::new(metadata, prepared.image.width(), prepared.image.height(), srgb, &mut warnings);
+        let prepared =
+            color::prepare(self.color.as_ref(), image, spec.profile, spec.depth, spec.extended_range, holds_linear(format), &mut warnings)?;
+        let meta = PreparedMetadata::new(metadata, prepared.image.width(), prepared.image.height(), is_srgb(&prepared), &mut warnings);
         let mut written = encoder.encode(&prepared.image, prepared.profile.as_ref(), &meta, spec)?;
+        warnings.append(&mut written.warnings);
+        written.warnings = warnings;
+        Ok(written)
+    }
+
+    /// Writes the image `source` hands out to `sink`, as `spec` says, with `metadata`: the file [`Codecs::write`]
+    /// makes of the whole image, byte for byte. TIFF and DNG are written a band of rows at a time, so that neither
+    /// the converted image nor the file is ever whole in memory; for the other formats the source is asked for
+    /// every row at once. The sink is left at the file's end.
+    pub fn write_to(
+        &self,
+        sink: &mut dyn Sink,
+        source: &mut dyn RowSource,
+        spec: &OutputSpec,
+        metadata: &OutputMetadata,
+    ) -> Result<Written, CodecError> {
+        spec.validate()?;
+        let format = spec.format.format();
+        let encoder = self.encoder(format)?;
+        let (width, height) = (source.width(), source.height());
+        if !encoder.streams() || height == 0 {
+            let image = source.rows(0, height)?;
+            let whole = self.write(&image, spec, metadata)?;
+            sink.write_all(&whole.bytes).map_err(|e| CodecError::encode(format, e))?;
+            return Ok(Written { bytes: whole.bytes.len() as u64, warnings: whole.warnings });
+        }
+        // The first row says what every band is, and so which profile the file gets.
+        let first = source.rows(0, 1)?;
+        stream::check_band(&first, width, 1, first.channels(), stream::depth_of(&first), format)?;
+        let linear = holds_linear(format);
+        let mut warnings = Vec::new();
+        let prepared = color::prepare(self.color.as_ref(), &first, spec.profile, spec.depth, spec.extended_range, linear, &mut warnings)?;
+        let meta = PreparedMetadata::new(metadata, width, height, is_srgb(&prepared), &mut warnings);
+        let channels = prepared.image.channels();
+        let mut bands = PreparedBands { engine: self.color.as_ref(), source, spec, linear, first, channels };
+        let mut written = encoder.encode_to(sink, &mut bands, prepared.profile.as_ref(), &meta, spec)?;
         warnings.append(&mut written.warnings);
         written.warnings = warnings;
         Ok(written)

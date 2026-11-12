@@ -24,7 +24,6 @@ const DEFLATE_LEVEL: u8 = 6;
 
 /// A sample type as the TIFF writer stores it.
 pub(crate) trait TiffSample: Sample {
-    const BITS: u16;
     const FLOAT: bool;
     fn put_le(self, out: &mut Vec<u8>);
     fn put_be(self, out: &mut Vec<u8>);
@@ -33,7 +32,6 @@ pub(crate) trait TiffSample: Sample {
 }
 
 impl TiffSample for u8 {
-    const BITS: u16 = 8;
     const FLOAT: bool = false;
     fn put_le(self, out: &mut Vec<u8>) {
         out.push(self);
@@ -47,7 +45,6 @@ impl TiffSample for u8 {
 }
 
 impl TiffSample for u16 {
-    const BITS: u16 = 16;
     const FLOAT: bool = false;
     fn put_le(self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.to_le_bytes());
@@ -61,7 +58,6 @@ impl TiffSample for u16 {
 }
 
 impl TiffSample for f32 {
-    const BITS: u16 = 32;
     const FLOAT: bool = true;
     fn put_le(self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.to_le_bytes());
@@ -76,7 +72,12 @@ impl TiffSample for f32 {
 
 /// The predictor tag value for these samples and this compression: 1 (none), 2 (horizontal) or 3 (floating point).
 pub(crate) fn predictor<T: TiffSample>(compression: TiffCompression) -> u16 {
-    match (compression, T::FLOAT) {
+    predictor_for(compression, T::FLOAT)
+}
+
+/// The predictor tag value for integer or float samples and this compression.
+pub(crate) fn predictor_for(compression: TiffCompression, float: bool) -> u16 {
+    match (compression, float) {
         (TiffCompression::None, _) => 1,
         (_, false) => 2,
         (_, true) => 3,
