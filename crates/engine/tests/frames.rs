@@ -65,7 +65,7 @@ fn florastacks_own_linear_dng_reads_back_as_written() {
     let mut linear = stored.clone();
     linear.set_color_space(ColorSpace { encoding: Encoding::Linear, icc: Some(florastack_raw::working_space_icc()) });
     let spec = OutputSpec {
-        format: OutputFormat::Dng { compression: DngCompression::LosslessJpeg, look: DngLook::Raw },
+        format: OutputFormat::Dng { compression: DngCompression::LosslessJpeg, look: DngLook::Raw, preview: true },
         depth: BitDepth::U16,
         profile: OutputProfile::Input,
         extended_range: false,

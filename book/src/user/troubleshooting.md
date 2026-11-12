@@ -107,7 +107,7 @@ brackets in one folder break that order.
 *A RAW file is refused: "files of this kind can't be decoded yet: convert them to DNG (Adobe DNG Converter does) or to a
 16-bit TIFF in your raw converter first".*
 
-FloraStack reads DNG, Canon CR2 and CR3, Nikon NEF and NRW, Sony ARW, Fujifilm RAF, Panasonic RW2, Pentax PEF,
+FloraStack reads DNG, Canon CR2, CR3 and CRW, Nikon NEF and NRW, Sony ARW, Fujifilm RAF, Panasonic RW2, Pentax PEF,
 uncompressed Olympus ORF, Samsung SRW and a few more, but not every variant of every format: the compressed ORF files
 that most Olympus and OM System cameras write, and Nikon's High Efficiency NEF, are among those it can't read yet.
 

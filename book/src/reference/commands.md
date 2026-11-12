@@ -1650,10 +1650,11 @@ Parameters:
 | `settings.calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
 | `settings.confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `settings.contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
-| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16, OpenEXR 32-bit float. Default: `"u16"`. |
+| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
 | `settings.depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
-| `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` | DNG's compression: `uncompressed` or `lossless-jpeg`. Default: `"lossless-jpeg"`. |
+| `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
 | `settings.dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
+| `settings.dng_preview` | boolean | A small sRGB picture of the image at the front of a DNG file, for file browsers to show. Default: `true`. |
 | `settings.exr_compression` | `"none"` \| `"rle"` \| `"zips"` \| `"zip"` \| `"piz"` | OpenEXR's compression: `none`, `rle`, `zips`, `zip` or `piz`. Default: `"zip"`. |
 | `settings.exr_half` | boolean | OpenEXR with half floats rather than full ones. Default: `false`. |
 | `settings.extended_range` | boolean | In 32-bit float files, keep values beyond [0, 1] (the result from before tone compression). Default: `false`. |
@@ -1785,10 +1786,11 @@ Parameters:
 | `settings.calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
 | `settings.confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `settings.contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
-| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16, OpenEXR 32-bit float. Default: `"u16"`. |
+| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
 | `settings.depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
-| `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` | DNG's compression: `uncompressed` or `lossless-jpeg`. Default: `"lossless-jpeg"`. |
+| `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
 | `settings.dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
+| `settings.dng_preview` | boolean | A small sRGB picture of the image at the front of a DNG file, for file browsers to show. Default: `true`. |
 | `settings.exr_compression` | `"none"` \| `"rle"` \| `"zips"` \| `"zip"` \| `"piz"` | OpenEXR's compression: `none`, `rle`, `zips`, `zip` or `piz`. Default: `"zip"`. |
 | `settings.exr_half` | boolean | OpenEXR with half floats rather than full ones. Default: `false`. |
 | `settings.extended_range` | boolean | In 32-bit float files, keep values beyond [0, 1] (the result from before tone compression). Default: `false`. |
@@ -1840,10 +1842,11 @@ Parameters:
 | `calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
 | `confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
-| `depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16, OpenEXR 32-bit float. Default: `"u16"`. |
+| `depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
 | `depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
-| `dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` | DNG's compression: `uncompressed` or `lossless-jpeg`. Default: `"lossless-jpeg"`. |
+| `dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
 | `dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
+| `dng_preview` | boolean | A small sRGB picture of the image at the front of a DNG file, for file browsers to show. Default: `true`. |
 | `exr_compression` | `"none"` \| `"rle"` \| `"zips"` \| `"zip"` \| `"piz"` | OpenEXR's compression: `none`, `rle`, `zips`, `zip` or `piz`. Default: `"zip"`. |
 | `exr_half` | boolean | OpenEXR with half floats rather than full ones. Default: `false`. |
 | `extended_range` | boolean | In 32-bit float files, keep values beyond [0, 1] (the result from before tone compression). Default: `false`. |

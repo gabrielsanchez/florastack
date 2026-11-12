@@ -29,6 +29,7 @@ pub mod error;
 pub mod format;
 pub mod metadata;
 pub mod options;
+pub mod stream;
 
 pub use codec::{Codecs, Decoded, Encoded, FileInfo, ImageDecoder, ImageEncoder, ProfileInfo, Stored};
 pub use color::{ColorEngine, ColorHint, CurveKind, LightCraftColor, NamedSpace, Primaries, Profile, StandardCurve};
@@ -39,6 +40,7 @@ pub use options::{
     BitDepth, ChromaSubsampling, DngCompression, DngLook, ExrCompression, OrientationPolicy, OutputFormat, OutputProfile, OutputSpec, ReadOptions,
     TiffCompression, WideSpace,
 };
+pub use stream::{Bands, ImageRows, RowSource, Sink, Written};
 
 use florastack_core::AnyImage;
 
@@ -64,22 +66,47 @@ pub fn read_file(path: &std::path::Path, options: &ReadOptions) -> Result<Decode
     read(&bytes, options)
 }
 
+/// Writes the image `source` hands out to `sink`, a band of rows at a time for TIFF and DNG: the file [`write`]
+/// makes, without the image or the file ever whole in memory ([`Codecs::write_to`]).
+pub fn write_to(sink: &mut dyn Sink, source: &mut dyn RowSource, spec: &OutputSpec, metadata: &OutputMetadata) -> Result<Written, CodecError> {
+    Codecs::shared().write_to(sink, source, spec, metadata)
+}
+
 /// Writes `image` to `path`, through a temporary file in the same folder that replaces `path` only once it is
-/// complete, so that a failed write (a full disk) never leaves a damaged file. Returns the write's warnings.
+/// complete, so that a failed write (a full disk) never leaves a damaged file. TIFF and DNG files are written a band
+/// at a time, never whole in memory. Returns the write's warnings.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &std::path::Path, image: &AnyImage, spec: &OutputSpec, metadata: &OutputMetadata) -> Result<Vec<Warning>, CodecError> {
-    use std::io::Write as _;
-    let encoded = write(image, spec, metadata)?;
+    write_file_from(path, &mut ImageRows(image), spec, metadata)
+}
+
+/// Writes the image `source` hands out to `path`, as [`write_file`] writes one in memory.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_file_from(
+    path: &std::path::Path,
+    source: &mut dyn RowSource,
+    spec: &OutputSpec,
+    metadata: &OutputMetadata,
+) -> Result<Vec<Warning>, CodecError> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let temp = path.with_file_name(format!(".{name}.{}.part", florastack_core::process::id()));
     let failed = |source: std::io::Error| {
         let _ = florastack_core::fs::remove_file(&temp);
         CodecError::Write { path: path.to_path_buf(), source }
     };
-    let mut file = florastack_core::fs::File::create(&temp).map_err(|source| CodecError::Write { path: path.to_path_buf(), source })?;
-    file.write_all(&encoded.bytes).map_err(failed)?;
+    let file = florastack_core::fs::File::create(&temp).map_err(|source| CodecError::Write { path: path.to_path_buf(), source })?;
+    let mut file = std::io::BufWriter::new(file);
+    let written = match write_to(&mut file, source, spec, metadata) {
+        Ok(written) => written,
+        Err(e) => {
+            drop(file);
+            let _ = florastack_core::fs::remove_file(&temp);
+            return Err(e);
+        }
+    };
+    let file = file.into_inner().map_err(|e| failed(e.into_error()))?;
     file.sync_all().map_err(failed)?;
     drop(file);
     florastack_core::fs::rename(&temp, path).map_err(failed)?;
-    Ok(encoded.warnings)
+    Ok(written.warnings)
 }

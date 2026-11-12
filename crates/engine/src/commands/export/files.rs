@@ -150,7 +150,8 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
         let mut size = None;
         for (i, file) in planned.into_iter().enumerate() {
             ctx.step(i as u64, total as u64)?;
-            let (path, what, bytes) = match file {
+            // Image files are staged a band of rows at a time (TIFF and DNG), data files from their bytes.
+            let (path, what, hash, bytes) = match file {
                 Planned::Image { path, what, pixels, spec, metadata } => {
                     let mut pixels = pixels.read(&cache, &mut warnings)?;
                     size.get_or_insert((pixels.width(), pixels.height()));
@@ -167,31 +168,33 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
                         )?);
                     }
                     let source = if metadata { frame_metadata(source.as_deref(), &mut warnings) } else { None };
-                    let encoded =
-                        florastack_codecs::write(&pixels, &spec, &OutputMetadata { source, frame_count: Some(frame_count), modified: None })?;
-                    warnings.extend(encoded.warnings.iter().map(|w| format!("{}: {w}", display(&path))));
-                    (path, what, encoded.bytes)
+                    let metadata = OutputMetadata { source, frame_count: Some(frame_count), modified: None };
+                    let staged = publication.stage_image(&path, &pixels, spec, &metadata)?;
+                    warnings.extend(staged.warnings.iter().map(|w| format!("{}: {w}", display(&path))));
+                    (path, what, staged.hash, staged.bytes)
                 }
                 Planned::Aligned { path, frame } => {
                     let loader = loader.as_mut().ok_or_else(|| scientific::unavailable("missing input reader"))?;
                     let warped = loader.warp(frame, size.ok_or_else(|| scientific::unavailable("missing output dimensions"))?)?;
-                    let encoded =
-                        florastack_codecs::write(&AnyImage::F32(warped.image), &extra_spec(OutputProfile::Input), &OutputMetadata::default())?;
-                    (path, "aligned", encoded.bytes)
+                    let pixels = AnyImage::F32(warped.image);
+                    let staged = publication.stage_image(&path, &pixels, extra_spec(OutputProfile::Input), &OutputMetadata::default())?;
+                    (path, "aligned", staged.hash, staged.bytes)
                 }
                 Planned::Contribution { path, frame, index } => {
                     let (weights, size) = contributions.as_ref().ok_or_else(|| scientific::unavailable("missing contribution weights"))?;
                     let loader = loader.as_mut().ok_or_else(|| scientific::unavailable("missing input reader"))?;
                     let warped = loader.warp(frame, *size)?;
-                    let map = weights.map(index, &florastack_stack::Patch { image: warped.image, coverage: warped.coverage })?;
-                    let encoded = florastack_codecs::write(&AnyImage::F32(map), &extra_spec(OutputProfile::Untagged), &OutputMetadata::default())?;
-                    (path, "contribution", encoded.bytes)
+                    let map = AnyImage::F32(weights.map(index, &florastack_stack::Patch { image: warped.image, coverage: warped.coverage })?);
+                    let staged = publication.stage_image(&path, &map, extra_spec(OutputProfile::Untagged), &OutputMetadata::default())?;
+                    (path, "contribution", staged.hash, staged.bytes)
                 }
-                Planned::Data { path, bytes, what } => (path, what, bytes),
+                Planned::Data { path, bytes, what } => {
+                    publication.stage(&path, &bytes)?;
+                    (path, what, florastack_project::ContentHash::of(&bytes), bytes.len() as u64)
+                }
             };
-            publication.stage(&path, &bytes)?;
-            sidecar.artifact(&main, &path, what, &bytes);
-            written.push(FileWritten { path: display(&path), bytes: bytes.len() as u64, what });
+            sidecar.artifact(&main, &path, what, hash, bytes);
+            written.push(FileWritten { path: display(&path), bytes, what });
         }
         let bytes = sidecar.bytes()?;
         publication.stage(&sidecar_path, &bytes)?;

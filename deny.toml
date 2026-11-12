@@ -12,11 +12,6 @@ all-features = true
 # change that needs it: { id = "RUSTSEC-0000-0000", reason = "..." }. cargo audit reads the same ids from
 # .cargo/audit.toml: keep the two lists the same.
 ignore = [
-    # quick-xml 0.38, through lightcraft-meta at the pinned LightCraft commit. Neither advisory reaches it: it reads
-    # attributes with `with_checks(false)` only and never uses `NsReader` (checked at the pin). Fixed in quick-xml
-    # 0.41: drop both entries when the pin moves past storytold/lightcraft#1464 (book/src/dev/lightcraft.md).
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 via lightcraft-meta, which never checks for duplicate attributes (with_checks(false)); fixed upstream in lightcraft#1464" },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 via lightcraft-meta, which never uses NsReader; fixed upstream in lightcraft#1464" },
     # zbus 5's companion crates, through AccessKit's Linux backend (accesskit_unix and atspi, under eframe's
     # `accesskit` feature): "unmaintained" because zbus 6 merged them, not for a flaw, and no AccessKit release is on
     # zbus 6 yet. Drop the three entries when eframe's AccessKit moves to zbus 6.
@@ -85,5 +80,5 @@ multiple-versions = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/storytold/lightcraft"]
+allow-git = ["https://github.com/storytold/lightcraft", "https://github.com/storytold/craft-libs"]
 required-git-spec = "rev"

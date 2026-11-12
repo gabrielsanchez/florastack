@@ -67,8 +67,9 @@ need a mention here:
 - LightCraft's crates lightcraft-tiff, lightcraft-codecs, lightcraft-meta, lightcraft-color,
   lightcraft-raw, lightcraft-pipeline, lightcraft-develop and lightcraft-raster, and through them
   lightcraft-geom and lightcraft-inpaint (https://github.com/storytold/lightcraft, commit
-  a2a41383c4fd62fa85a46ccd00998639221f2d3c, release 0.10.0), which florastack-codecs and
-  florastack-raw use.
+  192ff72923c39e6623f2c7ff67ab3a119deb8071, release 0.20.0), which florastack-codecs,
+  florastack-raw and florastack-edit use, and craft-crw (https://github.com/storytold/craft-libs),
+  which lightcraft-raw uses.
   Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
   Licensed under the MIT License or the Apache License, Version 2.0, at your option; the license texts
   are the same as FloraStack's (LICENSE-MIT, LICENSE-APACHE).

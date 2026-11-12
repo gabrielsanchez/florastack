@@ -323,6 +323,13 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CommandE
     })
 }
 
+/// An image file staged by [`Publication::stage_image`].
+pub(super) struct Staged {
+    pub(super) hash: florastack_project::ContentHash,
+    pub(super) bytes: u64,
+    pub(super) warnings: Vec<florastack_codecs::Warning>,
+}
+
 /// Files staged beside their destinations, then published only after the job's final cancellation checkpoint.
 #[derive(Default)]
 pub(super) struct Publication {
@@ -347,6 +354,43 @@ impl Publication {
         #[cfg(target_arch = "wasm32")]
         self.files.push((path.to_path_buf(), bytes.to_vec()));
         Ok(())
+    }
+
+    /// Stages `pixels` as an image file, written a band of rows at a time where the format allows it (TIFF and DNG),
+    /// so that neither the converted image nor the file is whole in memory. Returns the file's hash and length and
+    /// the write's warnings.
+    pub(super) fn stage_image(
+        &mut self,
+        path: &Path,
+        pixels: &AnyImage,
+        spec: OutputSpec,
+        metadata: &OutputMetadata,
+    ) -> Result<Staged, CommandError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::io::{Seek as _, SeekFrom};
+            let parent = path.parent().ok_or_else(|| super::scientific::unavailable("an export needs a parent folder"))?;
+            let error = |source| florastack_project::ProjectError::Write { path: path.to_path_buf(), source };
+            florastack_core::fs::create_dir_all(parent).map_err(error)?;
+            let file = tempfile::Builder::new().prefix(".export-").suffix(".part").tempfile_in(parent).map_err(error)?;
+            let mut writer = std::io::BufWriter::new(file);
+            let written = florastack_codecs::write_to(&mut writer, &mut florastack_codecs::ImageRows(pixels), &spec, metadata)?;
+            let mut file = writer.into_inner().map_err(|e| error(e.into_error()))?;
+            file.as_file().sync_all().map_err(error)?;
+            // The writer went back to the header once, so the hash is taken from the finished file.
+            file.as_file_mut().seek(SeekFrom::Start(0)).map_err(error)?;
+            let (hash, bytes) = florastack_project::ContentHash::of_reader(std::io::BufReader::new(file.as_file_mut())).map_err(error)?;
+            self.files.push((path.to_path_buf(), file));
+            Ok(Staged { hash, bytes, warnings: written.warnings })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let encoded = florastack_codecs::write(pixels, &spec, metadata)?;
+            let staged =
+                Staged { hash: florastack_project::ContentHash::of(&encoded.bytes), bytes: encoded.bytes.len() as u64, warnings: encoded.warnings };
+            self.files.push((path.to_path_buf(), encoded.bytes));
+            Ok(staged)
+        }
     }
 
     pub(super) fn publish(self, ctx: &crate::jobs::JobContext, overwrite: bool) -> Result<(), CommandError> {
@@ -544,16 +588,15 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
         let metadata = OutputMetadata { source: metadata, frame_count: Some(frame_count), modified: None };
         ctx.checkpoint()?;
         ctx.stage(1);
-        let encoded = florastack_codecs::write(&pixels, &spec, &metadata)?;
+        let mut publication = Publication::default();
+        let staged = publication.stage_image(&path, &pixels, spec, &metadata)?;
         drop(pixels);
         ctx.stage(2);
-        let mut publication = Publication::default();
-        publication.stage(&path, &encoded.bytes)?;
-        sidecar.artifact(&path, &path, if p.map.is_some() { "map" } else { "output" }, &encoded.bytes);
+        sidecar.artifact(&path, &path, if p.map.is_some() { "map" } else { "output" }, staged.hash, staged.bytes);
         publication.stage(&sidecar_path, &sidecar.bytes()?)?;
         publication.publish(ctx, p.overwrite)?;
-        warnings.extend(encoded.warnings.iter().map(ToString::to_string));
-        let written = Written { path: display(&path), sidecar: display(&sidecar_path), bytes: encoded.bytes.len() as u64, warnings };
+        warnings.extend(staged.warnings.iter().map(ToString::to_string));
+        let written = Written { path: display(&path), sidecar: display(&sidecar_path), bytes: staged.bytes, warnings };
         Ok(commit(move |_: &mut Session| Ok(written)))
     });
     Ok(plan.stages(&[("Reading", 0.2), ("Encoding", 0.7), ("Writing", 0.1)]))

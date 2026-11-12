@@ -22,7 +22,7 @@ const F: Format = Format::OpenExr;
 /// The custom attribute FloraStack stores its XMP packet in (OpenEXR has no standard one).
 pub(crate) const XMP_ATTRIBUTE: &str = "xmp";
 
-/// An exr crate error: what it doesn't support (DWA and HTJ2K compression, subsampled channels, newer file versions)
+/// An exr crate error: what it doesn't support (HTJ2K compression, subsampled channels, newer file versions)
 /// said so, the rest a damaged file.
 fn exr_error(e: exr::error::Error) -> CodecError {
     match e {
@@ -201,8 +201,8 @@ mod tests {
 
     #[test]
     fn a_compression_exr_lacks_is_unsupported_not_damaged() {
-        // A ZIP file relabeled as DWAA (compression 8), which the exr crate can't decompress. One flat gray block of
-        // 16 rows compresses below its raw size, so the reader must decompress it.
+        // A ZIP file relabeled as HTJ2K (compression 10), which the exr crate can't decompress. One flat gray block
+        // of 16 rows compresses below its raw size, so the reader must decompress it.
         let gray = AnyImage::F32(Image::from_vec(16, 16, 3, ColorSpace::LINEAR, vec![0.5; 16 * 16 * 3]).unwrap());
         let spec = OutputSpec {
             format: OutputFormat::OpenExr { compression: ExrCompression::Zip, half: false },
@@ -213,10 +213,46 @@ mod tests {
         let mut bytes = crate::write(&gray, &spec, &OutputMetadata::default()).unwrap().bytes;
         let attribute = b"compression\0compression\0\x01\0\0\0\x03";
         let at = bytes.windows(attribute.len()).position(|w| w == attribute).expect("the compression attribute, ZIP16");
-        bytes[at + attribute.len() - 1] = 8;
+        bytes[at + attribute.len() - 1] = 10;
         let error = crate::read(&bytes, &ReadOptions::default()).unwrap_err();
         assert!(matches!(error, CodecError::UnsupportedVariant { format: Format::OpenExr, .. }), "{error:?}");
         assert_eq!(error.to_string(), "this kind of OpenEXR file is not supported: save it again with ZIP or PIZ compression first");
         assert!(matches!(exr_error(exr::error::Error::Invalid("bad".into())), CodecError::Malformed { format: Format::OpenExr, .. }));
+    }
+
+    #[test]
+    fn dwa_compressed_files_are_read() {
+        use exr::prelude::{AnyChannel, AnyChannels, Compression, Encoding, Image as ExrImage, Layer, WritableImage};
+        // A smooth ramp, which DWA's lossy DCT keeps closely: the files other software writes with DWAA (blocks of 32
+        // rows) and DWAB (256) must decode, not be refused as they were before exr 1.74.1.
+        let (w, h) = (64, 48);
+        let value = |x: usize, y: usize, c: usize| (x + 2 * y + 8 * c) as f32 / 256.0;
+        for compression in [Compression::DWAA(None), Compression::DWAB(None)] {
+            let channels: Vec<_> = ["R", "G", "B"]
+                .iter()
+                .enumerate()
+                .map(|(c, name)| {
+                    let plane = (0..w * h).map(|i| exr::prelude::f16::from_f32(value(i % w, i / w, c))).collect();
+                    AnyChannel::new(*name, FlatSamples::F16(plane))
+                })
+                .collect();
+            let layer = Layer::new(
+                (w, h),
+                LayerAttributes::default(),
+                Encoding { compression, ..Encoding::FAST_LOSSLESS },
+                AnyChannels::sort(channels.into()),
+            );
+            let mut bytes = Cursor::new(Vec::new());
+            ExrImage::from_layer(layer).write().to_buffered(&mut bytes).unwrap();
+            let decoded = crate::read(bytes.get_ref(), &ReadOptions::default()).unwrap();
+            let AnyImage::F32(image) = decoded.image else { panic!("float samples") };
+            assert_eq!((image.width(), image.height(), image.channels()), (w, h, 3));
+            for (x, y) in [(0, 0), (63, 0), (17, 30), (63, 47)] {
+                for (c, &v) in image.pixel(x, y).unwrap().iter().enumerate() {
+                    // DWA quantizes DCT coefficients: a few thousandths on a ramp, far inside this bound.
+                    assert!((v - value(x, y, c)).abs() < 0.02, "{compression:?} at ({x}, {y}), channel {c}: {v}");
+                }
+            }
+        }
     }
 }

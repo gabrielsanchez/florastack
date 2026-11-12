@@ -4,11 +4,11 @@ FloraStack reads and writes image files, decodes and develops camera RAW files, 
 
 ## What is pinned
 
-LightCraft doesn't publish its crates to crates.io (the `lightcraft` crate there is an unrelated project), so they come from its git repository, all at one commit: `a2a41383c4fd62fa85a46ccd00998639221f2d3c`, "Release 0.10.0" on `main`. The commit is written once per crate in `[workspace.dependencies]` in the root `Cargo.toml`, and `Cargo.lock` records it.
+LightCraft doesn't publish its crates to crates.io (the `lightcraft` crate there is an unrelated project), so they come from its git repository, all at one commit: `192ff72923c39e6623f2c7ff67ab3a119deb8071`, "Release 0.20.0" on `main`. The commit is written once per crate in `[workspace.dependencies]` in the root `Cargo.toml`, and `Cargo.lock` records it.
 
 | Crate | Features | Used by | What for |
 |---|---|---|---|
-| `lightcraft-tiff` | (has none) | codecs | Reading and writing TIFF directories: the EXIF block FloraStack writes, and the TIFF and DNG writers |
+| `lightcraft-tiff` | (has none) | codecs | Reading and writing TIFF directories: the EXIF block FloraStack writes, the IFDs of the TIFF and DNG writers (which FloraStack serializes itself, a band of rows at a time, in the layout of LightCraft's writer), and the layout of the 9 to 15-bit TIFF files it unpacks itself |
 | `lightcraft-codecs` | `parallel` only | codecs, raw | The JPEG and PNG encoders, format sniffing, ICC profile parsing and writing, and the color-managed decoder used for CMYK files and LUT-based profiles; for `florastack-raw`, the linear Rec. 2020 profile that developed frames are tagged with (the same bytes `florastack-codecs` writes for that space) |
 | `lightcraft-meta` | (has none) | codecs | Finding EXIF, IPTC and XMP in a file, parsing them, and merging XMP |
 | `lightcraft-color` | (has none) | codecs, raw, edit | Chromaticities, matrices, Bradford adaptation, and color temperature and tint |
@@ -28,20 +28,21 @@ LightCraft's types never appear in FloraStack's public APIs. `florastack-codecs`
 
 ## Policy exceptions
 
-The dependency needs three exceptions to the dependency policy, each in `deny.toml` with its reason:
+The dependency needs two exceptions to the dependency policy, each in `deny.toml` with its reason:
 
-- **A git source.** `[sources] allow-git` lists `https://github.com/storytold/lightcraft`, and `required-git-spec = "rev"` makes every git dependency name a commit, never a branch or a tag.
+- **Two git sources.** `[sources] allow-git` lists `https://github.com/storytold/lightcraft` and `https://github.com/storytold/craft-libs`, the same owner's shared library repository, from which `lightcraft-raw` takes `craft-crw` (its Canon CRW decoder: pure Rust, MIT OR Apache-2.0, depending on `thiserror` alone) at a commit LightCraft's own manifest pins. `required-git-spec = "rev"` makes every git dependency name a commit, never a branch or a tag.
 - **The Independent JPEG Group's license**, allowed for `jpeg-encoder` alone, which `lightcraft-codecs` and `lightcraft-raw` use. It is permissive and asks only for the credit line that `NOTICE` gives.
-- **Two quick-xml advisories, ignored.** `lightcraft-meta` uses quick-xml 0.38.4, which RUSTSEC-2026-0194 and RUSTSEC-2026-0195 cover. Neither reaches it: it reads attributes with `with_checks(false)`, so it never runs the duplicate-attribute check of the first, and it never uses `NsReader`, the subject of the second. quick-xml 0.41 fixes both, and LightCraft has the bump open (storytold/lightcraft#1464, and Dependabot's #2265). `.cargo/audit.toml` ignores the same two ids for `cargo audit`.
 
-One more pin is FloraStack's own: `exr` is held at `=1.74.0`, because 1.74.1 and later depend on `pulp`, which brings in `paste`, an unmaintained crate (RUSTSEC-2024-0436). That dependency came with 1.74.1's DWA compression, so until the pin moves, DWA-compressed OpenEXR files are reported as unsupported, with the advice to save them with ZIP or PIZ compression. Revisit it when exr drops that dependency.
+Until release 0.19, `lightcraft-meta` used quick-xml 0.38, and two advisories against it (RUSTSEC-2026-0194 and RUSTSEC-2026-0195) were ignored as unreachable; the pin now has quick-xml 0.41, and the ignores are gone.
+
+`exr` was once held at `=1.74.0`, because 1.74.1 and 1.74.2 depended on `pulp`, which brings in `paste`, an unmaintained crate (RUSTSEC-2024-0436). 1.74.3 dropped that dependency, so the workspace asks for 1.74.3 or later, and DWA-compressed OpenEXR files are read.
 
 ## Moving the pin
 
 1. Pick a LightCraft commit on `main`, preferably a release, and read what changed in the eight crates since the current pin, and in its `docs/raw-parity.md` (which RAW formats and variants decode).
 2. Replace the commit in all eight `lightcraft-*` lines of `[workspace.dependencies]` and build once (`cargo check --workspace`), so that Cargo records the new commit in `Cargo.lock`. Commit the lock file with the change.
 3. Check what the new commit brings in. `cargo tree -p florastack-codecs -e normal,build` and `cargo tree -p florastack-raw -e normal,build` must not show a `-sys` crate, `cc` or `cmake` (at the current pin they show none), nor a LightCraft crate beyond those listed above (its engine, catalog, GPU and UI crates in particular); if a feature now needs one, turn it off or discuss it first (AGENTS.md, Pure Rust).
-4. If the new commit uses quick-xml 0.41 or later, delete the two advisory ignores from `deny.toml` and `.cargo/audit.toml`.
+4. Run `cargo deny check`: a new git source (as `craft-libs` was) needs an `allow-git` entry and a line here, and a new advisory a fix or a reasoned ignore in `deny.toml` and `.cargo/audit.toml`.
 5. Run `cargo xtask corpus --fixtures` and then `cargo xtask ci`. The codec tests read the PngSuite, TIFF, WebP and OpenEXR fixtures, and the RAW tests (`crates/raw/tests/corpus.rs`) one camera file per format, pinning the size, layout, color source and orientation each decodes to, so they catch a change in decoding. Such a change may be a fix: compare with LightCraft's `docs/raw-parity.md` before updating the expectation. Update the name that `LightCraftRaw` reports (`crates/raw/src/decoder.rs`) too.
 6. For the browser build (roadmap 7.3), check the codecs and the RAW importer against its target: `rustup target add wasm32-unknown-unknown`, then `cargo check -p florastack-codecs -p florastack-raw --target wasm32-unknown-unknown`. CI doesn't run this yet: LightCraft's first five crates built for wasm32 at the current pin when it was chosen, but `florastack-codecs`, `florastack-raw` and the pipeline, develop and raster crates haven't been checked for that target.
 7. Update the commit in `ATTRIBUTION.md`, `NOTICE` and this page.
