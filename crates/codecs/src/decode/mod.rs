@@ -6,6 +6,7 @@ mod bmp;
 mod exr;
 pub(crate) mod fallback;
 mod jpeg;
+mod packed;
 mod png;
 mod tiff;
 mod webp;

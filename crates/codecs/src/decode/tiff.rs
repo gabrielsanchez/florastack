@@ -3,8 +3,9 @@
 //! profile read from the IFDs by lightcraft-tiff. The first image of the file is read.
 //!
 //! Gray, gray and alpha, RGB and RGBA files keep their samples: 8 and 16 bits as they are, 1 to 4 bits widened to 8,
-//! 9 to 15 bits to 16, 32 and 64-bit integers narrowed to 16, 16 and 64-bit floats converted to 32. Associated alpha becomes straight
-//! alpha. CMYK files go through LightCraft's decoder, which converts them with their profile.
+//! 9 to 15 bits to 16 (12-bit scans among them, which the tiff crate refuses and [`super::packed`] reads), 32 and
+//! 64-bit integers narrowed to 16, 16 and 64-bit floats converted to 32. Associated alpha becomes straight alpha.
+//! CMYK files go through LightCraft's decoder, which converts them with their profile.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::tags::Tag;
 
-use super::{byte_budget, check_size, fallback, image, interleave, unpremultiply};
+use super::{byte_budget, check_size, fallback, image, interleave, packed, unpremultiply};
 use crate::codec::{FileInfo, ImageDecoder, Stored};
 use crate::color::ColorHint;
 use crate::error::{BackendError, CodecError, guarded};
@@ -157,6 +158,21 @@ impl ImageDecoder for TiffDecoder {
     fn probe(&self, bytes: &[u8]) -> Result<FileInfo, CodecError> {
         guarded(
             || {
+                if let Some(found) = packed::probe(bytes) {
+                    let info = found?;
+                    let channels = info.color + usize::from(info.per_pixel > info.color);
+                    let (_, _, orientation) = metadata(bytes);
+                    return Ok(FileInfo {
+                        format: F,
+                        width: usize::try_from(info.width).unwrap_or(usize::MAX),
+                        height: usize::try_from(info.height).unwrap_or(usize::MAX),
+                        channels,
+                        bits_per_sample: info.bits,
+                        float: false,
+                        alpha: channels == 2 || channels == 4,
+                        orientation,
+                    });
+                }
                 let mut d = decoder(bytes, u64::MAX >> 8)?;
                 let (w, h) = d.dimensions().map_err(tiff_error)?;
                 let ct = d.colortype().map_err(tiff_error)?;
@@ -187,7 +203,35 @@ impl ImageDecoder for TiffDecoder {
     }
 }
 
+/// A file of 9 to 15 bits per sample, read by [`packed`]: its samples are 16-bit already.
+fn decode_packed(bytes: &[u8], info: &packed::Info, samples: Vec<u16>) -> Result<Stored, CodecError> {
+    let (meta, icc, orientation) = metadata(bytes);
+    let has_alpha = info.per_pixel > info.color;
+    let keep = info.color + usize::from(has_alpha);
+    let mut samples = select(samples, info.per_pixel, keep);
+    if has_alpha && info.extra.first() == Some(&1) {
+        unpremultiply(&mut samples, keep);
+    }
+    let image = AnyImage::U16(image(info.width, info.height, keep, samples)?);
+    let hint = icc.map_or(ColorHint::Untagged, ColorHint::Icc);
+    let info = FileInfo {
+        format: F,
+        width: image.width(),
+        height: image.height(),
+        channels: keep,
+        bits_per_sample: info.bits,
+        float: false,
+        alpha: has_alpha,
+        orientation,
+    };
+    Ok(Stored { image, info, hint, metadata: meta, warnings: Vec::new() })
+}
+
 fn decode(bytes: &[u8], max_pixels: u64) -> Result<Stored, CodecError> {
+    if let Some(found) = packed::decode(bytes, max_pixels) {
+        let (info, samples) = found?;
+        return decode_packed(bytes, &info, samples);
+    }
     let mut d = decoder(bytes, max_pixels)?;
     let (w, h) = d.dimensions().map_err(tiff_error)?;
     check_size(u64::from(w), u64::from(h), max_pixels)?;
