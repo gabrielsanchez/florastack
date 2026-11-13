@@ -83,7 +83,12 @@ pub fn load(path: &Path, max_side: Option<usize>) -> Result<DisplayImage, ViewEr
     }
     let contents = florastack_core::fs::read(path).map_err(read)?;
     let mut reader = FrameReader::new(DevelopSettings::default(), ReadOptions::default());
-    let frame = reader.read(&contents, Quality::Preview).map_err(|source| ViewError::Decode { path: path.to_path_buf(), source })?;
+    // A thumbnail of a RAW file needs no demosaic: its mosaic is reduced directly.
+    let frame = match max_side {
+        Some(side) => reader.read_reduced(&contents, 2 * side.max(florastack_align::MIN_THUMBNAIL_SIDE)),
+        None => reader.read(&contents, Quality::Preview),
+    }
+    .map_err(|source| ViewError::Decode { path: path.to_path_buf(), source })?;
     drop(contents);
     display(&frame.image, max_side)
 }

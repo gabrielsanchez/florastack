@@ -60,6 +60,15 @@ const FILES: &[Expected] = &[
     file("pef-pentax-k10d.pef", RawFormat::Pef, "PENTAX K10D", (3872, 2592), Bayer, Fallback, Normal),
     file("orf-olympus-e-10.orf", RawFormat::Orf, "E-10", (2256, 1684), Bayer, Fallback, Normal),
     file("srw-samsung-ex1.srw", RawFormat::Srw, "EX1", (3648, 2736), Bayer, Fallback, Normal),
+    // Paths the files above don't reach: lossless CRX (the R6 file above is C-RAW), Canon's CIFF files of 2000 to
+    // 2004, Minolta's MRW, Epson's ERF, an uncompressed Nikon NRW (which LightCraft reads as the NEF it is inside)
+    // and Leica's RWL (Panasonic's RW2 under another name).
+    file("cr3-canon-eos-r6-raw.cr3", RawFormat::Cr3, "Canon EOS R6", (5472, 3648), Bayer, Measured, Normal),
+    file("crw-canon-eos-d30.crw", RawFormat::Crw, "Canon EOS D30", (2160, 1440), Bayer, Fallback, Normal),
+    file("mrw-minolta-dimage-5.mrw", RawFormat::Mrw, "DiMAGE 5", (2048, 1544), Bayer, Fallback, Normal),
+    file("erf-epson-r-d1.erf", RawFormat::Erf, "R-D1", (3008, 2000), Bayer, Fallback, Normal),
+    file("nrw-nikon-coolpix-p1000.nrw", RawFormat::Nef, "COOLPIX P1000", (4624, 3470), Bayer, Fallback, Normal),
+    file("rwl-leica-d-lux-5.rwl", RawFormat::Rw2, "D-LUX 5", (2736, 2736), Bayer, Fallback, Normal),
 ];
 
 /// The 256 x 256 region at the center of the frame's crop.
@@ -130,6 +139,19 @@ fn every_format_decodes_and_develops() {
         let finite = frame.sensor.samples.iter().filter(|v| v.is_finite()).count();
         assert_eq!(finite, frame.sensor.samples.len(), "{name}: every sample is a number");
 
+        // The whole frame at a fraction of its size, straight from the mosaic: at least 256 pixels on its long side,
+        // no more than half the frame's, every sample a number. Files with corrections of their own to apply after
+        // demosaicing, and those a raw converter demosaiced, come whole instead.
+        let quick = RawDevelop::new(&DevelopSettings::default(), &center(&frame)).unwrap().develop_reduced(&frame, 256).unwrap();
+        let (long, full) = (quick.image.width().max(quick.image.height()), header.width.max(header.height));
+        if expected.layout == Linear {
+            assert_eq!(long, full, "{name}");
+        } else {
+            assert!(long == full || (256..=full / 2).contains(&long), "{name}: reduced to {long} of {full}");
+        }
+        assert!(samples(&quick.image).all(f32::is_finite), "{name}");
+        drop(quick);
+
         // A region at full resolution, developed as a stack's reference with automatic white balance and
         // chromatic-aberration estimate: the preview and the output agree on its smooth parts, and a second run gives
         // the same pixels.
@@ -182,4 +204,14 @@ fn a_whole_frame_develops_at_full_size() {
     let second = RawDevelop::new(&settings, &frame).unwrap().develop(&frame, Quality::Output).unwrap();
     assert!(samples(&first.image).zip(samples(&second.image)).all(|(a, b)| a.to_bits() == b.to_bits()));
     assert_eq!(first.fingerprint, second.fingerprint);
+    // Reduced straight from the mosaic, the frame holds the same light: each channel's mean over the picture is
+    // within 1 % of the full development's (they differ by what highlight reconstruction and the crop's last
+    // partial blocks see).
+    let reduced = develop.develop_reduced(&frame, 400).unwrap();
+    assert_eq!((reduced.image.width(), reduced.image.height()), (frame.info.width / 4, frame.info.height / 4));
+    let mean = |image: &Image<f32>, c: usize| samples(image).skip(c).step_by(3).map(f64::from).sum::<f64>() / image.pixel_count() as f64;
+    for c in 0..3 {
+        let (small, whole) = (mean(&reduced.image, c), mean(&first.image, c));
+        assert!((small - whole).abs() <= whole * 0.01, "channel {c}: {small} reduced, {whole} whole");
+    }
 }

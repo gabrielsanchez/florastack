@@ -24,8 +24,10 @@
 //!    `lightcraft_raw::color`) evaluated at the stack's white gives white-balance multipliers and the matrix to linear
 //!    Rec. 2020, with no camera profile look, hue map or tone curve.
 //! 6. **Exposure**: a gain of `2^EV`.
-//! 7. **Noise reduction**, when asked for: LightCraft's edge-aware guided filter on log luminance and its chroma
-//!    blur (`lightcraft_pipeline::local::apply_nr`).
+//! 7. **Noise reduction**, when asked for: LightCraft's edge-aware guided filter on log luminance
+//!    (`lightcraft_pipeline::local::apply_nr`), and a blur of color at LightCraft's radius and strength that keeps every
+//!    pixel's luminance (`reduce_color_noise`, FloraStack's own: LightCraft's divides color by luminance, which a
+//!    rendered photo allows and linear sensor data, zero or below in the shadows' noise, does not).
 //!
 //! Nothing else: no tone curve, filmic shoulder, contrast, saturation or look. Stacking needs linear data, so the
 //! output is proportional to scene light, with 1.0 at the brightest neutral the sensor records without clipping at
@@ -33,6 +35,16 @@
 //!
 //! A frame that a raw converter already demosaiced (a `LinearRaw` DNG) is imported unchanged: only its own color
 //! model at its own recorded white applies, with its corrections (lens warps again only when asked).
+//!
+//! # Reduced size
+//!
+//! A thumbnail or a small preview needs a fraction of the frame, and demosaicing all of it to throw most away is
+//! most of the time it takes. [`RawDevelop::develop_reduced`] instead makes one pixel of every `k` x `k` block of the
+//! mosaic, each channel the mean of the block's samples of that color ("superpixel" binning): no interpolation, so no
+//! demosaic artifacts, with the color planes less than one output pixel apart. Steps 3 to 6 follow as at full size;
+//! a channel with a clipped sample in its block takes the block's largest, so that highlight reconstruction sees it
+//! clipped. Noise reduction is left out (the mean of a block's samples has little noise left), and frames that can't
+//! be binned are developed whole with the fast demosaic.
 //!
 //! # One stack, one development
 //!
@@ -138,9 +150,9 @@ pub enum ChromaticAberration {
 }
 
 /// Light noise reduction: strengths from 0 (off, the default) to 1, as LightCraft's (and Lightroom's) 0 to 100
-/// sliders. Off by default because both filters are nonlinear: the luminance filter smooths fine texture, which
-/// stacking reads as focus, and the chroma filter keeps every sample at zero or above, which lifts the noise floor of
-/// the darkest areas a little. Stacking averages noise away anyway; turn it on for frames shot at high ISO.
+/// sliders. Off by default because the luminance filter is nonlinear and smooths fine texture, which stacking reads
+/// as focus, and because stacking averages noise away anyway; turn it on for frames shot at high ISO. The color
+/// filter changes no pixel's luminance.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct NoiseReduction {
@@ -362,6 +374,10 @@ impl RawDevelop {
         }
         h.f32(s.noise_reduction.luminance);
         h.f32(s.noise_reduction.color);
+        if s.noise_reduction.color > 0.0 {
+            // The color filter of version 2 (`reduce_color_noise`): frames developed with the first one are stale.
+            h.bytes(b"color noise 2");
+        }
         h.u8(u8::from(s.lens_distortion));
         h.f64(self.resolved.white.x);
         h.f64(self.resolved.white.y);
@@ -378,6 +394,58 @@ impl RawDevelop {
     pub fn develop(&self, frame: &RawFrame, quality: Quality) -> Result<Developed, RawError> {
         frame.validate()?;
         guarded(frame.info.format, || self.develop_checked(frame, quality))
+    }
+
+    /// Develops one frame of the stack at a fraction of its size, straight from the mosaic (the module's
+    /// documentation says how): the largest reduction that leaves at least `min_side` pixels on the longer side, by a
+    /// whole factor, so callers resize the result to the size they want. A frame that can't be reduced this way comes
+    /// back whole, developed as a [`Quality::Preview`]: one without a color filter array, one whose file has
+    /// corrections of its own to apply after demosaicing (they are defined at full size), one with photosites that
+    /// aren't square, and one already smaller than twice `min_side`.
+    pub fn develop_reduced(&self, frame: &RawFrame, min_side: usize) -> Result<Developed, RawError> {
+        frame.validate()?;
+        guarded(frame.info.format, || match Self::reduction(frame, min_side) {
+            Some(factor) => self.develop_binned(frame, factor),
+            None => self.develop_checked(frame, Quality::Preview),
+        })
+    }
+
+    /// The side of the blocks [`RawDevelop::develop_reduced`] bins `frame` by, if it can.
+    fn reduction(frame: &RawFrame, min_side: usize) -> Option<usize> {
+        let cfa = frame.sensor.cfa.as_ref()?;
+        let binnable = matches!(frame.sensor.layout(), SensorLayout::Bayer | SensorLayout::XTrans | SensorLayout::OtherCfa)
+            && frame.sensor.channels == 1
+            && frame.corrections.0.is_empty()
+            && (frame.pixel_aspect - 1.0).abs() < 0.01;
+        // Whole periods of the pattern, so that every block holds the same samples of each color.
+        let period = lcm(cfa.width(), cfa.height());
+        let long = frame.crop.width.max(frame.crop.height);
+        let factor = long / min_side.max(1) / period * period;
+        (binnable && factor >= period && factor >= 2).then_some(factor)
+    }
+
+    fn develop_binned(&self, frame: &RawFrame, factor: usize) -> Result<Developed, RawError> {
+        let s = &self.settings;
+        let reconstruct = s.highlights == Highlights::Reconstruct && !frame.sensor.float;
+        let Some(mut rgb) = binned_by(&frame.sensor, frame.crop, factor, reconstruct.then_some(HIGHLIGHT_CLIP)) else {
+            return self.develop_checked(frame, Quality::Preview);
+        };
+        let mut warnings = self.warnings.clone();
+        if frame.color.source == crate::ColorSource::Fallback {
+            warnings.push(DevelopWarning::ApproximateColor);
+        }
+        let transform = color::transform(&frame.color, self.resolved.white);
+        // A scale about the center, so the same at any size.
+        correct_lateral_ca(&mut rgb, self.resolved.chromatic_aberration)?;
+        if reconstruct {
+            lightcraft_raw::highlight::reconstruct(&mut rgb, transform.multipliers, HIGHLIGHT_CLIP);
+        }
+        apply_color(&mut rgb, &transform, s.exposure.exp2());
+        let mut h = Fnv::new();
+        h.bytes(b"reduced");
+        h.bytes(&self.fingerprint(Quality::Preview).to_le_bytes());
+        h.bytes(&(factor as u64).to_le_bytes());
+        Ok(Developed { image: to_image(rgb)?, orientation: frame.info.orientation, converted: false, fingerprint: h.0, warnings })
     }
 
     fn develop_checked(&self, frame: &RawFrame, quality: Quality) -> Result<Developed, RawError> {
@@ -409,7 +477,7 @@ impl RawDevelop {
         }
         apply_color(&mut rgb, &transform, gain);
         if !converted && !s.noise_reduction.is_off() {
-            reduce_noise(&mut rgb, s.noise_reduction);
+            reduce_noise(&mut rgb, s.noise_reduction)?;
         }
         Ok(Developed { image: to_image(rgb)?, orientation: frame.info.orientation, converted, fingerprint: self.fingerprint(quality), warnings })
     }
@@ -518,13 +586,52 @@ fn apply_color(rgb: &mut Rgb32f, t: &Transform, gain: f32) {
     });
 }
 
-/// LightCraft's noise reduction, its parameters read from LightCraft's 0 to 100 sliders at full size.
-fn reduce_noise(rgb: &mut Rgb32f, nr: NoiseReduction) {
+/// Noise reduction, its parameters read from LightCraft's 0 to 100 sliders at full size: LightCraft's luminance
+/// filter, then FloraStack's color filter.
+fn reduce_noise(rgb: &mut Rgb32f, nr: NoiseReduction) -> Result<(), RawError> {
     let mut s = lightcraft_develop::DevelopSettings::default();
     s.detail.nr_luminance = f64::from(nr.luminance) * 100.0;
     s.detail.nr_color = f64::from(nr.color) * 100.0;
     let (luminance, color) = lightcraft_pipeline::local::nr_params(&s, 1.0);
-    lightcraft_pipeline::local::apply_nr(rgb, luminance, color);
+    lightcraft_pipeline::local::apply_nr(rgb, luminance, None);
+    if let Some(color) = color {
+        reduce_color_noise(rgb, color.sigma, color.t)?;
+    }
+    Ok(())
+}
+
+/// The luminance of linear Rec. 2020 RGB (ITU-R BT.2020, table 4). The weights sum to 1.
+fn luminance(p: [f32; 3]) -> f32 {
+    0.2627 * p[0] + 0.6780 * p[1] + 0.0593 * p[2]
+}
+
+/// Color noise reduction on linear light: each pixel's color (what it holds beside its luminance, `p - Y` in every
+/// channel) moved by `strength` toward that of its neighborhood, a Gaussian of `sigma` pixels. The pixel's luminance
+/// stays exactly what it was, since the color part has none, and nothing is clipped, so the filter is linear and
+/// leaves the mean of noise where it was, in the deepest shadows too.
+///
+/// The neighborhood's color is scaled by the pixel's luminance over the neighborhood's, between 0 and 2, so that a
+/// bright, saturated object doesn't spill its color over a dark background, nor the other way around. Where the
+/// neighborhood has no light to compare with (black, where noise goes below zero) it is taken as it is.
+///
+/// LightCraft's own color filter (`apply_nr`) blurs chromaticity, `p / Y`, which is right for a rendered photo; on
+/// sensor data a shadow's `Y` is as often below zero as above, and the quotient put samples a hundred times white
+/// into dark frames.
+fn reduce_color_noise(rgb: &mut Rgb32f, sigma: f32, strength: f32) -> Result<(), RawError> {
+    let (w, h) = (rgb.width, rgb.height);
+    let blurred = Image::from_vec(w, h, 3, ColorSpace::LINEAR, rgb.data.as_flattened().to_vec())?;
+    let blurred = florastack_core::ops::gaussian_blur(&blurred, f64::from(sigma)).map_err(|_| RawError::Frame("the color noise filter failed"))?;
+    let around = blurred.as_raw().as_chunks::<3>().0;
+    lightcraft_raster::par_rows(&mut rgb.data, w, |y, row| {
+        for (p, b) in row.iter_mut().zip(around.iter().skip(y * w)) {
+            let (own, near) = (luminance(*p), luminance(*b));
+            let scale = if near > f32::EPSILON { (own / near).clamp(0.0, 2.0) } else { 1.0 };
+            for (v, n) in p.iter_mut().zip(b) {
+                *v += strength * (scale * (n - near) - (*v - own));
+            }
+        }
+    });
+    Ok(())
 }
 
 /// The developed image as FloraStack's, tagged linear Rec. 2020. No copy: the pixels are reinterpreted.
@@ -584,6 +691,17 @@ fn binned(m: &Mosaic, crop: florastack_core::Rect, max_side: usize) -> Option<Rg
     let period = lcm(cfa.width(), cfa.height());
     let long = crop.width.max(crop.height);
     let k = long.div_ceil(max_side.max(1)).max(4).div_ceil(period) * period;
+    binned_by(m, crop, k, None)
+}
+
+/// [`binned`] with blocks of `k` x `k` photosites. With `clip`, a channel that has a sample at or above it in a
+/// block takes the block's largest sample of that color instead of the mean, so that a block the sensor clipped in
+/// part still reads as clipped (as LightCraft's `develop_binned` does).
+fn binned_by(m: &Mosaic, crop: florastack_core::Rect, k: usize, clip: Option<f32>) -> Option<Rgb32f> {
+    let cfa = m.cfa.as_ref()?;
+    if k == 0 {
+        return None;
+    }
     let (bw, bh) = (crop.width / k, crop.height / k);
     if bw == 0 || bh == 0 {
         return None;
@@ -591,19 +709,22 @@ fn binned(m: &Mosaic, crop: florastack_core::Rect, max_side: usize) -> Option<Rg
     let mut out = Rgb32f::new(bw, bh);
     lightcraft_raster::par_rows(&mut out.data, bw, |by, row| {
         for (bx, px) in row.iter_mut().enumerate() {
-            let (mut sum, mut n) = ([0.0f32; 3], [0u32; 3]);
+            let (mut sum, mut n, mut max) = ([0.0f32; 3], [0u32; 3], [f32::MIN; 3]);
             for y in crop.y + by * k..crop.y + (by + 1) * k {
                 for x in crop.x + bx * k..crop.x + (bx + 1) * k {
                     let c = usize::from(cfa.color_at(x, y)).min(2);
                     if let Some(&v) = m.samples.get(y * m.width + x) {
-                        sum[c] += if v.is_finite() { v } else { 0.0 };
+                        let v = if v.is_finite() { v } else { 0.0 };
+                        sum[c] += v;
                         n[c] += 1;
+                        max[c] = max[c].max(v);
                     }
                 }
             }
             #[allow(clippy::cast_precision_loss)] // At most a few thousand samples per block.
             let mean = |c: usize| if n[c] > 0 { sum[c] / n[c] as f32 } else { 0.0 };
-            *px = [mean(0), mean(1), mean(2)];
+            let value = |c: usize| if n[c] > 0 && clip.is_some_and(|clip| max[c] >= clip) { max[c] } else { mean(c) };
+            *px = [value(0), value(1), value(2)];
         }
     });
     Some(out)
@@ -707,5 +828,51 @@ mod tests {
         assert!(out.data.iter().all(|p| (p[0] - 0.1).abs() < 1e-6 && (p[1] - 0.6).abs() < 1e-6 && (p[2] - 1.1).abs() < 1e-6), "{:?}", out.data);
         assert_eq!(lcm(6, 6), 6);
         assert_eq!(lcm(2, 3), 6);
+    }
+
+    #[test]
+    fn color_noise_reduction_keeps_luminance_and_stays_finite_in_the_dark() {
+        // A dark field whose noise goes below zero, as a sensor's shadows do, beside a bright saturated one.
+        let (w, h) = (48, 32);
+        let mut state = 0x2545_f491u32;
+        let mut noise = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let data: Vec<[f32; 3]> =
+            (0..w * h).map(|i| if i % w < 24 { [0.02 * noise(), 0.02 * noise(), 0.02 * noise()] } else { [0.8, 0.1, 0.05] }).collect();
+        let before = Rgb32f { width: w, height: h, data };
+        let mut after = before.clone();
+        reduce_color_noise(&mut after, 2.0, 0.6).unwrap();
+        let spread = |image: &Rgb32f, x0: usize| {
+            // How far the channels of a pixel are from each other, on average: color.
+            let px: Vec<_> = image.data.iter().enumerate().filter(|(i, _)| (x0..x0 + 16).contains(&(i % w))).map(|(_, p)| *p).collect();
+            px.iter().map(|p| f64::from((p[0] - p[1]).abs() + (p[1] - p[2]).abs())).sum::<f64>() / px.len() as f64
+        };
+        for (a, b) in after.data.iter().zip(&before.data) {
+            assert!(a.iter().all(|v| v.is_finite() && v.abs() < 1.0), "{a:?}");
+            assert!((luminance(*a) - luminance(*b)).abs() < 2e-6, "{a:?} from {b:?}");
+        }
+        assert!(spread(&after, 0) < 0.55 * spread(&before, 0), "the dark field's color noise: {} from {}", spread(&after, 0), spread(&before, 0));
+        // The saturated field keeps its color away from the edge, and doesn't flood the dark one.
+        assert!((spread(&after, 32) - spread(&before, 32)).abs() < 1e-4);
+        assert!(after.data.iter().enumerate().filter(|(i, _)| i % w < 20).all(|(_, p)| p.iter().all(|v| v.abs() < 0.05)));
+    }
+
+    #[test]
+    fn a_partly_clipped_block_reads_as_clipped() {
+        let cfa = crate::Cfa::bayer("RGGB").unwrap();
+        // One green photosite of the block clipped, the others at 0.5.
+        let mut samples = vec![0.5f32; 16];
+        samples[1] = 1.0;
+        let m = Mosaic { width: 4, height: 4, channels: 1, samples, cfa: Some(cfa), float: false };
+        let rect = florastack_core::Rect::new(0, 0, 4, 4);
+        let mean = binned_by(&m, rect, 4, None).unwrap().data[0];
+        assert!((mean[1] - 0.5625).abs() < 1e-6 && (mean[0] - 0.5).abs() < 1e-6, "{mean:?}");
+        let clipped = binned_by(&m, rect, 4, Some(0.99)).unwrap().data[0];
+        assert_eq!(clipped, [0.5, 1.0, 0.5]);
+        assert!(binned_by(&m, rect, 0, None).is_none() && binned_by(&m, rect, 8, None).is_none());
     }
 }
