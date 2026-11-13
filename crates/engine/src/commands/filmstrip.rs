@@ -227,7 +227,13 @@ fn update(session: &Session, _: NoParams) -> Result<JobPlan<Updated>, CommandErr
                     let read = florastack_core::fs::read(&job.path)
                         .map_err(|source| ProjectDataError::from(florastack_project::ProjectError::Read { path: job.path.clone(), source }))
                         .and_then(|bytes| {
-                            reader.read(&bytes, Quality::Preview).map_err(|source| ProjectDataError::ReadFrame { path: job.path.clone(), source })
+                            // A defect mask is the frames' size, so its frames are read whole; the others at twice
+                            // the preview's size, which leaves the reduction to it something to average.
+                            let frame = match &mask {
+                                Some(_) => reader.read(&bytes, Quality::Preview),
+                                None => reader.read_reduced(&bytes, 2 * crate::project::PREVIEW_SIDE),
+                            };
+                            frame.map_err(|source| ProjectDataError::ReadFrame { path: job.path.clone(), source })
                         });
                     let mut image = match read {
                         Ok(frame) => frame.image,

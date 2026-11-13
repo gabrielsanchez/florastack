@@ -88,6 +88,14 @@ pub fn orientation(policy: OrientationPolicy, recorded: Orientation) -> Orientat
     }
 }
 
+/// How much of a frame a read asks for.
+#[derive(Clone, Copy, Debug)]
+enum Size {
+    Full(Quality),
+    /// At least this many pixels on the longer side.
+    Reduced(usize),
+}
+
 /// Reads the frames of one stack, developing its RAW frames alike.
 #[derive(Clone, Debug)]
 pub struct FrameReader {
@@ -114,6 +122,18 @@ impl FrameReader {
 
     /// Reads one frame from its file's bytes; `quality` picks the demosaic of RAW frames.
     pub fn read(&mut self, bytes: &[u8], quality: Quality) -> Result<Frame, FrameError> {
+        self.read_as(bytes, Size::Full(quality))
+    }
+
+    /// Reads one frame for a thumbnail or a small preview: a RAW frame comes at a fraction of its size, developed
+    /// straight from its mosaic without a demosaic (`RawDevelop::develop_reduced`), with at least `min_side` pixels
+    /// on its longer side where it has them; every other frame, and a RAW frame that can't be reduced so, comes
+    /// whole, as [`FrameReader::read`] gives it for a preview. The caller reduces it to the size it wants.
+    pub fn read_reduced(&mut self, bytes: &[u8], min_side: usize) -> Result<Frame, FrameError> {
+        self.read_as(bytes, Size::Reduced(min_side))
+    }
+
+    fn read_as(&mut self, bytes: &[u8], size: Size) -> Result<Frame, FrameError> {
         match source(bytes)? {
             FrameSource::Raw(format) => {
                 let raw = florastack_raw::decode(bytes, self.options.max_pixels)?;
@@ -121,7 +141,10 @@ impl FrameReader {
                     Some(develop) => develop,
                     empty => empty.insert(RawDevelop::new(&self.settings, &raw)?),
                 };
-                let developed = develop.develop(&raw, quality)?;
+                let developed = match size {
+                    Size::Full(quality) => develop.develop(&raw, quality)?,
+                    Size::Reduced(min_side) => develop.develop_reduced(&raw, min_side)?,
+                };
                 drop(raw);
                 let applied = orientation(self.options.orientation, developed.orientation);
                 let image = if applied == Orientation::Normal { developed.image } else { developed.image.oriented(applied)? };

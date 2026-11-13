@@ -294,6 +294,84 @@ fn monochrome_sensors_develop_to_gray() {
 }
 
 #[test]
+fn reduced_development_bins_the_mosaic_into_the_same_light() {
+    // The gray wedge at a fraction of its size: every step's flat middle has the level the full development gives
+    // it (a block of a flat field averages to the field), on Bayer by blocks of 4 and on X-Trans by blocks of 6.
+    for (cfa, min_side, factor, name) in [(Cfa::bayer("RGGB"), 64, 4, "Bayer"), (Some(xtrans()), 32, 6, "X-Trans")] {
+        let frame = wedge(cfa);
+        let settings = DevelopSettings { exposure: 1.0, ..base() };
+        let develop = RawDevelop::new(&settings, &frame).unwrap();
+        let reduced = develop.develop_reduced(&frame, min_side).unwrap();
+        assert_eq!((reduced.image.width(), reduced.image.height()), (STEP * STEPS / factor, 32 / factor), "{name}");
+        assert!(reduced.image.width() >= min_side, "{name}");
+        assert!(!reduced.converted && reduced.warnings.is_empty(), "{name}");
+        for step in 0..STEPS {
+            // A block wholly inside the step.
+            let x = (step * STEP + STEP / 2) / factor;
+            let want = step_level(step) * 2.0;
+            for v in px(&reduced.image, x, 1) {
+                assert!((v - want).abs() <= want * 2e-5, "{name}, step {step}: {v} for {want}");
+            }
+        }
+        // The same development again, and another size, are told apart by their fingerprints.
+        let again = develop.develop_reduced(&frame, min_side).unwrap();
+        assert!(identical(&reduced.image, &again.image), "{name}");
+        assert_eq!(reduced.fingerprint, again.fingerprint);
+        assert_ne!(reduced.fingerprint, develop.fingerprint(Quality::Preview));
+        // Too small to reduce: the whole frame, as a preview.
+        let whole = develop.develop_reduced(&frame, STEP * STEPS).unwrap();
+        assert_eq!((whole.image.width(), whole.fingerprint), (STEP * STEPS, develop.fingerprint(Quality::Preview)), "{name}");
+    }
+}
+
+#[test]
+fn reduced_development_rebuilds_highlights_a_block_clips_in_part() {
+    // A neutral field near white with every fourth column fully clipped in every channel: its blocks average below
+    // the clip level, and must still come out neutral rather than tinted by the white balance.
+    let n = camera_neutral();
+    #[allow(clippy::cast_possible_truncation)]
+    let scene = |x: usize, _: usize| if x % 8 < 2 { [1.0f32; 3] } else { [0.9 * n[0] as f32, 0.9 * n[1] as f32, 0.9 * n[2] as f32] };
+    let frame = frame(64, 32, Cfa::bayer("RGGB"), dng_color(), scene);
+    for (highlights, neutral) in [(Highlights::Reconstruct, true), (Highlights::Off, false)] {
+        let develop = RawDevelop::new(&DevelopSettings { highlights, ..base() }, &frame).unwrap();
+        let reduced = develop.develop_reduced(&frame, 8).unwrap();
+        assert_eq!((reduced.image.width(), reduced.image.height()), (8, 4));
+        let p = px(&reduced.image, 3, 2);
+        let spread = p.iter().fold(f32::MIN, |a, &v| a.max(v)) - p.iter().fold(f32::MAX, |a, &v| a.min(v));
+        assert_eq!(spread < 0.03, neutral, "{highlights:?}: {p:?}");
+    }
+}
+
+#[test]
+fn frames_that_cannot_be_binned_develop_whole() {
+    // No color filter array: a monochrome sensor.
+    let samples: Vec<f32> = (0..64 * 32).map(|i| (i % 64) as f32 / 80.0).collect();
+    let info = florastack_raw::RawInfo {
+        format: florastack_raw::RawFormat::Dng,
+        make: None,
+        model: None,
+        width: 64,
+        height: 32,
+        layout: florastack_raw::SensorLayout::Monochrome,
+        bits: 16,
+        orientation: florastack_core::Orientation::Normal,
+        color: florastack_raw::ColorSource::Fallback,
+        as_shot_white: None,
+        distortion_correction: false,
+    };
+    let sensor = florastack_raw::Mosaic { width: 64, height: 32, channels: 1, samples, cfa: None, float: false };
+    let mono = florastack_raw::RawFrame::new(info, sensor, CameraColor::default(), florastack_core::Rect::new(0, 0, 64, 32), 1.0).unwrap();
+    let develop = RawDevelop::new(&base(), &mono).unwrap();
+    let whole = develop.develop_reduced(&mono, 8).unwrap();
+    assert!(identical(&whole.image, &develop.develop(&mono, Quality::Preview).unwrap().image));
+    // Photosites that aren't square.
+    let mut tall = frame(64, 32, Cfa::bayer("RGGB"), dng_color(), smooth_scene);
+    tall.pixel_aspect = 2.0;
+    let develop = RawDevelop::new(&base(), &tall).unwrap();
+    assert_eq!(develop.develop_reduced(&tall, 8).unwrap().image.width(), 64);
+}
+
+#[test]
 fn broken_frames_and_settings_are_errors() {
     let mut frame = frame(16, 16, Cfa::bayer("RGGB"), dng_color(), smooth_scene);
     let develop = RawDevelop::new(&base(), &frame).unwrap();

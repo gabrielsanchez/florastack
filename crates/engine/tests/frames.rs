@@ -112,6 +112,38 @@ fn a_real_raw_frame_is_developed_and_the_stack_resolved_on_it() {
 }
 
 #[test]
+fn a_reduced_read_bins_raw_frames_and_leaves_the_others_whole() {
+    // An image file, and a DNG a converter already demosaiced, have no mosaic to reduce: they come as a read gives them.
+    let stored = picture(64, 40);
+    let bytes = tiff(&stored, OutputProfile::Input);
+    let mut reader = FrameReader::new(DevelopSettings::default(), ReadOptions::default());
+    let whole = reader.read(&bytes, Quality::Preview).unwrap();
+    let reduced = reader.read_reduced(&bytes, 8).unwrap();
+    assert!(reduced.unchanged && reduced.image.rows().zip(whole.image.rows()).all(|(a, b)| a == b));
+
+    let Some(path) = florastack_testkit::fixture("raw", "dng-canon-eos-5d-mark-iii.dng") else {
+        florastack_testkit::skip!(Corpus, "corpus/fixtures/raw/dng-canon-eos-5d-mark-iii.dng is missing: run `cargo xtask corpus --fixtures`");
+        return;
+    };
+    let bytes = std::fs::read(path).unwrap();
+    // 1920 x 818 photosites for at least 400 pixels: blocks of 4, with the orientation applied as for a whole read.
+    let turned = ReadOptions { orientation: OrientationPolicy::Force(Orientation::Rotate90), ..ReadOptions::default() };
+    let mut reader = FrameReader::new(DevelopSettings::default(), turned);
+    let reduced = reader.read_reduced(&bytes, 400).unwrap();
+    assert_eq!((reduced.image.width(), reduced.image.height(), reduced.orientation), (204, 480, Orientation::Rotate90));
+    assert!(!reduced.unchanged && reader.develop().is_some(), "the stack's development is resolved on a reduced read too");
+    // The same light as the whole frame: each channel's mean within 1 %.
+    let whole = reader.read(&bytes, Quality::Preview).unwrap();
+    let mean = |image: &Image<f32>, c: usize| {
+        image.rows().flat_map(|row| row.as_chunks::<3>().0).map(|p| f64::from(p[c])).sum::<f64>() / (image.width() * image.height()) as f64
+    };
+    for c in 0..3 {
+        let (small, full) = (mean(&reduced.image, c), mean(&whole.image, c));
+        assert!((small - full).abs() <= full * 0.01, "channel {c}: {small} reduced, {full} whole");
+    }
+}
+
+#[test]
 fn files_nothing_reads_are_errors() {
     let mut reader = FrameReader::new(DevelopSettings::default(), ReadOptions::default());
     assert!(matches!(reader.read(b"plain text", Quality::Output), Err(FrameError::Codec(_))));

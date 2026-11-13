@@ -191,7 +191,7 @@ as `cargo xtask book --help` says. It ends with the browser build's headless tes
 and the wasm-bindgen CLI that `cargo xtask web --help` names, Node.js and Chrome or Edge
 ([The browser build](book/src/dev/web.md)). `cargo xtask corpus` downloads with `curl` and unpacks archives with `tar`, which
 come with Windows 10 and later, macOS and most Linux systems; `cargo xtask ci` runs `cargo xtask corpus --fixtures`
-before the tests, so that the codec and RAW tests have their files (about 110 MB the first time, nearly all of it
+before the tests, so that the codec and RAW tests have their files (about 190 MB the first time, nearly all of it
 camera RAW samples). [`corpus/README.md`](corpus/README.md) explains the test corpus and how to add your own stacks.
 [Tests, the corpus and the quality gate](book/src/dev/quality.md) explains `cargo xtask quality`, and
 [Packaging and releasing](book/src/dev/packaging.md) `cargo xtask dist`.

@@ -4,8 +4,8 @@
 //! scale, or another frame size.
 //!
 //! The files are read one at a time, in the order given (a folder's frame files sorted by name, as
-//! `project.addFrames` takes them): each one's capture time from its metadata, and its pixels, RAW frames with the fast
-//! demosaic and one development for the batch, reduced to a thumbnail of florastack-align's `LINK_SIDE` pixels and
+//! `project.addFrames` takes them): each one's capture time from its metadata, and its pixels, RAW frames reduced
+//! straight from their mosaic with one development for the batch, as a thumbnail of florastack-align's `LINK_SIDE` pixels and
 //! compared with the one before. Memory holds one frame and two thumbnails, however long the batch. Nothing in a
 //! project changes, and none needs to be open: the result lists each stack's files, for a project each, or a batch
 //! run.
@@ -17,7 +17,7 @@ use florastack_align::{Boundary, LINK_SIDE, Neighbors, Reason, SplitSettings, bo
 use florastack_codecs::ReadOptions;
 use florastack_core::{Image, Monitor};
 use florastack_project::Timestamp;
-use florastack_raw::{DevelopSettings, Quality};
+use florastack_raw::DevelopSettings;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -152,7 +152,7 @@ fn read(reader: &mut FrameReader, path: &std::path::Path) -> Result<Read, Comman
         .map_err(|source| CommandError::from(florastack_project::ProjectError::Read { path: path.to_path_buf(), source }))?;
     let time = florastack_codecs::read_metadata(&bytes).summary().capture_time.as_deref().and_then(capture_seconds);
     let frame = reader
-        .read(&bytes, Quality::Preview)
+        .read_reduced(&bytes, 2 * LINK_SIDE)
         .map_err(|source| CommandError::from(crate::project::ProjectDataError::ReadFrame { path: path.to_path_buf(), source }))?;
     drop(bytes);
     Ok(Read { time, thumbnail: thumbnail(&frame.image, LINK_SIDE)? })

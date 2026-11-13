@@ -61,11 +61,15 @@ impl RawDecoder for LightCraftRaw {
             return Err(RawError::unsupported(format, "this format is recognized but not decoded"));
         }
         guarded(format, || {
-            // The headers first, so that an oversized file is refused before its samples are allocated. (For
-            // uncompressed ORF and PEF files LightCraft's header read unpacks the samples itself, within its own cap of
-            // 2^30 samples, to find their bit depth and borders.)
-            let header = lightcraft_raw::probe_info(bytes).map_err(|e| RawError::from_lightcraft(format, e))?;
-            check_size(header.width, header.height, max_pixels)?;
+            // The headers first, so that an oversized file is refused before its samples are allocated. Not for ORF:
+            // LightCraft decodes only its uncompressed files, whose header read unpacks every sample to find the bit
+            // depth and the CFA phase, so asking first would decode the file twice, and their samples are no more than
+            // the file itself holds. (An uncompressed PEF without crop tags is unpacked by its header read too, within
+            // LightCraft's cap of 2^30 samples; the compressed ones that cameras write are not.)
+            if format != RawFormat::Orf {
+                let header = lightcraft_raw::probe_info(bytes).map_err(|e| RawError::from_lightcraft(format, e))?;
+                check_size(header.width, header.height, max_pixels)?;
+            }
             let raw = lightcraft_raw::decode(bytes).map_err(|e| RawError::from_lightcraft(format, e))?;
             check_size(raw.width, raw.height, max_pixels)?;
             frame_of(format, raw)
@@ -205,10 +209,11 @@ mod tests {
         assert_eq!(d.probe(b"FUJIFILMCCD-RAW 0201FF383501"), Some(RawFormat::Raf));
         assert!(matches!(d.decode(b"FUJIFILMCCD-RAW 0201FF383501", u64::MAX), Err(RawError::Malformed { format: RawFormat::Raf, .. })));
         // Recognized, never decoded: the advice to convert comes with it.
-        let mrw = b"\0MRM\0\0\0\0";
-        assert_eq!(d.probe(mrw), Some(RawFormat::Mrw));
-        let e = d.decode(mrw, u64::MAX).unwrap_err();
-        assert!(matches!(e, RawError::Unsupported { format: RawFormat::Mrw, .. }), "{e:?}");
-        assert!(e.to_string().contains("DNG") && e.to_string().contains("16-bit TIFF"), "{e}");
+        let x3f = b"FOVb\0\0\x03\0";
+        assert_eq!(d.probe(x3f), Some(RawFormat::X3f));
+        for e in [d.decode(x3f, u64::MAX).unwrap_err(), d.info(x3f).unwrap_err()] {
+            assert!(matches!(e, RawError::Unsupported { format: RawFormat::X3f, .. }), "{e:?}");
+            assert!(e.to_string().contains("DNG") && e.to_string().contains("16-bit TIFF"), "{e}");
+        }
     }
 }

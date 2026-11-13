@@ -637,7 +637,7 @@ size = 421
 
 [[fixture]]
 name = "raw"
-description = "One RAW file per decoded format: DNG (a camera's, and one Adobe DNG Converter demosaiced), Canon CR2 and CR3 (C-RAW), Sony ARW, Nikon NEF (lossy compressed), Fujifilm RAF (X-Trans compressed, Bayer uncompressed), Panasonic RW2, Pentax PEF, Olympus ORF and Samsung SRW"
+description = "One RAW file per decoded format and more for the paths one file doesn't reach: DNG (a camera's, and one Adobe DNG Converter demosaiced), Canon CR2, CR3 (C-RAW and lossless) and CRW, Sony ARW, Nikon NEF (lossy compressed) and NRW (uncompressed), Fujifilm RAF (X-Trans compressed, Bayer uncompressed), Panasonic RW2 and Leica RWL, Pentax PEF, Olympus ORF, Samsung SRW, Minolta MRW and Epson ERF"
 source = "https://raw.pixls.us/"
 license = "CC0-1.0"
 attribution = "the raw.pixls.us contributors"
@@ -725,3 +725,45 @@ name = "srw-samsung-ex1.srw"
 url = "https://raw.pixls.us/getfile.php/1204/nice/Samsung%20-%20EX1%20-%2014bit%20%284:3%29.SRW"
 sha256 = "a084890fd9d7995ceb746c18ecf5be48c95baf14286d5c0c480cc3daa25f3e37"
 size = 21699313
+
+# Canon EOS R6, lossless RAW (3:2) (raw.pixls.us file 4662, CC0)
+[[fixture.files]]
+name = "cr3-canon-eos-r6-raw.cr3"
+url = "https://raw.pixls.us/getfile.php/4662/nice/Canon%20-%20EOS%20R6%20-%203:2.CR3"
+sha256 = "81fab349ae9080fd0172583b7fd5ea36806e95ffa434909d2ccc6527dde34ee6"
+size = 22899798
+
+# Canon EOS D30, RAW (3:2) (raw.pixls.us file 1307, CC0)
+[[fixture.files]]
+name = "crw-canon-eos-d30.crw"
+url = "https://raw.pixls.us/getfile.php/1307/nice/Canon%20-%20EOS%20D30%20-%20RAW%20%283:2%29.CRW"
+sha256 = "4ee482f2b6f9f1a8d370703ea04e9f2abaa49356973a7f56b229af93a78e8a2e"
+size = 2993260
+
+# Epson R-D1, 12bit (3:2) (raw.pixls.us file 2680, CC0)
+[[fixture.files]]
+name = "erf-epson-r-d1.erf"
+url = "https://raw.pixls.us/getfile.php/2680/nice/Epson%20-%20R-D1%20-%2012bit%20%283:2%29.ERF"
+sha256 = "09d8e533d93116294a9f3e161ed868e929454c7b946e083b644bd6bb75bcb5e4"
+size = 9958994
+
+# Minolta DiMAGE 5, 4:3 (raw.pixls.us file 7795, CC0)
+[[fixture.files]]
+name = "mrw-minolta-dimage-5.mrw"
+url = "https://raw.pixls.us/getfile.php/7795/nice/Minolta%20-%20DiMAGE%205%20-%204:3.MRW"
+sha256 = "d60bfd80bcb1f7b9c88b14a5e46ea27885bbf92d990ab30b3939288678fea0d9"
+size = 6422144
+
+# Nikon COOLPIX P1000, 12bit uncompressed (4:3) (raw.pixls.us file 3381, CC0)
+[[fixture.files]]
+name = "nrw-nikon-coolpix-p1000.nrw"
+url = "https://raw.pixls.us/getfile.php/3381/nice/Nikon%20-%20COOLPIX%20P1000%20-%2012bit%2012bit%20uncompressed%20%284:3%29.NRW"
+sha256 = "1d9470ee083f914e51aa0be782161b432f27f87dbef551a59ec435f5dbc289dd"
+size = 26472704
+
+# Leica D-LUX 5, 1:1 (raw.pixls.us file 2811, CC0)
+[[fixture.files]]
+name = "rwl-leica-d-lux-5.rwl"
+url = "https://raw.pixls.us/getfile.php/2811/nice/Leica%20-%20D-LUX%205%20-%201:1.RWL"
+sha256 = "ceeb5e5bf2358c04706e807bc023971e085d969b6f36491a57ecff051a05e8d3"
+size = 10355200
