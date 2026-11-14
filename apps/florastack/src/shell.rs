@@ -5,6 +5,7 @@
 use florastack_engine::time::Instant;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use florastack_engine::{
@@ -71,8 +72,11 @@ pub struct Shell {
     pub frames: Vec<FrameRow>,
     pub outputs: Vec<OutputRow>,
     pub notices: Vec<Notice>,
-    /// The latest preview stack (`stack.preview`'s file), until a project is opened or closed.
+    /// The latest preview, until a project is opened or closed: a running capture's file, or a name for the stack
+    /// preview the engine holds (`stack.preview`), which is `preview_image`.
     pub preview: Option<PathBuf>,
+    /// The latest stack preview's pixels, when that is what `preview` names.
+    pub preview_image: Option<Arc<florastack_engine::Image<f32>>>,
     /// Advances when a running capture replaces the contents at its preview path.
     pub preview_revision: u64,
     /// The output a stacking job just made, for the viewer to show.
@@ -126,6 +130,7 @@ impl Shell {
             outputs: Vec::new(),
             notices: Vec::new(),
             preview: None,
+            preview_image: None,
             preview_revision: 0,
             made: None,
             stacks_found: None,
@@ -155,9 +160,9 @@ impl Shell {
 
     /// Automation uses the same engine on this thread; its normal events refresh the UI on the next poll.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn automation(&mut self, method: &str, params: Value) -> Result<Value, CommandError> {
+    pub fn automation(&mut self, access: florastack_engine::automation::Access, method: &str, params: Value) -> Result<Value, CommandError> {
         let compute_changed = method == "command.dispatch" && params.get("command").and_then(Value::as_str) == Some("compute.set");
-        let result = florastack_engine::automation::request(&mut self.engine, method, params);
+        let result = florastack_engine::automation::request(&mut self.engine, access, method, params);
         if result.is_ok() && compute_changed {
             self.forget_compute();
         }
@@ -274,6 +279,7 @@ impl Shell {
                     }
                     if matches!(state, ProjectEvent::Opened | ProjectEvent::Closed) {
                         self.preview = None;
+                        self.preview_image = None;
                         self.threshold = None;
                         self.relief = None;
                     }
@@ -300,6 +306,7 @@ impl Shell {
             && let Some(preview) = &job.preview
         {
             self.preview = Some(PathBuf::from(&preview.path));
+            self.preview_image = None;
             if self.jobs.get(&job.id).and_then(|previous| previous.preview.as_ref()) != Some(preview) {
                 self.preview_revision = self.preview_revision.saturating_add(1);
             }
@@ -311,10 +318,13 @@ impl Shell {
                     self.notify(message, true);
                 }
                 JobState::Done if job.command == "stack.preview" => {
-                    self.preview = job.result.as_ref().and_then(|r| r["path"].as_str()).map(PathBuf::from);
+                    self.preview_image = self.engine.stack_preview();
+                    self.preview = self.preview_image.is_some().then(|| PathBuf::from("stack preview"));
+                    self.preview_revision = self.preview_revision.saturating_add(1);
                 }
                 JobState::Done if job.command == "capture.camera" => {
                     if let Some(path) = job.result.as_ref().and_then(|r| r["path"].as_str()) {
+                        self.preview_image = None;
                         self.preview = Some(PathBuf::from(path));
                     }
                 }

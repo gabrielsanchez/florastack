@@ -21,9 +21,10 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                     "With a `name`, the project folder is `<name>.florastack` in `folder`; without one, the project is \
                      temporary (unnamed) and goes in the temporary-projects folder, where orphan cleanup offers to \
                      move it to the trash once it is old and still unnamed. The project that is open is closed first, \
-                     which is refused while it has unsaved changes, unless `discardChanges`.",
+                     which is refused while it has unsaved changes, unless `discardChanges`. The folder is made \
+                     wherever `folder` says, so the command counts as one that writes files outside the open project.",
                 )
-                .effects(Effects::Project)
+                .effects(Effects::Files)
                 .examples(&[r#"{ "name": "Bee head", "folder": "C:/Stacks" }"#, "{}"]),
             new,
         ),

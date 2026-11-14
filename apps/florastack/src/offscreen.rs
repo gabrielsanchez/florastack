@@ -158,13 +158,13 @@ fn readback(device: &wgpu::Device, buffer: &wgpu::Buffer, size: [u32; 2], stride
     Ok(egui::ColorImage::from_rgba_unmultiplied([size[0] as usize, size[1] as usize], &pixels))
 }
 
-pub fn run(options: Options, port: u16, token: String, size: [u32; 2]) -> Result<(), String> {
+pub fn run(options: Options, port: u16, token: String, access: florastack_engine::automation::Access, size: [u32; 2]) -> Result<(), String> {
     let mut renderer = Renderer::new()?;
     let ctx = egui::Context::default();
     let gpu = GpuViewer::install(&renderer.state).ok_or("could not install the GPU viewer")?;
     let mut app = FloraStackApp::with_context(&ctx, options, Prefs::default(), Some(gpu));
     app.parallax.gpu = crate::relief_viewer::Renderer::install(&renderer.state);
-    let address = app.enable_control(&ctx, port, token).map_err(|e| e.to_string())?;
+    let address = app.enable_control(&ctx, port, token, access).map_err(|e| e.to_string())?;
     eprintln!("control: {address}");
     while !app.is_quitting() {
         renderer.frame(&mut app, &ctx, size)?;

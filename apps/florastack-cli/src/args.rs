@@ -59,7 +59,7 @@ impl DeviceArg {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Serve every registry command as an MCP tool over stdio (stdout is protocol-only).
-    #[command(after_help = examples(&["mcp", "mcp --connect 127.0.0.1:49152 --token-file control-token"]))]
+    #[command(after_help = examples(&["mcp", "mcp --access project", "mcp --connect 127.0.0.1:49152 --token-file control-token"]))]
     Mcp {
         /// Bridge to a desktop control listener, e.g. 127.0.0.1:49152. Otherwise run headless.
         #[arg(long, requires = "token_file")]
@@ -67,6 +67,11 @@ pub enum Command {
         /// File containing the desktop's control token.
         #[arg(long, requires = "connect")]
         token_file: Option<PathBuf>,
+        /// What MCP clients may do: read (queries only), project (also change the open project) or full (also
+        /// write files outside it: exports, presets, new projects). Only the tools of that level are listed. Bridged
+        /// to a desktop app, its own --control-access applies as well.
+        #[arg(long, default_value = "full")]
+        access: florastack_engine::automation::Access,
     },
     /// Align, stack and export files or the image files directly in a folder.
     #[command(after_help = examples(&[

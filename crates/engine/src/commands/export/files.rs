@@ -168,7 +168,7 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
                         )?);
                     }
                     let source = if metadata { frame_metadata(source.as_deref(), &mut warnings) } else { None };
-                    let metadata = OutputMetadata { source, frame_count: Some(frame_count), modified: None };
+                    let metadata = OutputMetadata { source, frame_count: Some(frame_count), modified: Some(crate::commands::output::made(&output)) };
                     let staged = publication.stage_image(&path, &pixels, spec, &metadata)?;
                     warnings.extend(staged.warnings.iter().map(|w| format!("{}: {w}", display(&path))));
                     (path, what, staged.hash, staged.bytes)

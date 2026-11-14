@@ -52,8 +52,8 @@ fn execute(cli: Cli) -> Result<(), Failure> {
     // What crashed runs left of the tiles they spilled goes first, as when the desktop app starts. A run that can't
     // clean up still does its work.
     let _ = client.engine.dispatch("cache.removeAbandoned", json!({}));
-    if let Command::Mcp { connect, token_file } = &cli.command {
-        return mcp::serve(client.into_engine(), connect.as_deref(), token_file.as_deref());
+    if let Command::Mcp { connect, token_file, access } = &cli.command {
+        return mcp::serve(client.into_engine(), connect.as_deref(), token_file.as_deref(), *access);
     }
     let result = match cli.command {
         Command::Stack(args) => stack(&mut client, &args),

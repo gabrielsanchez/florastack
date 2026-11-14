@@ -1,20 +1,96 @@
 //! Shared read-only resources and dispatch for automation hosts. Project mutations still go through the registry.
+//!
+//! A host gives each connection an [`Access`] level, and the engine holds its clients to it by what every command
+//! declares it may change ([`crate::registry::Effects`]): a client sees, in `commands.list`, and may dispatch only
+//! the commands of its level. The level is the host's to choose (a flag of the desktop app's control channel and of
+//! the MCP server), never the client's.
 
 use base64::Engine as _;
 use serde::Deserialize;
 
+use crate::registry::Effects;
 use crate::{CommandError, Engine, Invalid, JobId, Value, json};
+
+/// How much an automation client may do, from least to most.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Access {
+    /// Queries only: nothing changes, in the project or outside it.
+    Read,
+    /// Also the commands that change the open project or the session, and write in the project's own folder.
+    Project,
+    /// Every command, those that write files outside the project folder too: exports, presets, new projects, the
+    /// trash.
+    #[default]
+    Full,
+}
+
+impl Access {
+    pub const ALL: [Access; 3] = [Access::Read, Access::Project, Access::Full];
+
+    /// The level's name, as the hosts' flags take it: `read`, `project` or `full`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Access::Read => "read",
+            Access::Project => "project",
+            Access::Full => "full",
+        }
+    }
+
+    /// The least level that may run a command with these effects.
+    pub fn needed(effects: Effects) -> Access {
+        match effects {
+            Effects::None => Access::Read,
+            Effects::Project => Access::Project,
+            Effects::Files => Access::Full,
+        }
+    }
+
+    /// Whether a client of this level may run a command with these effects.
+    pub fn permits(self, effects: Effects) -> bool {
+        self >= Access::needed(effects)
+    }
+}
+
+impl std::str::FromStr for Access {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Access, String> {
+        Access::ALL.into_iter().find(|a| a.name() == text).ok_or_else(|| format!("`{text}` is no access level: use read, project or full"))
+    }
+}
+
+impl std::fmt::Display for Access {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// Refuses a command that `access` doesn't allow. A name that is no command passes, for dispatch to say so.
+fn permit(engine: &Engine, access: Access, command: &str) -> Result<(), CommandError> {
+    let Some(info) = engine.registry().get(command) else { return Ok(()) };
+    if access.permits(info.effects) {
+        return Ok(());
+    }
+    let changes = match info.effects {
+        Effects::None => "nothing",
+        Effects::Project => "the open project",
+        Effects::Files => "files outside the project",
+    };
+    Err(CommandError::Forbidden { command: info.name.to_owned(), changes, access: access.name(), needs: Access::needed(info.effects).name() })
+}
 
 /// Resource URIs are scoped to the currently open project, never arbitrary file paths.
 pub const PROJECT_URI: &str = "florastack://project";
 
-/// Handles the engine portion of the control protocol. Hosts handle `ui.*` themselves.
-pub fn request(engine: &mut Engine, method: &str, params: Value) -> Result<Value, CommandError> {
+/// Handles the engine portion of the control protocol for a client of `access`. Hosts handle `ui.*` themselves.
+pub fn request(engine: &mut Engine, access: Access, method: &str, params: Value) -> Result<Value, CommandError> {
     engine.poll();
     match method {
-        "commands.list" => encode(engine.registry().list()),
+        "commands.list" => encode(engine.registry().list().into_iter().filter(|info| access.permits(info.effects)).collect::<Vec<_>>()),
         "command.dispatch" => {
             let p: Dispatch = decode(method, params)?;
+            permit(engine, access, &p.command)?;
             engine.dispatch(&p.command, p.params).map(|d| match d {
                 crate::Dispatched::Done(result) => json!({"result": result}),
                 crate::Dispatched::Started(job) => json!({"job": job}),

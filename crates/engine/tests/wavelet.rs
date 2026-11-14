@@ -167,7 +167,7 @@ fn the_preview_and_slabbing_take_the_wavelet_method_and_its_settings_alone() {
     let files = write(dir.path(), "stack", &frames, BitDepth::U16);
     let mut engine = aligned(dir.path(), &files);
     let before = state(&engine);
-    let previewed = run(&mut engine, "stack.preview", r#"{ "method": "wavelet", "window": 5, "grit": 0.25, "noiseFloor": 1.0 }"#);
+    let previewed = run(&mut engine, "stack.preview", r#"{ "method": "wavelet", "window": 5, "grit": 0.25, "noiseFloor": 1.0, "keepFile": true }"#);
     assert_eq!(previewed["settings"]["noise_floor"], 1.0, "the full-size setting, which the preview divides by 4");
     assert_eq!((previewed["width"].as_u64(), previewed["height"].as_u64()), (Some(40), Some(30)), "{previewed}");
     assert_eq!(

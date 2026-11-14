@@ -77,6 +77,7 @@ Every user-facing action is a named command in `florastack-engine`'s registry (s
 - Only pure view state, such as zoom, pan, panel layout and the open tab, lives in the UI alone.
 - Long commands (aligning, stacking) run as cancellable jobs that report progress.
 - A new command comes with a test that dispatches it from JSON.
+- What a command may change (`Meta::effects`) is what the control channel and the MCP server hold their clients to (`automation::Access`): only a query changes nothing, a command that can write outside the open project's folder declares `Effects::Files`, and `crates/engine/tests/effects.txt` pins every command's.
 
 ### Adding a command
 

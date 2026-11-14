@@ -118,7 +118,7 @@ fn every_stacking_command_gives_on_the_gpu_what_it_gives_on_the_cpu() {
     }
     // The preview: a quarter-size stack, written as a file.
     for method in ["average", "pyramid", "depth-map"] {
-        let params = format!(r#"{{ "method": "{method}" }}"#);
+        let params = format!(r#"{{ "method": "{method}", "keepFile": true }}"#);
         let read = |engine: &mut Engine| {
             let previewed = run(engine, "stack.preview", &params);
             match florastack_codecs::read_file(Path::new(previewed["path"].as_str().unwrap()), &florastack_codecs::ReadOptions::default())

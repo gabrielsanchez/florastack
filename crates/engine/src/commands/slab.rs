@@ -134,6 +134,11 @@ impl Params for SlabbedParams {
         }
         self.slabs.check_for(MethodName::Pyramid).map_err(|e| nested("slabs", e))?;
         self.final_stack.check_for(MethodName::Pyramid).map_err(|e| nested("final", e))?;
+        for (parent, stage) in [("slabs", &self.slabs), ("final", &self.final_stack)] {
+            if stage.keep_file {
+                return Err(Invalid::new(format!("{parent}.keepFile"), "is for `stack.preview` alone"));
+            }
+        }
         if let Some(size) = self.slab_size
             && !(MIN_SLAB..=MAX_ITEMS).contains(&size)
         {
