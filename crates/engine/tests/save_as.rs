@@ -108,3 +108,74 @@ fn missing_and_changed_frames_are_listed() {
     let name = |p: &Path| p.display().to_string();
     assert_eq!(states, [(name(&files[0]).as_str(), "missing"), (name(&files[2]).as_str(), "changed")]);
 }
+
+#[test]
+fn a_project_moved_with_its_frames_finds_them() {
+    let dir = TempDir::new("moved-with-frames");
+    let shoot = dir.path().join("shoot");
+    std::fs::create_dir_all(&shoot).unwrap();
+    let files = frame_files(&shoot, 3);
+    let mut engine = Engine::new(config(dir.path()));
+    run(&mut engine, "project.new", "{}");
+    run(&mut engine, "project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, path_list(&files)));
+    run(&mut engine, "project.rename", r#"{ "name": "Wasp" }"#);
+    // Saved beside its frames, out of the temporary-projects folder: the file says where they are from there.
+    run(&mut engine, "project.saveAs", &format!(r#"{{ "folder": {} }}"#, quoted(&shoot)));
+    assert!(!engine.is_dirty());
+    let near: Vec<String> = engine.project().unwrap().frames.iter().map(|f| f.near.clone().unwrap()).collect();
+    let want: Vec<String> = files.iter().map(|f| f.strip_prefix(&shoot).unwrap().to_str().unwrap().replace(std::path::MAIN_SEPARATOR, "/")).collect();
+    assert_eq!(near, want);
+    run(&mut engine, "project.close", "{}");
+
+    // The shoot's folder goes elsewhere, as onto another machine, and loses a frame on the way.
+    let moved = dir.path().join("archive").join("2026");
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::rename(&shoot, &moved).unwrap();
+    let there = |file: &Path| moved.join(file.strip_prefix(&shoot).unwrap());
+    std::fs::remove_file(there(&files[1])).unwrap();
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(&moved.join("Wasp.florastack"))));
+    let checked = run(&mut engine, "project.checkFrames", "{}");
+    let listed: Vec<(&str, &str)> =
+        checked["frames"].as_array().unwrap().iter().map(|f| (f["path"].as_str().unwrap(), f["state"].as_str().unwrap())).collect();
+    assert_eq!(listed, [(files[1].display().to_string().as_str(), "missing")], "the others are found where they are now: {checked}");
+    // And read from there: the project's frames are listed with the files they come from.
+    let frames = run(&mut engine, "project.frames", "{}");
+    assert_eq!(frames["frames"][0]["file"].as_str().map(std::path::PathBuf::from), Some(there(&files[0])), "{frames}");
+}
+
+#[test]
+fn frames_added_new_are_checked_quickly_once_they_have_settled() {
+    let dir = TempDir::new("settled-frames");
+    let files = frame_files(dir.path(), 3);
+    let mut engine = Engine::new(config(dir.path()));
+    run(&mut engine, "project.new", &format!(r#"{{ "name": "Fresh", "folder": {} }}"#, quoted(dir.path())));
+    run(&mut engine, "project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, path_list(&files)));
+    run(&mut engine, "project.save", "{}");
+    let stored = |engine: &Engine| engine.project().unwrap().frames.iter().filter(|f| f.modified.is_some()).count();
+    assert_eq!(stored(&engine), 0, "just written: their times can't be trusted yet");
+    assert_eq!(run(&mut engine, "project.checkFrames", "{}")["settled"], json!(0));
+
+    // An hour later (the files' times moved back instead): a check hashes them one last time.
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for file in &files[..2] {
+        std::fs::File::options().write(true).open(file).unwrap().set_modified(an_hour_ago).unwrap();
+    }
+    let checked = run(&mut engine, "project.checkFrames", "{}");
+    assert_eq!((&checked["settled"], &checked["frames"]), (&json!(2), &json!([])), "{checked}");
+    assert_eq!(stored(&engine), 2);
+    assert!(!engine.is_dirty(), "nothing the user must save");
+    assert_eq!(run(&mut engine, "edit.history", "{}")["undo"][0]["command"], "project.addFrames", "and no undo step");
+    assert_eq!(run(&mut engine, "project.checkFrames", "{}")["settled"], json!(0), "by their times from now on");
+    // The times go into the file with the next save, and a changed file is still found.
+    run(&mut engine, "project.save", "{}");
+    let project = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.close", "{}");
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {}, "readOnly": true }}"#, quoted(&project)));
+    assert_eq!(stored(&engine), 2);
+    std::fs::File::options().write(true).open(&files[2]).unwrap().set_modified(an_hour_ago).unwrap();
+    assert_eq!(run(&mut engine, "project.checkFrames", "{}")["settled"], json!(0), "a project open for reading keeps nothing");
+    assert_eq!(stored(&engine), 2);
+    common::write_tiff(&files[0], 999);
+    let checked = run(&mut engine, "project.checkFrames", "{}");
+    assert_eq!(checked["frames"][0]["state"], "changed", "{checked}");
+}

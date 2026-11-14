@@ -54,6 +54,11 @@ The project holds the frames' alignment, every output and its retouching. Until 
 Save as…** names it and puts it in a folder of your choice, as `<name>.florastack/`, which **File > Open project…**
 opens again. Temporary projects that go unused for 30 days are offered for the trash the next time FloraStack starts.
 
+A project refers to your photos where they are; it holds no copy of them. Keep the project folder with the photos, in
+the same folder or one near it, and you can move both together, to another drive or another computer: the project
+finds its frames by where they are from itself. When a project opens, FloraStack tells you which frames are missing
+or have changed since you added them.
+
 ## The same from the command line
 
 ```sh

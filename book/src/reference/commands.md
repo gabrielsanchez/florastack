@@ -913,7 +913,7 @@ Examples:
 
 **Cache sizes.** How much the caches take: temporary projects, spilled tiles and the open project's cache.
 
-Walks the folders and adds up their files: the temporary projects' folder (unnamed projects, which orphan cleanup moves to the trash once they are old), the tile folder (tiles of running stacks, and those crashed runs left), and the open project's `cache/` and `previews/` folders (results kept so that nothing is computed twice; cleaned of what the project no longer refers to when it closes).
+Walks the folders and adds up their files: the temporary projects' folder (unnamed projects, which orphan cleanup moves to the trash once they are old), the tile folder (tiles of running stacks, and those crashed runs left), and the open project's `cache/` and `previews/` folders (results kept so that nothing is computed twice; cleaned of what the project no longer refers to when it closes). `temporaryProjects.drive` says what that folder is on: from a `removable` or `network` drive the system may delete what orphan cleanup moves to the trash instead of keeping it.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -2466,11 +2466,11 @@ Examples:
 
 **Check frames.** Lists the frames whose files are missing or changed since they were added.
 
-Each frame's file is compared with what was added, by its size and modification time, and by its contents when the time changed. A missing frame can still be stacked from the cache where it was aligned; a changed one must be added and aligned again. The desktop app asks this when a project opens.
+Each frame's file is compared with what was added, by its size and modification time, and by its contents when the time changed. A missing frame can still be stacked from the cache where it was aligned; a changed one must be added and aligned again. A file that isn't where its frame's path says is looked for where it was from the project folder when the project was last saved, so a project moved together with its frames finds them. A frame added while its file was new (within three seconds of its writing, as tethered and watched frames are) is compared by its contents until a check finds its file settled; the project then keeps the file's time, with its next save, and later checks are quick (`settled` counts those frames). The desktop app runs this when a project opens.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Query | No | An open project | Nothing |
+| Instant | No | An open project | The project or the session |
 
 Parameters: none.
 
@@ -2480,6 +2480,7 @@ Result:
 |---|---|---|
 | `checked` | integer | How many frames were checked. |
 | `frames` | array of object | The ones missing, changed or unreadable; empty when every file is the one added. |
+| `settled` | integer | How many frames, compared by their contents and found unchanged, had their file's time taken for the checks to come, which are quick for them from the project's next save on. |
 
 Example:
 
@@ -2521,7 +2522,7 @@ Examples:
 
 **Find old temporary projects.** Lists the temporary projects old enough to be moved to the trash.
 
-Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that haven't been saved or opened for `days` days (30 by default).
+Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that haven't been saved or opened for `days` days (30 by default). `drive` says what the folder is on: from a `removable` or `network` drive the system may delete what is moved to the trash instead of keeping it (Windows has no Recycle Bin there).
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -2537,6 +2538,7 @@ Result:
 
 | Name | Type | Description |
 |---|---|---|
+| `drive` | `"local"` \| `"removable"` \| `"network"` \| `"unknown"` | What the folder is on. From a `removable` or `network` drive, the system may delete what is moved to the trash instead of keeping it. |
 | `folder` | string | The temporary-projects folder looked in. |
 | `orphans` | array of object |  |
 

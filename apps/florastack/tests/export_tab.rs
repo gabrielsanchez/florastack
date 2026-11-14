@@ -199,6 +199,7 @@ fn preferences_reach_the_engine_and_say_nothing_is_sent() {
     changed.device = florastack_engine::Device::Cpu;
     changed.cache_folder = cache.display().to_string();
     changed.autosave_minutes = 0;
+    changed.orphan_days = 7;
     let ctx = harness.ctx.clone();
     assert!(harness.state_mut().apply_preferences(&ctx, &changed));
     let info = harness.state_mut().shell.run("compute.info", json!({})).unwrap();
@@ -210,6 +211,7 @@ fn preferences_reach_the_engine_and_say_nothing_is_sent() {
         (prefs.memory_mb, prefs.device, prefs.cache_folder.as_deref(), prefs.autosave()),
         (Some(2048), Some(florastack_engine::Device::Cpu), Some(cache.as_path()), None)
     );
+    assert_eq!(prefs.orphan_days, Some(7), "the age at which temporary projects are offered for the trash");
     // A new project goes into the cache folder's temporary projects.
     harness.state_mut().shell.run("project.new", json!({}));
     harness.step();

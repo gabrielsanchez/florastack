@@ -64,7 +64,8 @@ keeps this diagram's crates and those rules the same.
 A project is a folder, `<name>.florastack/`:
 
 - `project.json`: the frames, alignment, outputs with their retouch and annotation layers, and preferences; versioned,
-  with migrations from older versions.
+  with migrations from older versions. A frame is its file's absolute path, size and SHA-256, and where the file is
+  from the folder that holds the project folder, by which a project moved together with its frames finds them.
 - `cache/` and `previews/`: developed frames, results and previews, each referred to from `project.json` by path, size
   and SHA-256, and keyed by what it was made from, so that nothing is computed twice and nothing stale is used.
 - A lock file, so that two processes never edit one project.

@@ -10,7 +10,7 @@ use std::path::Path;
 use common::TempDir;
 use florastack_core::Affine;
 use florastack_project::{
-    Alignment, AlignmentRun, Area, CacheProblem, Develop, FrameFile, FrameState, Group, Input, MapName, Maps, NewOutput, Preset, ProjectError,
+    Alignment, AlignmentRun, Area, CacheProblem, Develop, Edit, FrameFile, FrameState, Group, Input, MapName, Maps, NewOutput, Preset, ProjectError,
     ProjectFolder, Timestamp, Value, schema,
 };
 use serde_json::json;
@@ -306,4 +306,78 @@ fn an_older_file_keeps_its_modification_time_for_quick_checks() {
     assert_eq!(folder.check_frame(project.frame(id).unwrap()).unwrap(), FrameState::Unchanged);
     std::fs::write(&photo, b"PIXELS").unwrap();
     assert_eq!(folder.check_frame(project.frame(id).unwrap()).unwrap(), FrameState::Changed, "a new time: hashed again");
+}
+
+/// A frame added while its file was new keeps no modification time, and every check hashes it; a later check that
+/// finds it unchanged, with a time old enough by then, hands that time out for the checks after it.
+#[test]
+fn a_settled_frame_gets_its_time_for_quick_checks() {
+    let dir = TempDir::new("rearm");
+    let (folder, mut project) = ProjectFolder::create(dir.path(), "Rearm").unwrap();
+    let photo = dir.path().join("IMG_4.tif");
+    std::fs::write(&photo, b"pixels").unwrap();
+    let id = project.add_frame(FrameFile::read(&photo).unwrap(), None);
+    assert_eq!(project.frame(id).unwrap().modified, None);
+    let check = folder.examine_frame(project.frame(id).unwrap()).unwrap();
+    assert_eq!((check.state, check.settled), (FrameState::Unchanged, None), "still too new to trust");
+
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options().write(true).open(&photo).unwrap().set_modified(an_hour_ago).unwrap();
+    let check = folder.examine_frame(project.frame(id).unwrap()).unwrap();
+    let settled = Timestamp::from_system_time(an_hour_ago);
+    assert_eq!((check.state, check.settled), (FrameState::Unchanged, Some(settled)));
+    let inverse = project.apply(Edit::SetFrameModified { frame: id, modified: check.settled }).unwrap();
+    assert!(matches!(inverse, Edit::SetFrameModified { modified: None, .. }));
+    assert_eq!(project.frame(id).unwrap().modified, Some(settled));
+    // The quick check now: nothing hashed, so nothing more to keep; and a changed file is still found.
+    let check = folder.examine_frame(project.frame(id).unwrap()).unwrap();
+    assert_eq!((check.state, check.settled), (FrameState::Unchanged, None));
+    std::fs::write(&photo, b"PIXELS").unwrap();
+    let check = folder.examine_frame(project.frame(id).unwrap()).unwrap();
+    assert_eq!((check.state, check.settled), (FrameState::Changed, None));
+}
+
+#[test]
+fn a_project_moved_with_its_frames_finds_them() {
+    let dir = TempDir::new("moved");
+    let old = dir.path().join("old");
+    for sub in ["work", "photos"] {
+        std::fs::create_dir_all(old.join(sub)).unwrap();
+    }
+    let (mut folder, mut project) = ProjectFolder::create(&old.join("work"), "Bee").unwrap();
+    let beside = project.add_frame(frame_file(&old.join("work"), "IMG_1.tif", b"one"), None);
+    let above = project.add_frame(frame_file(&old.join("photos"), "IMG_2.tif", b"two"), None);
+    let lost = project.add_frame(frame_file(&old.join("photos"), "IMG_3.tif", b"three"), None);
+    folder.save(&mut project).unwrap();
+    let near = |project: &florastack_project::Project, id| project.frame(id).unwrap().near.clone();
+    assert_eq!(near(&project, beside).as_deref(), Some("IMG_1.tif"));
+    assert_eq!(near(&project, above).as_deref(), Some("../photos/IMG_2.tif"));
+    drop(folder);
+
+    // Everything moves: another drive, another machine. One frame is left behind.
+    let new = dir.path().join("new");
+    std::fs::rename(&old, &new).unwrap();
+    std::fs::remove_file(new.join("photos").join("IMG_3.tif")).unwrap();
+    let (mut folder, mut project) = ProjectFolder::open(&new.join("work").join("Bee.florastack")).unwrap();
+    assert!(project.frame(above).unwrap().path.contains("old"), "the stored path is the one it was added by");
+    assert_eq!(folder.frame_path(project.frame(beside).unwrap()), new.join("work").join("IMG_1.tif"));
+    assert_eq!(folder.frame_path(project.frame(above).unwrap()), new.join("photos").join("IMG_2.tif"));
+    assert_eq!(folder.frame_path(project.frame(lost).unwrap()), old.join("photos").join("IMG_3.tif"), "found nowhere: as stored");
+    for (id, state) in [(beside, FrameState::Unchanged), (above, FrameState::Unchanged), (lost, FrameState::Missing)] {
+        assert_eq!(folder.check_frame(project.frame(id).unwrap()).unwrap(), state);
+    }
+    // Saved where it is now, it still knows where its frames are from itself, and moves again.
+    let before = project.frames.clone();
+    folder.save(&mut project).unwrap();
+    assert_eq!(project.frames, before);
+    drop(folder);
+    let back = dir.path().join("back");
+    std::fs::rename(&new, &back).unwrap();
+    let (folder, project) = ProjectFolder::open(&back.join("work").join("Bee.florastack")).unwrap();
+    assert_eq!(folder.frame_path(project.frame(above).unwrap()), back.join("photos").join("IMG_2.tif"));
+
+    // A file where the stored path says comes first, and a frame on its own is never looked for elsewhere.
+    std::fs::create_dir_all(old.join("photos")).unwrap();
+    std::fs::write(old.join("photos").join("IMG_2.tif"), b"two").unwrap();
+    assert_eq!(folder.frame_path(project.frame(above).unwrap()), old.join("photos").join("IMG_2.tif"));
 }

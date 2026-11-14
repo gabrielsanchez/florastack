@@ -40,13 +40,16 @@ the computer's memory beyond it.
 ## The cache and temporary files
 
 - **Temporary projects**, made when you drop photos on the window without naming a project, live in the app's data
-  folder (on Windows under `%LOCALAPPDATA%`). After 30 days unused, FloraStack offers to move them to the trash.
-  `florastack-cli project clean-orphans` does the same from the command line (`--dry-run` lists them first).
+  folder (on Windows under `%LOCALAPPDATA%`). After 30 days unused, FloraStack offers to move them to the trash;
+  the preferences set another age. `florastack-cli project clean-orphans` does the same from the command line
+  (`--dry-run` lists them first).
 - **Stacking's work on disk**, the tiles beyond the memory budget, goes to the system's temporary folder, and is
-  removed when the stack ends. A stack that crashed leaves its folder behind: **Clean up** in the preferences removes
-  those.
+  removed when the stack ends. A stack that crashed leaves its folder behind: FloraStack removes those when it
+  starts, the command-line tool at every run, and **Clean up** in the preferences at any time.
 - **A project's cache**, in its `cache/` and `previews/` folders, keeps developed frames, previews and results, so that
   nothing is computed twice. It is cleaned of what the project no longer uses when the project closes.
 
 **File > Preferences > Cache** shows how much each takes and can move temporary projects and stacking's work to
-another folder: a fast local drive with room to spare is best.
+another folder: a fast local drive with room to spare is best. On a removable or a network drive the system may
+have no trash to move old temporary projects to and delete them for good instead (Windows has no Recycle Bin
+there); the preferences and the offer at startup say so when the cache folder is on such a drive.

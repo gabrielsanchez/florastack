@@ -136,8 +136,16 @@ pub enum Then {
 /// A notice shown until dismissed: old temporary projects, or frames missing or changed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Banner {
-    Orphans { paths: Vec<String>, bytes: u64 },
-    Frames { missing: usize, changed: usize },
+    /// `drive` when the folder is on a drive the system may delete from instead of moving to the trash.
+    Orphans {
+        paths: Vec<String>,
+        bytes: u64,
+        drive: Option<String>,
+    },
+    Frames {
+        missing: usize,
+        changed: usize,
+    },
 }
 
 /// See the module documentation.
@@ -312,12 +320,13 @@ impl FloraStackApp {
     /// The startup cleanup: abandoned tile folders, and old temporary projects offered for the trash.
     fn startup(&mut self) {
         let _ = self.shell.run("cache.removeAbandoned", json!({}));
-        if let Some(found) = self.shell.run("project.findOrphans", json!({})) {
+        if let Some(found) = self.shell.run("project.findOrphans", json!({ "days": self.prefs.orphan_days })) {
             let orphans = found["orphans"].as_array().cloned().unwrap_or_default();
             if !orphans.is_empty() {
                 let bytes = orphans.iter().filter_map(|o| o["bytes"].as_u64()).sum();
                 let paths = orphans.iter().filter_map(|o| o["path"].as_str().map(str::to_owned)).collect();
-                self.banners.push(Banner::Orphans { paths, bytes });
+                let drive = found["drive"].as_str().filter(|d| matches!(*d, "removable" | "network")).map(str::to_owned);
+                self.banners.push(Banner::Orphans { paths, bytes, drive });
             }
         }
     }

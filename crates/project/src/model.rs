@@ -173,6 +173,13 @@ pub struct Frame {
     pub(crate) id: FrameId,
     /// The file: an absolute path, or one relative to the folder that holds the project folder.
     pub path: String,
+    /// Where the file is from the folder that holds the project folder, for an absolute `path`: its folders and name
+    /// separated by `/`, with a `..` for every folder to go up first. Saving writes it for every file that is in its
+    /// place then (`ProjectFolder::save`), and a project moved together with its frames, to another machine too, finds
+    /// them by it where `path` leads nowhere any more (`ProjectFolder::frame_path`). None for a file on another drive
+    /// than the project, which has no such path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub near: Option<String>,
     /// Its size in bytes when it was added.
     pub size: u64,
     /// Its modification time when it was hashed, which tells a quick check whether to hash it again. It is kept only
@@ -231,7 +238,7 @@ pub const TRUSTED_AGE: Duration = Duration::from_secs(3);
 
 /// `modified`, if it is at least [`TRUSTED_AGE`] old now, just after the file was hashed. A time in the future (a
 /// camera clock set ahead, say) isn't trusted either.
-fn trusted_modified(modified: Option<SystemTime>) -> Option<Timestamp> {
+pub(crate) fn trusted_modified(modified: Option<SystemTime>) -> Option<Timestamp> {
     let modified = modified?;
     let age = SystemTime::now().duration_since(modified).ok()?;
     (age >= TRUSTED_AGE).then(|| Timestamp::from_system_time(modified))
@@ -508,6 +515,7 @@ impl Project {
         self.frames.push(Frame {
             id,
             path: file.path,
+            near: None,
             size: file.size,
             modified: file.modified,
             hash: file.hash,
@@ -617,6 +625,9 @@ impl Project {
         for f in &self.frames {
             id(f.id.0)?;
             check_frame_path(&f.path)?;
+            if let Some(near) = &f.near {
+                check_frame_path(near)?;
+            }
             if let Some(a) = &f.alignment
                 && !a.is_finite()
             {

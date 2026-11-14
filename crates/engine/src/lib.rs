@@ -94,6 +94,6 @@ pub mod model {
     pub use florastack_project::SystemTrash;
     pub use florastack_project::{
         AlignedFrame, Alignment, AlignmentRun, Aspects, CacheRef, ContentHash, FolderTrash, Frame, FrameId, FrameState, Group, Input, LayerId,
-        MapName, Orphan, Output, OutputId, Preferences, Preset, Project, RetouchLayer, Timestamp, Trash,
+        MapName, Orphan, Orphans, Output, OutputId, Preferences, Preset, Project, RetouchLayer, Timestamp, Trash,
     };
 }
