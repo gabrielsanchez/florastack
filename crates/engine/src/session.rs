@@ -269,6 +269,16 @@ impl Session {
         Ok(())
     }
 
+    /// Changes the project without an undo step and without making it need saving: what is worth keeping with the
+    /// next save and no loss without one, such as the time a check of a frame's file can go by next time.
+    pub(crate) fn apply_unsaved(&mut self, edit: Edit) -> Result<(), CommandError> {
+        let aspects = edit.aspects();
+        self.check_locks(aspects)?;
+        self.writable()?.project.apply(edit)?;
+        self.changed(aspects);
+        Ok(())
+    }
+
     /// Undoes the last step and returns its label.
     pub(crate) fn undo(&mut self) -> Result<String, CommandError> {
         let aspects = match self.open.as_ref().and_then(|o| o.history.undo.last()) {
@@ -462,7 +472,12 @@ impl Session {
             }
         };
         let path = folder.path().to_path_buf();
-        self.open = Some(Open { folder, project, history });
+        let mut open = Open { folder, project, history };
+        // Saved again where it is now, so that the file says where its frames are from there (`Frame::near`).
+        if let Err(e) = open.folder.save(&mut open.project) {
+            tracing::warn!("the project isn't saved again in {}: {e}", path.display());
+        }
+        self.open = Some(open);
         self.events.push(Event::Project { state: ProjectEvent::Moved, path: path.display().to_string() });
         self.changed(Aspects::ALL);
         Ok((path, moved))

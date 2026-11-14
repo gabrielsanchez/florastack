@@ -49,6 +49,9 @@ fn execute(cli: Cli) -> Result<(), Failure> {
     let root = std::path::absolute(cli.temporary_projects.unwrap_or_else(|| std::env::temp_dir().join(branding::APP_ID).join("projects")))?;
     path_text(&root)?;
     let mut client = Client::new(root, cli.json_progress, cli.device.device());
+    // What crashed runs left of the tiles they spilled goes first, as when the desktop app starts. A run that can't
+    // clean up still does its work.
+    let _ = client.engine.dispatch("cache.removeAbandoned", json!({}));
     if let Command::Mcp { connect, token_file } = &cli.command {
         return mcp::serve(client.into_engine(), connect.as_deref(), token_file.as_deref());
     }
@@ -238,6 +241,14 @@ fn project(client: &mut Client, command: ProjectCommand) -> Result<(), Failure> 
         }
         ProjectCommand::CleanOrphans { days, dry_run } => {
             let found = client.run("project.findOrphans", json!({ "days": days }))?;
+            let any = found.get("orphans").and_then(Value::as_array).is_some_and(|o| !o.is_empty());
+            if let Some(drive @ ("removable" | "network")) = found.get("drive").and_then(Value::as_str)
+                && any
+            {
+                client.reporter.warning(&format!(
+                    "the temporary-projects folder is on a {drive} drive: the system may delete what is moved to the trash from there instead of keeping it"
+                ))?;
+            }
             if dry_run {
                 found
             } else {

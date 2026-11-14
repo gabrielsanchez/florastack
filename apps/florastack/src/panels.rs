@@ -486,13 +486,16 @@ fn banners(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     for (i, banner) in app.banners.clone().into_iter().enumerate() {
         egui::Frame::group(ui.style()).fill(ui.visuals().faint_bg_color).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| match &banner {
-                Banner::Orphans { paths, bytes } => {
+                Banner::Orphans { paths, bytes, drive } => {
                     #[allow(clippy::cast_precision_loss, reason = "a size in megabytes, shown rounded")]
                     let megabytes = *bytes as f64 / 1e6;
                     let count = paths.len();
                     ui.label(tr_args("orphans-found", &[("count", count.into()), ("size", format!("{megabytes:.0}").into())]));
+                    if let Some(drive) = drive {
+                        ui.colored_label(ui.visuals().warn_fg_color, tr(crate::preferences::drive_warning(drive)));
+                    }
                     if ui.button(tr("orphans-trash")).clicked() {
-                        app.shell.run("project.trashOrphans", json!({ "paths": paths }));
+                        app.shell.run("project.trashOrphans", json!({ "paths": paths, "days": app.prefs.orphan_days }));
                         gone.push(i);
                     }
                     if ui.button(tr("orphans-keep")).clicked() {

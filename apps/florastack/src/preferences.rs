@@ -1,12 +1,14 @@
 //! The Preferences dialog ([`Form`]): how much memory stacking may use (by default a quarter of the memory installed,
 //! with why), the compute device and the GPU's self-test, the cache folder and what it takes, the autosave interval,
 //! the theme and the language. The machine's settings go to the engine (`compute.set`, `cache.setFolder`; the GPU's
-//! test is `compute.test`) and are remembered in [`crate::prefs::Prefs`], which the app hands to the engine again at
+//! test is `compute.test`; the age at which temporary projects are offered for the trash goes with
+//! `project.findOrphans`) and are remembered in [`crate::prefs::Prefs`], which the app hands to the engine again at
 //! startup. FloraStack sends nothing anywhere: no telemetry, no crash reports, no update
 //! checks, and the dialog says so.
 
 use std::path::PathBuf;
 
+use florastack_engine::model::Orphans;
 use florastack_engine::{Device, Value, json};
 
 use crate::app::{Dialog, FloraStackApp};
@@ -26,6 +28,8 @@ pub struct Form {
     /// The memory budget, the device and the cache folder when the dialog opened: each changes only when the user
     /// changes it.
     opened: (u32, Device, String),
+    /// Days unused before a temporary project is offered for the trash.
+    pub orphan_days: u32,
     pub autosave_minutes: u32,
     pub theme: Theme,
     pub language: String,
@@ -48,6 +52,7 @@ impl Form {
             device,
             opened: (memory_mb, device, cache_folder.clone()),
             cache_folder,
+            orphan_days: app.prefs.orphan_days.unwrap_or(Orphans::DEFAULT_DAYS),
             autosave_minutes: app.prefs.autosave_minutes.unwrap_or(DEFAULT_AUTOSAVE_MINUTES),
             theme: app.prefs.theme,
             language: app.prefs.language.clone().unwrap_or_else(|| crate::i18n::LANGUAGES[0].0.to_owned()),
@@ -59,6 +64,12 @@ impl Form {
     fn suggested_mb(&self) -> u32 {
         self.compute["memory"]["suggestedMb"].as_u64().and_then(|m| u32::try_from(m).ok()).unwrap_or(1024)
     }
+}
+
+/// The string that warns of a cache folder on a `removable` or `network` drive, where the system may delete what is
+/// moved to the trash.
+pub(crate) fn drive_warning(drive: &str) -> &'static str {
+    if drive == "network" { "drive-network" } else { "drive-removable" }
 }
 
 /// A heading of the dialog's sections.
@@ -176,6 +187,16 @@ fn cache(app: &mut FloraStackApp, ui: &mut egui::Ui, form: &mut Form) {
         }
     });
     ui.weak(tr("prefs-cache-help"));
+    // Where the system may delete what orphan cleanup moves to the trash.
+    if let Some(drive @ ("removable" | "network")) = form.caches["temporaryProjects"]["drive"].as_str() {
+        ui.colored_label(ui.visuals().warn_fg_color, tr(drive_warning(drive)));
+    }
+    ui.horizontal(|ui| {
+        ui.label(tr("prefs-orphan-days"));
+        ui.add(egui::DragValue::new(&mut form.orphan_days).range(1..=3650).suffix(tr("prefs-days")));
+    })
+    .response
+    .on_hover_text(tr("tip-orphan-days"));
     let size = |key: &str| form.caches[key]["bytes"].as_u64().map(crate::export_tab::size_text);
     let rows = [("prefs-cache-projects", size("temporaryProjects")), ("prefs-cache-tiles", size("tiles")), ("prefs-cache-project", size("project"))];
     egui::Grid::new("prefs.caches").show(ui, |ui| {
@@ -227,6 +248,7 @@ impl FloraStackApp {
                 applied = false;
             }
         }
+        self.prefs.orphan_days = (form.orphan_days != Orphans::DEFAULT_DAYS).then_some(form.orphan_days);
         self.prefs.autosave_minutes = (form.autosave_minutes != DEFAULT_AUTOSAVE_MINUTES).then_some(form.autosave_minutes);
         self.set_autosave();
         self.prefs.language = Some(form.language.clone()).filter(|l| l != crate::i18n::LANGUAGES[0].0);

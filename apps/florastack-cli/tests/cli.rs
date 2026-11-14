@@ -392,6 +392,40 @@ fn file_only_invocation_handles_spaces_and_writes_beside_the_first_file() {
     check_image(&files[0].with_file_name("focus 0-stacked.tif"));
 }
 
+/// Sets a folder's modification time.
+fn age_folder(dir: &Path, modified: std::time::SystemTime) {
+    let mut options = std::fs::File::options();
+    #[cfg(windows)]
+    {
+        // A folder opens only with FILE_FLAG_BACKUP_SEMANTICS; FILE_WRITE_ATTRIBUTES is all that setting its time needs.
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(0x0100).custom_flags(0x0200_0000);
+    }
+    #[cfg(not(windows))]
+    options.read(true);
+    options.open(dir).unwrap().set_modified(modified).unwrap();
+}
+
+#[test]
+fn a_run_removes_the_tile_folders_crashed_runs_left() {
+    let dir = TempDir::new().unwrap();
+    // A temporary folder of the test's own, so that the machine's is left alone.
+    let temp = dir.path().join("tmp");
+    let prefix = format!("{}-tiles-", branding::GUI_BINARY);
+    let (crashed, recent, other) = (temp.join(format!("{prefix}1-0-0")), temp.join(format!("{prefix}2-0-0")), temp.join("someone-elses"));
+    for folder in [&crashed, &recent, &other] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("0000000000000001-0000000000000000.tile"), [0u8; 64]).unwrap();
+    }
+    let two_days_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(48);
+    age_folder(&crashed, two_days_ago);
+    age_folder(&other, two_days_ago);
+    cli(dir.path()).env("TMP", &temp).env("TEMP", &temp).env("TMPDIR", &temp).args(["project", "new"]).assert().success();
+    assert!(!crashed.exists(), "an old tile folder nobody holds is removed when a run starts");
+    assert!(recent.exists(), "one that may be a running stack's stays");
+    assert!(other.exists(), "and so does what isn't a tile folder");
+}
+
 #[test]
 fn clean_orphans_can_preview_without_touching_the_system_trash() {
     let dir = TempDir::new().unwrap();

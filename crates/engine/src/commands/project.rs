@@ -12,6 +12,7 @@ use crate::error::{CommandError, Invalid};
 use crate::registry::{CommandSpec, Effects, Meta, NoParams, Params, Requires};
 use crate::session::Session;
 
+#[allow(clippy::too_many_lines)] // The commands' help texts and examples.
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::instant(
@@ -78,19 +79,30 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                 .examples(&[r#"{ "folder": "C:/Users/me/Pictures/Stacks" }"#]),
             save_as,
         ),
-        CommandSpec::query(
+        CommandSpec::instant(
             Meta::new("project.checkFrames", "Check frames", "Lists the frames whose files are missing or changed since they were added.")
                 .help(
-                    "Each frame's file is compared with what was added, by its size and modification time, and by its                      contents when the time changed. A missing frame can still be stacked from the cache where it was                      aligned; a changed one must be added and aligned again. The desktop app asks this when a project                      opens.",
+                    "Each frame's file is compared with what was added, by its size and modification time, and by its \
+                     contents when the time changed. A missing frame can still be stacked from the cache where it was \
+                     aligned; a changed one must be added and aligned again. A file that isn't where its frame's path \
+                     says is looked for where it was from the project folder when the project was last saved, so a \
+                     project moved together with its frames finds them. A frame added while its file was new (within \
+                     three seconds of its writing, as tethered and watched frames are) is compared by its contents \
+                     until a check finds its file settled; the project then keeps the file's time, with its next \
+                     save, and later checks are quick (`settled` counts those frames). The desktop app runs this when \
+                     a project opens.",
                 )
-                .requires(Requires::Project),
+                .requires(Requires::Project)
+                .effects(Effects::Project),
             check_frames,
         ),
         CommandSpec::query(
             Meta::new("project.findOrphans", "Find old temporary projects", "Lists the temporary projects old enough to be moved to the trash.")
                 .help(
                     "Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that \
-                     haven't been saved or opened for `days` days (30 by default).",
+                     haven't been saved or opened for `days` days (30 by default). `drive` says what the folder is on: \
+                     from a `removable` or `network` drive the system may delete what is moved to the trash instead \
+                     of keeping it (Windows has no Recycle Bin there).",
                 )
                 .examples(&["{}", r#"{ "days": 7 }"#]),
             find_orphans,
@@ -420,21 +432,45 @@ struct FramesChecked {
     checked: usize,
     /// The ones missing, changed or unreadable; empty when every file is the one added.
     frames: Vec<FrameCheck>,
+    /// How many frames, compared by their contents and found unchanged, had their file's time taken for the checks
+    /// to come, which are quick for them from the project's next save on.
+    settled: usize,
 }
 
-fn check_frames(session: &Session, _: NoParams) -> Result<FramesChecked, CommandError> {
+fn check_frames(session: &mut Session, _: NoParams) -> Result<FramesChecked, CommandError> {
     let (project, folder) = (session.project()?, session.folder()?);
-    let mut frames = Vec::new();
+    let (mut frames, mut settled) = (Vec::new(), Vec::new());
     for frame in &project.frames {
-        let (state, reason) = match folder.check_frame(frame) {
-            Ok(FrameState::Unchanged) => continue,
-            Ok(FrameState::Missing) => ("missing", None),
-            Ok(FrameState::Changed) => ("changed", None),
+        let (state, reason) = match folder.examine_frame(frame) {
+            Ok(check) => {
+                if let Some(modified) = check.settled {
+                    settled.push(Edit::SetFrameModified { frame: frame.id(), modified: Some(modified) });
+                }
+                match check.state {
+                    FrameState::Unchanged => continue,
+                    FrameState::Missing => ("missing", None),
+                    FrameState::Changed => ("changed", None),
+                }
+            }
             Err(e) => ("unreadable", Some(e.to_string())),
         };
         frames.push(FrameCheck { frame: frame.id(), path: display(&folder.frame_path(frame)), state, reason });
     }
-    Ok(FramesChecked { checked: project.frames.len(), frames })
+    let checked = project.frames.len();
+    // A project open for reading only keeps nothing, and its checks stay as they are.
+    let kept = if folder.is_read_only() || settled.is_empty() {
+        0
+    } else {
+        let count = settled.len();
+        match session.apply_unsaved(Edit::Batch(settled)) {
+            Ok(()) => count,
+            Err(e) => {
+                tracing::debug!("the settled frames' times aren't kept: {e}");
+                0
+            }
+        }
+    };
+    Ok(FramesChecked { checked, frames, settled: kept })
 }
 
 /// Lists the orphaned temporary projects.
@@ -472,6 +508,9 @@ struct OrphanInfo {
 struct OrphanList {
     /// The temporary-projects folder looked in.
     folder: String,
+    /// What the folder is on. From a `removable` or `network` drive, the system may delete what is moved to the
+    /// trash instead of keeping it.
+    drive: super::cache::Drive,
     orphans: Vec<OrphanInfo>,
 }
 
@@ -485,6 +524,7 @@ fn find_orphans(session: &Session, p: FindOrphansParams) -> Result<OrphanList, C
     let found = orphans.find()?;
     Ok(OrphanList {
         folder: display(orphans.root()),
+        drive: super::cache::Drive::of(orphans.root()),
         orphans: found
             .into_iter()
             .map(|o| OrphanInfo { path: display(&o.path), last_used: Timestamp::from_system_time(o.last_used).to_string(), bytes: o.bytes })

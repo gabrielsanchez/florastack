@@ -19,7 +19,7 @@
 use florastack_core::time::{Duration, SystemTime};
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use florastack_core::LockFile;
 use florastack_core::branding::{DISPLAY_NAME, PROJECT_EXTENSION};
@@ -28,7 +28,7 @@ use crate::cache::{Area, CacheDir, CacheRef, CacheWriter, PART_SUFFIX};
 use crate::error::{ProjectError, SchemaError};
 use crate::fsutil::{read_capped, write_atomic};
 use crate::hash::ContentHash;
-use crate::model::{Frame, Project};
+use crate::model::{Frame, Project, trusted_modified};
 use crate::schema::{self, FILE_NAME, MAX_FILE_BYTES};
 use crate::time::Timestamp;
 
@@ -76,6 +76,16 @@ pub enum FrameState {
     Missing,
 }
 
+/// What [`ProjectFolder::examine_frame`] found about a frame's file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameCheck {
+    pub state: FrameState,
+    /// The file's modification time, to keep for later quick checks (`Edit::SetFrameModified`): given when this check
+    /// had to hash the file, found its contents unchanged, and the time is old enough by now to be trusted
+    /// ([`crate::TRUSTED_AGE`]) and didn't move while the file was read.
+    pub settled: Option<Timestamp>,
+}
+
 /// A `.part` file older than this is left over from a crash, not being written.
 const STALE_PART: Duration = Duration::from_hours(1);
 
@@ -94,6 +104,8 @@ pub struct ProjectFolder {
     cache: CacheDir,
     lock: Option<LockFile>,
     migrated_from: Option<u32>,
+    /// Whether a save has looked at every frame's file from where the folder is now ([`ProjectFolder::save`]).
+    placed: bool,
 }
 
 impl AsRef<CacheDir> for ProjectFolder {
@@ -144,7 +156,7 @@ impl ProjectFolder {
             florastack_core::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir, source })?;
         }
         let lock = ProjectFolder::lock(&root)?;
-        let mut folder = ProjectFolder { cache: CacheDir::new(root, false), lock, migrated_from: None };
+        let mut folder = ProjectFolder { cache: CacheDir::new(root, false), lock, migrated_from: None, placed: false };
         folder.save(project)?;
         Ok(folder)
     }
@@ -194,15 +206,21 @@ impl ProjectFolder {
         if let Some(from) = decoded.migrated_from {
             tracing::info!("upgraded {} from project format {from} to {}", file.display(), schema::VERSION);
         }
-        Ok((ProjectFolder { cache: CacheDir::new(root, read_only), lock, migrated_from: decoded.migrated_from }, decoded.project))
+        Ok((ProjectFolder { cache: CacheDir::new(root, read_only), lock, migrated_from: decoded.migrated_from, placed: false }, decoded.project))
     }
 
     /// Saves `project` to `project.json`, atomically, after checking it, and records the time and the software.
     /// The first save of an upgraded project keeps the old file as `project.v<version>.json`.
+    ///
+    /// It also records where each frame's file is from the folder that holds the project folder (`Frame::near`), for
+    /// the files that are in their place: all of them at the folder's first save since it was opened, made or moved,
+    /// and the frames added since at the later ones. A frame whose file isn't there keeps what an earlier save
+    /// recorded, which is how it is found once the project and its frames have moved together.
     pub fn save(&mut self, project: &mut Project) -> Result<(), ProjectError> {
         self.cache.writable()?;
         project.validate().map_err(|source| ProjectError::Invalid { path: self.cache.path().to_path_buf(), source })?;
         let mut saved = project.clone();
+        self.place_frames(&mut saved);
         saved.mark_saved(Timestamp::now(), software());
         let file = self.project_file();
         let bytes = schema::encode(&saved).map_err(|e| schema_error(&file, e))?;
@@ -214,8 +232,35 @@ impl ProjectFolder {
         }
         write_atomic(&file, &bytes)?;
         self.migrated_from = None;
+        self.placed = true;
         *project = saved;
         Ok(())
+    }
+
+    /// The folder that holds the project folder, which relative frame paths start from.
+    fn holder(&self) -> &Path {
+        let root = self.cache.path();
+        root.parent().unwrap_or(root)
+    }
+
+    /// Records each frame's `near` ([`ProjectFolder::save`]).
+    fn place_frames(&self, project: &mut Project) {
+        let holder = self.holder();
+        for frame in &mut project.frames {
+            if self.placed && frame.near.is_some() {
+                continue;
+            }
+            let path = Path::new(&frame.path);
+            if !path.is_absolute() {
+                frame.near = None;
+                continue;
+            }
+            let near = near(holder, path);
+            // Only a file that is there says where it is: one that is missing keeps the place it was last seen at.
+            if (near.is_some() || frame.near.is_some()) && florastack_core::fs::path_is_file(path) {
+                frame.near = near;
+            }
+        }
     }
 
     /// Copies the project folder to `target`, a folder that mustn't exist yet, and opens the copy for editing: every
@@ -301,34 +346,59 @@ impl ProjectFolder {
     }
 
     /// Where a frame's file is: its path, or for a relative one, that path from the folder holding the project folder.
+    /// When no file is there and the project was saved with the file in its place, the place it had then from the
+    /// project folder (`Frame::near`) is looked at too: a project moved together with its frames, onto another drive
+    /// or machine, finds them so. Without a file at either, the stored path.
     pub fn frame_path(&self, frame: &Frame) -> PathBuf {
         let path = Path::new(&frame.path);
-        let root = self.cache.path();
-        if path.is_absolute() { path.to_path_buf() } else { root.parent().unwrap_or(root).join(path) }
+        let stored = if path.is_absolute() { path.to_path_buf() } else { self.holder().join(path) };
+        let Some(near) = &frame.near else { return stored };
+        if florastack_core::fs::path_is_file(&stored) {
+            return stored;
+        }
+        match from_near(self.holder(), near) {
+            Some(moved) if florastack_core::fs::path_is_file(&moved) => moved,
+            _ => stored,
+        }
     }
 
     /// Whether a frame's file is still the one that was added: by size and modification time, and by hash when the
     /// time changed.
     pub fn check_frame(&self, frame: &Frame) -> Result<FrameState, ProjectError> {
+        Ok(self.examine_frame(frame)?.state)
+    }
+
+    /// [`ProjectFolder::check_frame`], and with it the modification time to keep for the next quick check when this
+    /// one had to hash the file: a frame added while its file was new keeps no time ([`crate::TRUSTED_AGE`]), and is
+    /// hashed by every check until one stores its time.
+    pub fn examine_frame(&self, frame: &Frame) -> Result<FrameCheck, ProjectError> {
+        let found = |state| Ok(FrameCheck { state, settled: None });
         let path = self.frame_path(frame);
         let meta = match florastack_core::fs::metadata(&path) {
             Ok(meta) => meta,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(FrameState::Missing),
+            Err(e) if e.kind() == ErrorKind::NotFound => return found(FrameState::Missing),
             Err(source) => return Err(ProjectError::Read { path, source }),
         };
         if !meta.is_file() {
-            return Ok(FrameState::Missing);
+            return found(FrameState::Missing);
         }
         if meta.len() != frame.size {
-            return Ok(FrameState::Changed);
+            return found(FrameState::Changed);
         }
-        let modified = meta.modified().ok().map(Timestamp::from_system_time);
+        let before = meta.modified().ok();
+        let modified = before.map(Timestamp::from_system_time);
         if modified.is_some() && modified == frame.modified {
-            return Ok(FrameState::Unchanged);
+            return found(FrameState::Unchanged);
         }
         let file = florastack_core::fs::File::open(&path).map_err(|source| ProjectError::Read { path: path.clone(), source })?;
-        let (hash, _) = ContentHash::of_reader(file).map_err(|source| ProjectError::Read { path, source })?;
-        Ok(if hash == frame.hash { FrameState::Unchanged } else { FrameState::Changed })
+        let (hash, _) = ContentHash::of_reader(file).map_err(|source| ProjectError::Read { path: path.clone(), source })?;
+        if hash != frame.hash {
+            return found(FrameState::Changed);
+        }
+        // The time read again after the bytes: a file written meanwhile has a new one, and isn't settled.
+        let after = florastack_core::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+        let settled = if after == before { trusted_modified(after) } else { None };
+        Ok(FrameCheck { state: FrameState::Unchanged, settled })
     }
 
     /// A writer for a new cache file in `area`, named after `stem` (such as `output-7` or `frame-3-aligned`) and
@@ -420,6 +490,54 @@ impl ProjectFolder {
 }
 
 /// The error for a project file that can't be read or written.
+/// Whether two components of paths on this system are the same: without regard to case on Windows.
+fn same_component(a: Component<'_>, b: Component<'_>) -> bool {
+    if cfg!(windows) { a.as_os_str().eq_ignore_ascii_case(b.as_os_str()) } else { a == b }
+}
+
+/// How to reach `file` from the folder `holder`, both absolute, by their names alone (`Frame::near`): a `..` for
+/// each folder of `holder` they don't share, then `file`'s folders and name, separated by `/`. None when they share
+/// no root (another drive), or when a name can't be written so.
+fn near(holder: &Path, file: &Path) -> Option<String> {
+    let (from, to): (Vec<Component<'_>>, Vec<Component<'_>>) = (holder.components().collect(), file.components().collect());
+    let shared = from.iter().zip(&to).take_while(|(a, b)| same_component(**a, **b)).count();
+    let (up, down) = (from.get(shared..)?, to.get(shared..)?);
+    // Everything before the first name, a drive and a root, must be shared; what is left is names only.
+    let names = |parts: &[Component<'_>]| parts.iter().all(|c| matches!(c, Component::Normal(_)));
+    if shared == 0 || down.is_empty() || !names(up) || !names(down) || from.iter().take(shared).all(|c| matches!(c, Component::Normal(_))) {
+        return None;
+    }
+    let mut parts = vec![".."; up.len()];
+    for name in down {
+        let name = name.as_os_str().to_str()?;
+        if name.contains('/') {
+            return None;
+        }
+        parts.push(name);
+    }
+    Some(parts.join("/"))
+}
+
+/// The path a `Frame::near` leads to from `holder`. None for one that isn't made of `..` and names: the text comes
+/// from a project file, and a name that reads as a root or a drive on this system would lead anywhere.
+fn from_near(holder: &Path, near: &str) -> Option<PathBuf> {
+    let mut path = holder.to_path_buf();
+    for part in near.split('/') {
+        if part == ".." {
+            if !path.pop() {
+                return None;
+            }
+            continue;
+        }
+        let mut components = Path::new(part).components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(name)), None) if name == part => path.push(name),
+            _ => return None,
+        }
+    }
+    Some(path)
+}
+
 fn schema_error(file: &Path, e: SchemaError) -> ProjectError {
     let path = file.to_path_buf();
     match e {
@@ -490,6 +608,45 @@ mod tests {
             other => panic!("a move onto a folder that exists is refused and keeps the project open: {other:?}"),
         }
         florastack_core::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_reached_from_the_project_by_names_alone() {
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let at = |parts: &[&str]| parts.iter().fold(PathBuf::from(root), |p, part| p.join(part));
+        let holder = at(&["photos", "bee", "stacks"]);
+        for (file, want) in [
+            (at(&["photos", "bee", "stacks", "IMG_1.tif"]), Some("IMG_1.tif")),
+            (at(&["photos", "bee", "stacks", "raw", "IMG_1.tif"]), Some("raw/IMG_1.tif")),
+            (at(&["photos", "bee", "IMG_1.tif"]), Some("../IMG_1.tif")),
+            (at(&["cards", "IMG_1.tif"]), Some("../../../cards/IMG_1.tif")),
+            (at(&["photos", "bee", "stacks"]), None),
+            (PathBuf::from("IMG_1.tif"), None),
+            (at(&["photos", "bee", "stacks", "..", "IMG_1.tif"]), None),
+        ] {
+            let found = near(&holder, &file);
+            assert_eq!(found.as_deref(), want, "{}", file.display());
+            if let Some(found) = found {
+                assert_eq!(from_near(&holder, &found), Some(file));
+            }
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(near(&holder, Path::new("D:\\photos\\bee\\stacks\\IMG_1.tif")), None, "another drive");
+            assert_eq!(near(&holder, Path::new("c:\\Photos\\BEE\\stacks\\IMG_1.tif")).as_deref(), Some("IMG_1.tif"), "names differ by case only");
+        }
+        // Hostile text: nothing but `..` and single names is followed.
+        for bad in ["", "a//b", "./a", "a/.", "/etc/passwd", "a\0b/../.."] {
+            let moved = from_near(&holder, bad);
+            assert!(moved.is_none() || bad.contains('\0'), "{bad:?} leads to {moved:?}");
+        }
+        if cfg!(windows) {
+            assert_eq!(from_near(&holder, "C:\\Windows"), None);
+            assert_eq!(from_near(&holder, "C:"), None);
+            assert_eq!(from_near(&holder, "a\\b"), None);
+        }
+        let ups = "../".repeat(40);
+        assert_eq!(from_near(&holder, &format!("{ups}x")), None, "above the root");
     }
 
     #[test]

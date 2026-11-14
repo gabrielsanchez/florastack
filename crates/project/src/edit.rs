@@ -24,6 +24,7 @@ use crate::model::{
     check_frame_path, check_method, check_name,
 };
 use crate::prefs::{Group, Table};
+use crate::time::Timestamp;
 
 /// One change to a project. See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +47,12 @@ pub enum Edit {
     SetFrameEnabled {
         frame: FrameId,
         enabled: bool,
+    },
+    /// Replaces the modification time kept for the quick check of a frame's file (`Frame::modified`): the engine sets
+    /// it once a check has hashed the file, found it unchanged and its time old enough to trust.
+    SetFrameModified {
+        frame: FrameId,
+        modified: Option<Timestamp>,
     },
     /// Replaces a preference group's table.
     SetPreferences {
@@ -297,6 +304,8 @@ impl Edit {
             Edit::AddFrame { .. } | Edit::InsertFrame { .. } | Edit::RemoveFrame(_) | Edit::SetFrameOrder(_) | Edit::SetFrameEnabled { .. } => {
                 Aspects::FRAMES
             }
+            // What a later check of the frame's file compares first: nothing a job reads or a view shows.
+            Edit::SetFrameModified { .. } => Aspects::NONE,
             Edit::SetPreferences { group, .. } => Aspects::of_group(*group),
             Edit::SetDevelop(_) => Aspects::DEVELOP,
             // The stack's maps (the defect mask) are what alignment reads its frames with.
@@ -328,6 +337,7 @@ impl Edit {
             }
             (Edit::SetPreferences { group: a, .. }, Edit::SetPreferences { group: b, .. }) => a == b,
             (Edit::SetFrameEnabled { frame: a, .. }, Edit::SetFrameEnabled { frame: b, .. })
+            | (Edit::SetFrameModified { frame: a, .. }, Edit::SetFrameModified { frame: b, .. })
             | (Edit::SetPreviews { frame: a, .. }, Edit::SetPreviews { frame: b, .. })
             | (Edit::SetAlignedImage { frame: a, .. }, Edit::SetAlignedImage { frame: b, .. }) => a == b,
             (Edit::RenameOutput { output: a, .. }, Edit::RenameOutput { output: b, .. })
@@ -367,6 +377,10 @@ impl Project {
             Edit::SetFrameEnabled { frame, enabled } => {
                 let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
                 Ok(Edit::SetFrameEnabled { frame, enabled: std::mem::replace(&mut f.enabled, enabled) })
+            }
+            Edit::SetFrameModified { frame, modified } => {
+                let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
+                Ok(Edit::SetFrameModified { frame, modified: std::mem::replace(&mut f.modified, modified) })
             }
             Edit::SetPreferences { group, table } => {
                 let old = self.preferences.replace_group(group, table)?;
@@ -608,6 +622,7 @@ mod tests {
             Edit::RemoveFrame(a),
             Edit::SetFrameOrder(vec![b, a]),
             Edit::SetFrameEnabled { frame: b, enabled: false },
+            Edit::SetFrameModified { frame: b, modified: Some(Timestamp::from_unix_millis(1_700_000_000_000).unwrap()) },
             Edit::SetPreferences { group: Group::Develop, table: serde_json::json!({ "exposure": 1.5 }).as_object().unwrap().clone() },
             Edit::Batch(vec![Edit::RemoveFrame(b), Edit::SetName(Some("Ant".into()))]),
             Edit::SetAlignment {
@@ -710,6 +725,7 @@ mod tests {
             (Edit::Batch(vec![Edit::SetName(Some("Ok".into())), Edit::RemoveFrame(a), Edit::RemoveFrame(a)]), EditError::NoFrame(a)),
             (Edit::PopStroke { output: OutputId(5), layer: LayerId(6) }, EditError::NoOutput(OutputId(5))),
             (Edit::SetPreviews { frame: FrameId(99), preview: None, aligned_preview: None }, EditError::NoFrame(FrameId(99))),
+            (Edit::SetFrameModified { frame: FrameId(99), modified: None }, EditError::NoFrame(FrameId(99))),
             (
                 Edit::AddOutput(Box::new(NewOutput {
                     name: "Average".into(),

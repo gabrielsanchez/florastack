@@ -32,7 +32,9 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                 "Walks the folders and adds up their files: the temporary projects' folder (unnamed projects, which \
                  orphan cleanup moves to the trash once they are old), the tile folder (tiles of running stacks, and \
                  those crashed runs left), and the open project's `cache/` and `previews/` folders (results kept so \
-                 that nothing is computed twice; cleaned of what the project no longer refers to when it closes).",
+                 that nothing is computed twice; cleaned of what the project no longer refers to when it closes). \
+                 `temporaryProjects.drive` says what that folder is on: from a `removable` or `network` drive the \
+                 system may delete what orphan cleanup moves to the trash instead of keeping it.",
             ),
             info,
         ),
@@ -76,12 +78,98 @@ struct FolderSize {
     bytes: u64,
 }
 
+/// The temporary-projects folder, what its files take and what it is on.
+#[derive(Debug, Serialize, JsonSchema)]
+struct ProjectsFolder {
+    folder: String,
+    bytes: u64,
+    /// What the folder is on. From a `removable` or `network` drive, the system may delete what orphan cleanup moves
+    /// to the trash instead of keeping it: Windows has no Recycle Bin there.
+    drive: Drive,
+}
+
+/// What a folder is on, as far as the system says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Drive {
+    /// A drive built into the computer, or one the system treats as such.
+    Local,
+    /// A drive that can be taken out: a memory card, a USB stick.
+    Removable,
+    /// Another computer's folder.
+    Network,
+    /// The system doesn't say.
+    Unknown,
+}
+
+/// A mounted volume: where, whether it can be taken out, and its file system's name.
+type Volume = (PathBuf, bool, String);
+
+impl Drive {
+    /// What `folder` is on. A folder that doesn't exist yet is judged by the nearest one above it that does.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn of(folder: &Path) -> Drive {
+        let Some(resolved) = folder.ancestors().find_map(|p| florastack_core::fs::canonicalize(p).ok()) else { return Drive::Unknown };
+        let volumes: Vec<Volume> = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing())
+            .map(|disks| {
+                disks.iter().map(|d| (d.mount_point().to_path_buf(), d.is_removable(), d.file_system().to_string_lossy().into_owned())).collect()
+            })
+            .unwrap_or_default();
+        Drive::among(&resolved, &volumes)
+    }
+
+    /// The browser's storage is the page's own.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn of(_: &Path) -> Drive {
+        Drive::Unknown
+    }
+
+    /// What `resolved`, a path with its links and drive mappings resolved, is on, given the volumes mounted.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "the browser has no volumes"))]
+    fn among(resolved: &Path, volumes: &[Volume]) -> Drive {
+        use std::path::{Component, Prefix};
+        // Windows resolves a share, and a drive letter mapped to one, to `\\server\share`.
+        let mut plain = PathBuf::new();
+        for component in resolved.components() {
+            match component {
+                Component::Prefix(prefix) => match prefix.kind() {
+                    Prefix::UNC(..) | Prefix::VerbatimUNC(..) => return Drive::Network,
+                    Prefix::VerbatimDisk(letter) | Prefix::Disk(letter) => plain.push(format!("{}:", char::from(letter.to_ascii_uppercase()))),
+                    _ => return Drive::Unknown,
+                },
+                other => plain.push(other.as_os_str()),
+            }
+        }
+        let within = |mount: &Path| {
+            let mut inner = plain.components();
+            mount
+                .components()
+                .all(|m| inner.next().is_some_and(|p| if cfg!(windows) { p.as_os_str().eq_ignore_ascii_case(m.as_os_str()) } else { p == m }))
+        };
+        // The volume mounted deepest on the way to the folder is the one it is on.
+        let Some((_, removable, file_system)) =
+            volumes.iter().filter(|(mount, ..)| within(mount)).max_by_key(|(mount, ..)| mount.components().count())
+        else {
+            return Drive::Unknown;
+        };
+        let name = file_system.to_ascii_lowercase();
+        let shared = ["nfs", "nfs4", "cifs", "smb3", "smbfs", "afpfs", "webdav", "9p", "fuse.sshfs"].contains(&name.as_str());
+        if shared {
+            Drive::Network
+        } else if *removable {
+            Drive::Removable
+        } else {
+            Drive::Local
+        }
+    }
+}
+
 /// What the caches take.
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct CacheInfo {
     /// Temporary projects; none when the engine has no folder for them.
-    temporary_projects: Option<FolderSize>,
+    temporary_projects: Option<ProjectsFolder>,
     /// Tiles of running stacks, and of crashed runs. In the system's temporary directory, only FloraStack's tile
     /// folders count.
     tiles: FolderSize,
@@ -109,7 +197,8 @@ fn size_of(path: &Path, only: Option<&str>) -> u64 {
 }
 
 fn info(session: &Session, _: NoParams) -> Result<CacheInfo, CommandError> {
-    let temporary_projects = session.temporary_projects().map(|p| FolderSize { folder: display(p), bytes: size_of(p, None) });
+    let temporary_projects =
+        session.temporary_projects().map(|p| ProjectsFolder { folder: display(p), bytes: size_of(p, None), drive: Drive::of(p) });
     let tiles = if let Some(folder) = session.tiling().spill_dir {
         FolderSize { bytes: size_of(&folder, None), folder: display(&folder) }
     } else {
@@ -150,4 +239,46 @@ fn set_folder(session: &mut Session, p: FolderParams) -> Result<CacheInfo, Comma
     tiling.spill_dir = Some(tiles);
     session.set_tiling(tiling);
     info(session, NoParams::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_is_on_the_volume_mounted_deepest_on_its_way() {
+        let volume = |mount: &str, removable: bool, file_system: &str| (PathBuf::from(mount), removable, file_system.to_owned());
+        #[cfg(windows)]
+        {
+            let volumes = [volume("C:\\", false, "NTFS"), volume("E:\\", true, "exFAT"), volume("C:\\mounted\\card", true, "FAT32")];
+            for (path, drive) in [
+                ("\\\\?\\C:\\Users\\me\\AppData", Drive::Local),
+                ("c:\\users\\me", Drive::Local),
+                ("\\\\?\\E:\\cache\\projects", Drive::Removable),
+                ("\\\\?\\C:\\Mounted\\Card\\cache", Drive::Removable),
+                ("\\\\?\\UNC\\nas\\photos\\cache", Drive::Network),
+                ("\\\\nas\\photos\\cache", Drive::Network),
+                ("\\\\?\\Z:\\cache", Drive::Unknown),
+            ] {
+                assert_eq!(Drive::among(Path::new(path), &volumes), drive, "{path}");
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let volumes =
+                [volume("/", false, "ext4"), volume("/media/card", true, "vfat"), volume("/mnt/nas", false, "nfs4"), volume("/home", false, "apfs")];
+            for (path, drive) in [
+                ("/var/tmp/cache", Drive::Local),
+                ("/home/me/.cache", Drive::Local),
+                ("/media/card/cache", Drive::Removable),
+                ("/media/cards", Drive::Local),
+                ("/mnt/nas/photos", Drive::Network),
+            ] {
+                assert_eq!(Drive::among(Path::new(path), &volumes), drive, "{path}");
+            }
+            assert_eq!(Drive::among(Path::new("/var/tmp"), &[]), Drive::Unknown);
+        }
+        // Whatever this machine's temporary folder is on, asking never fails.
+        let _ = Drive::of(&florastack_core::fs::temp_dir().join("not").join("there").join("yet"));
+    }
 }
