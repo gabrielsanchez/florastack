@@ -1,13 +1,14 @@
 //! The command palette (Ctrl/Cmd+K, [`Palette`]): searches the app's actions and every command of the engine's
 //! registry by title and name. An action or a command that needs no parameters runs as it is picked; any other opens
 //! its parameters as JSON, starting from the command's first example, checked against the command's schema
-//! (`Registry::check`) before it runs.
+//! (`Registry::check`) before it runs. A command's help text shows when the pointer rests on it, and above its
+//! parameters while they are written.
 
 use egui::{Key, Modal};
 use florastack_engine::{CommandInfo, Registry, Value};
 
 use crate::actions::Action;
-use crate::i18n::{command_summary, command_title, tr};
+use crate::i18n::{command_help, command_summary, command_title, tr};
 
 /// What the palette picked.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +22,8 @@ pub enum Picked {
 struct Entry {
     title: String,
     detail: String,
+    /// A command's help text; empty for an action, and for a command without one.
+    help: String,
     target: Target,
 }
 
@@ -34,6 +37,7 @@ enum Target {
 struct Editing {
     name: &'static str,
     title: String,
+    help: String,
     text: String,
     error: Option<String>,
 }
@@ -98,11 +102,16 @@ impl Palette {
 
     /// The entries matching `query`, best first.
     fn entries(query: &str, registry: &Registry) -> Vec<Entry> {
-        let actions =
-            Action::ALL.iter().filter(|a| a.available()).map(|&a| Entry { title: a.label(), detail: String::new(), target: Target::Action(a) });
+        let actions = Action::ALL.iter().filter(|a| a.available()).map(|&a| Entry {
+            title: a.label(),
+            detail: String::new(),
+            help: String::new(),
+            target: Target::Action(a),
+        });
         let commands = registry.list().into_iter().map(|c| Entry {
             title: command_title(c.name, c.title),
             detail: format!("{} · {}", c.name, command_summary(c.name, c.summary)),
+            help: command_help(c.name, c.help),
             target: Target::Command(c.name),
         });
         let mut scored: Vec<(i32, Entry)> = actions
@@ -131,6 +140,9 @@ impl Palette {
             ui.set_width(560.0);
             if let Some(editing) = &mut self.editing {
                 ui.heading(&editing.title);
+                if !editing.help.is_empty() {
+                    egui::ScrollArea::vertical().id_salt("palette.help").max_height(140.0).show(ui, |ui| ui.weak(&editing.help));
+                }
                 ui.label(tr("palette-parameters"));
                 ui.add(egui::TextEdit::multiline(&mut editing.text).code_editor().desired_rows(8).desired_width(f32::INFINITY));
                 if let Some(error) = &editing.error {
@@ -171,7 +183,10 @@ impl Palette {
             let mut chosen = enter.then_some(self.selected);
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                 for (i, entry) in entries.iter().enumerate().take(40) {
-                    let row = ui.selectable_label(i == self.selected, &entry.title);
+                    let mut row = ui.selectable_label(i == self.selected, &entry.title);
+                    if !entry.help.is_empty() {
+                        row = row.on_hover_text(&entry.help);
+                    }
                     if !entry.detail.is_empty() {
                         ui.weak(&entry.detail);
                     }
@@ -193,7 +208,7 @@ impl Palette {
                         Some(info) if needs_parameters(info) => {
                             let example = info.examples.first().cloned().unwrap_or(Value::Object(serde_json::Map::new()));
                             let text = serde_json::to_string_pretty(&example).unwrap_or_else(|_| "{}".to_owned());
-                            self.editing = Some(Editing { name, title: entry.title.clone(), text, error: None });
+                            self.editing = Some(Editing { name, title: entry.title.clone(), help: entry.help.clone(), text, error: None });
                         }
                         _ => picked = Some(Picked::Command { name: name.to_owned(), params: Value::Object(serde_json::Map::new()) }),
                     },
@@ -231,6 +246,8 @@ mod tests {
         let all = Palette::entries("", &registry);
         for name in registry.names() {
             assert!(all.iter().any(|e| matches!(e.target, Target::Command(n) if n == name)), "{name}");
+            let help = registry.get(name).unwrap().help;
+            assert!(all.iter().any(|e| matches!(e.target, Target::Command(n) if n == name) && e.help == help), "{name} shows its help");
             let found = Palette::entries(name, &registry);
             assert!(matches!(found.first().map(|e| &e.target), Some(Target::Command(n)) if *n == name), "{name} is found first by its name");
         }

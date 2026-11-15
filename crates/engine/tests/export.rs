@@ -136,6 +136,21 @@ fn exported_files_reopen_with_their_depth_profile_and_metadata() {
     let files = export(&mut engine, &pyramid, &folder, &json!({ "metadata": false, "template": "bare" }));
     let summary = florastack_codecs::read_file(&files[0].0, &ReadOptions::default()).unwrap().metadata.summary().clone();
     assert_eq!((summary.make, summary.title), (None, None));
+    // A file's date is the stack's, not the writing's, so the same output written twice is the same file.
+    let output = engine.project().unwrap().outputs.iter().find(|o| o.method == "pyramid").unwrap();
+    let (id, (y, mo, d, h, mi, second)) = (output.id(), output.created().civil());
+    let spec = florastack_codecs::OutputSpec::new(florastack_codecs::Format::Tiff).unwrap();
+    let written: Vec<Vec<u8>> = ["first.tif", "second.tif"]
+        .iter()
+        .map(|name| {
+            let path = folder.join(name);
+            run(&mut engine, "output.save", &json!({ "output": id, "path": path, "spec": spec }).to_string());
+            std::fs::read(path).unwrap()
+        })
+        .collect();
+    assert!(written[0] == written[1], "two writes of one output differ");
+    let date = format!("{y:04}:{mo:02}:{d:02} {h:02}:{mi:02}:{second:02}");
+    assert!(written[0].windows(date.len()).any(|w| w == date.as_bytes()), "the EXIF date {date} of the stack");
     // The project's settings are what an export uses when it gives none: set once, used by every export.
     run(&mut engine, "export.set", r#"{ "format": "png", "depth": "u8", "template": "{project}-{method}-{frames}" }"#);
     let files = export(&mut engine, &pyramid, &folder, &json!({}));

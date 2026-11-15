@@ -31,7 +31,8 @@
 //!   copy onto the quarter-size canvas as the full stack warps the frame (tile by tile, bicubic, with its feathered
 //!   coverage), with the settings scaled to match (`Method::reduced`); RAW frames get the fast demosaic. It runs in the
 //!   preview lane, beside a full stack, and a newer call cancels an older one still running, so that a preview follows
-//!   every change of a setting. Its result is a lossless TIFF in `previews/`, which nothing in the project refers to:
+//!   every change of a setting. Its result stays in the session, the latest only, for a viewer to read
+//!   (`Engine::stack_preview`); with `keepFile` it is also a lossless TIFF in `previews/`, which nothing in the project refers to:
 //!   no undo step, and the file goes when the project is next closed or opened.
 //!
 //! Slabbing (`stack.slabbed`, `slab.rs`) stacks with the same plan, a method for the slabs and one for the final stack.
@@ -192,9 +193,10 @@ fn stacking() -> Vec<CommandSpec> {
                     "The weighted average of `stack.average`, or with `method` \"pyramid\", \"depth-map\" or \
                      \"wavelet\" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames \
                      reduced to a quarter of their size on each side with the settings scaled to match, so that it \
-                     shows in seconds what the full stack will look like. Takes the same settings as that method's command. The result is a linear 32-bit float \
-                     TIFF in the project's `previews/` folder, as a path, kept until the project is closed: no output, \
-                     no undo step. Runs beside other jobs as a preview; a newer call replaces an older one still \
+                     shows in seconds what the full stack will look like. Takes the same settings as that method's command. The engine \
+                     keeps the latest preview in memory for its viewer, until the project is closed: no output, no undo \
+                     step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's \
+                     `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one still \
                      running, so call it after every change of a setting.",
                 )
                 .requires(Requires::Project)
@@ -768,6 +770,10 @@ pub(super) struct MethodParams {
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 2.0))]
     noise_floor: Option<f64>,
+    /// For `stack.preview` alone: also write the preview as a linear 32-bit float TIFF in the project's `previews/`
+    /// folder and return its `path`. Off by default: the engine keeps the preview in memory for its viewer.
+    #[serde(default)]
+    pub(super) keep_file: bool,
 }
 
 impl MethodParams {
@@ -1890,8 +1896,10 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct Previewed {
-    /// The preview: a linear 32-bit float TIFF, with an alpha channel when some pixels are covered by no frame.
-    path: String,
+    /// The preview as a file, when `keepFile` asked for one: a linear 32-bit float TIFF, with an alpha channel when
+    /// some pixels are covered by no frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
     /// Its size, in pixels: a quarter of the full stack's on each side.
     width: usize,
     height: usize,
@@ -1919,11 +1927,21 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
         if tone != Tone::Keep {
             compress_range(&mut image, tone)?;
         }
-        let reference = write_image_in(&plan.cache, Area::Previews, "stack-preview", &AnyImage::F32(with_alpha(&image, alpha.as_ref())?), None)?;
+        let (width, height) = (image.width(), image.height());
+        let shown = AnyImage::F32(with_alpha(&image, alpha.as_ref())?);
+        drop(image);
+        let path = if p.keep_file {
+            let reference = write_image_in(&plan.cache, Area::Previews, "stack-preview", &shown, None)?;
+            Some(reference.path.resolve(plan.cache.path()).display().to_string())
+        } else {
+            None
+        };
+        let AnyImage::F32(shown) = shown else { return Err(CommandError::Internal { command: "stack.preview".to_owned() }) };
+        let shown = std::sync::Arc::new(shown);
         let previewed = Previewed {
-            path: reference.path.resolve(plan.cache.path()).display().to_string(),
-            width: image.width(),
-            height: image.height(),
+            path,
+            width,
+            height,
             frames: plan.ids(),
             skipped: plan.skipped.clone(),
             uncovered,
@@ -1931,7 +1949,11 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
             settings: plan.settings.used(),
             framing: plan.framing,
         };
-        Ok(commit(move |_: &mut Session| Ok(previewed)))
+        // The session keeps the latest preview, for the viewer: a job's result is JSON, which carries no pixels.
+        Ok(commit(move |session: &mut Session| {
+            session.stack_preview = Some(shown);
+            Ok(previewed)
+        }))
     });
     Ok(job.stages(stages))
 }

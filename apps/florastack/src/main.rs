@@ -39,6 +39,10 @@ struct Arguments {
     /// Loopback port (0 asks the OS for an unused port; printed to stderr).
     #[arg(long, default_value_t = 0, requires = "control")]
     control_port: u16,
+    /// What control clients may do: read (queries only), project (also change the open project) or full (also
+    /// write files outside it: exports, presets, new projects, screenshots).
+    #[arg(long, default_value = "full", requires = "control")]
+    control_access: florastack_engine::automation::Access,
     /// Render the full UI offscreen, without a window (requires a usable GPU or software adapter).
     #[arg(long, requires = "control")]
     headless: bool,
@@ -67,7 +71,7 @@ fn main() -> ExitCode {
         options.engine.temporary_projects = Some(folder);
     }
     let result = if args.control {
-        control_run(options, args.control_port, args.control_token_file.as_deref(), args.headless, [args.width, args.height])
+        control_run(options, args.control_port, args.control_token_file.as_deref(), args.control_access, args.headless, [args.width, args.height])
     } else {
         run(options).map_err(|e| e.to_string())
     };
@@ -81,18 +85,25 @@ fn main() -> ExitCode {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn control_run(options: Options, port: u16, file: Option<&std::path::Path>, headless: bool, size: [u32; 2]) -> Result<(), String> {
+fn control_run(
+    options: Options,
+    port: u16,
+    file: Option<&std::path::Path>,
+    access: florastack_engine::automation::Access,
+    headless: bool,
+    size: [u32; 2],
+) -> Result<(), String> {
     let file = file.ok_or("--control requires --control-token-file")?;
     let token = florastack_engine::control::read_token(file).map_err(|e| e.to_string())?;
     if headless {
-        return florastack_app::offscreen::run(options, port, token, size);
+        return florastack_app::offscreen::run(options, port, token, access, size);
     }
     eframe::run_native(
         branding::DISPLAY_NAME,
         florastack_app::native_options(),
         Box::new(move |cc| {
             let mut app = florastack_app::FloraStackApp::new(cc, options);
-            let address = app.enable_control(&cc.egui_ctx, port, token)?;
+            let address = app.enable_control(&cc.egui_ctx, port, token, access)?;
             eprintln!("control: {address}");
             Ok(Box::new(app))
         }),

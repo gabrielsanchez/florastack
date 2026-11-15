@@ -3,9 +3,10 @@
 //! with arguments. A key the bundle lacks shows as itself, so a missing string is visible rather than blank; a test
 //! checks that the code uses no key the file lacks, and the file holds no message the code doesn't use.
 //!
-//! Commands' titles and summaries come from the engine's registry, in English; a translation can override them with
-//! the messages `command-<name>-title` and `command-<name>-summary` ([`command_title`], [`command_summary`]), the
-//! name's dot written as a hyphen (`command-align-run-title`).
+//! Commands' titles, summaries and help texts come from the engine's registry, in English; a translation can override
+//! them with the messages `command-<name>-title`, `command-<name>-summary` and `command-<name>-help`
+//! ([`command_title`], [`command_summary`], [`command_help`]), the name's dot written as a hyphen
+//! (`command-align-run-title`).
 
 use std::sync::OnceLock;
 
@@ -63,7 +64,7 @@ pub fn tr_args(key: &str, args: &[(&str, FluentValue<'_>)]) -> String {
     format(key, Some(&fluent))
 }
 
-/// A command's message `kind` (`title` or `summary`) from the bundle, if a translation has one.
+/// A command's message `kind` (`title`, `summary` or `help`) from the bundle, if a translation has one.
 fn command_text(name: &str, kind: &str) -> Option<String> {
     let key = format!("command-{}-{kind}", name.replace('.', "-"));
     bundle().get_message(&key).and_then(|m| m.value()).map(|_| format(&key, None))
@@ -77,6 +78,11 @@ pub fn command_title(name: &str, registry: &str) -> String {
 /// A command's summary: the translation's, or the registry's English.
 pub fn command_summary(name: &str, registry: &str) -> String {
     command_text(name, "summary").unwrap_or_else(|| registry.to_owned())
+}
+
+/// A command's help text, which the command palette shows: the translation's, or the registry's English.
+pub fn command_help(name: &str, registry: &str) -> String {
+    command_text(name, "help").unwrap_or_else(|| registry.to_owned())
 }
 
 #[cfg(test)]
@@ -182,5 +188,6 @@ mod tests {
         assert_eq!(tr_args("action-undo-named", &[("what", FluentValue::from("Rename project"))]), "Undo Rename project");
         assert_eq!(tr("no-such-key"), "no-such-key");
         assert_eq!(command_title("align.run", "Align frames"), "Align frames", "the registry's English is the fallback");
+        assert_eq!(command_help("align.run", "Aligns the frames."), "Aligns the frames.");
     }
 }

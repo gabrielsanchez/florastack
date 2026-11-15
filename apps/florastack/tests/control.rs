@@ -48,7 +48,7 @@ fn authenticated_control_changes_view_and_renders_an_offscreen_screenshot() {
     };
     let mut app = FloraStackApp::with_context(&ctx, options, Prefs::default(), Some(gpu));
     let token = "app-control-test-token-0123456789abcdef";
-    let address = app.enable_control(&ctx, 0, token.into()).unwrap();
+    let address = app.enable_control(&ctx, 0, token.into(), florastack_engine::automation::Access::Full).unwrap();
     let client = Client::new(address, token.into()).unwrap();
     let mut pump = || renderer.frame(&mut app, &ctx, [1000, 650]).unwrap();
     request(client.clone(), "ui.setView", json!({"tab": "export", "zoom": 2.0}), &mut pump).unwrap();

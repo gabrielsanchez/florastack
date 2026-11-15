@@ -11,13 +11,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use florastack_engine::Image;
 use florastack_engine::view::{self, DisplayImage};
 
-/// A request: a file, and the longest side wanted (none for full size).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// A request: a file, and the longest side wanted (none for full size). With `image`, that image is prepared
+/// instead of the file's (the stack preview the engine keeps in memory), and `path` only names the request.
+#[derive(Clone, Debug)]
 pub struct Request {
     pub path: PathBuf,
     pub max_side: Option<usize>,
+    pub image: Option<Arc<Image<f32>>>,
+}
+
+impl Request {
+    /// A request for a file's image.
+    pub fn file(path: PathBuf, max_side: Option<usize>) -> Request {
+        Request { path, max_side, image: None }
+    }
 }
 
 /// A request done.
@@ -59,7 +69,12 @@ impl Loader {
                         request = newer;
                     }
                 }
-                let image = view::load(&request.path, request.max_side).map(Arc::new).map_err(|e| e.to_string());
+                let image = match &request.image {
+                    Some(image) => view::display(image, request.max_side),
+                    None => view::load(&request.path, request.max_side),
+                }
+                .map(Arc::new)
+                .map_err(|e| e.to_string());
                 if outbox.send(Done { request, image }).is_err() {
                     break;
                 }

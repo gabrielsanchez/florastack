@@ -152,6 +152,9 @@ pub enum Banner {
 pub struct FloraStackApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) control: Option<florastack_engine::control::Server>,
+    /// What the control channel's clients may do.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) control_access: florastack_engine::automation::Access,
     pub shell: Shell,
     pub prefs: Prefs,
     pub selection: Selection,
@@ -238,6 +241,8 @@ impl FloraStackApp {
         let mut app = FloraStackApp {
             #[cfg(not(target_arch = "wasm32"))]
             control: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            control_access: florastack_engine::automation::Access::default(),
             shell: Shell::new(options.engine, waker),
             prefs,
             selection: Selection::Nothing,
@@ -518,7 +523,7 @@ impl FloraStackApp {
         if let Selection::Compare(_, second) = selection {
             self.pair = [None, None];
             if let Some(path) = output(second) {
-                self.pair_loader.request(Request { path, max_side: Some(self.viewer.max_side()) });
+                self.pair_loader.request(Request::file(path, Some(self.viewer.max_side())));
             }
         }
         self.selection = selection.clone();
@@ -536,7 +541,9 @@ impl FloraStackApp {
             }
         }
         if let Some(path) = path {
-            self.view_loader.request(Request { path: path.clone(), max_side: Some(self.viewer.max_side()) });
+            // The stack preview is an image the engine holds, not a file.
+            let image = if selection == Selection::Preview { self.shell.preview_image.clone() } else { None };
+            self.view_loader.request(Request { path: path.clone(), max_side: Some(self.viewer.max_side()), image });
             self.loading = Some((path, selection, keep));
         } else if selection != Selection::Threshold {
             self.viewer.clear();
@@ -643,7 +650,7 @@ impl FloraStackApp {
             return Some(texture.clone());
         }
         if self.thumbnail_requests.insert(key) {
-            self.thumb_loader.request(Request { path: path.to_path_buf(), max_side: Some(side) });
+            self.thumb_loader.request(Request::file(path.to_path_buf(), Some(side)));
         }
         None
     }
@@ -781,7 +788,7 @@ impl FloraStackApp {
             && let Some(path) = rendered["path"].as_str().map(PathBuf::from)
         {
             self.rendering = None;
-            self.view_loader.request(Request { path: path.clone(), max_side: Some(self.viewer.max_side()) });
+            self.view_loader.request(Request::file(path.clone(), Some(self.viewer.max_side())));
             self.loading = Some((path, selection, keep));
         }
         if let (Selection::Output(id), Some((shown, edits))) = (self.selection.clone(), self.shown_edits)

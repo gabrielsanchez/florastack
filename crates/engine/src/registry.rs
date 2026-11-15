@@ -65,7 +65,12 @@ pub enum Requires {
     WritableProject,
 }
 
-/// What a command may change, for clients that ask before running something (MCP's tool annotations).
+/// What a command may change, for clients that ask before running something (MCP's tool annotations) and for the
+/// access level an automation host holds its clients to (`crate::automation::Access`). A query changes nothing; every
+/// other command changes at least the session (what is open for retouching, a preview kept, a running job), so one
+/// that declares nothing counts as [`Effects::Project`]. A command that can write anywhere outside the open project's
+/// folder, whatever its parameters, declares [`Effects::Files`]: `crates/engine/tests/effects.txt` pins each
+/// command's, so that a change to one is seen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Effects {
@@ -232,7 +237,11 @@ impl CommandSpec {
             lane,
             undoable: meta.undoable,
             requires: meta.requires,
-            effects: meta.effects,
+            effects: match (kind, meta.effects) {
+                (Kind::Query, _) => Effects::None,
+                (_, Effects::None) => Effects::Project,
+                (_, declared) => declared,
+            },
             params: schema_for::<P>(),
             result: schema_for::<R>(),
             examples: meta.examples.iter().map(|e| serde_json::from_str(e).unwrap_or(Value::Null)).collect(),

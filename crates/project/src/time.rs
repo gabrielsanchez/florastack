@@ -54,6 +54,14 @@ impl Timestamp {
         self.millis
     }
 
+    /// The date and the time of day, in UTC: year, month, day, hour, minute and second.
+    pub fn civil(self) -> (u16, u8, u8, u8, u8, u8) {
+        let (year, month, day) = civil_from_days(self.millis.div_euclid(MILLIS_PER_DAY));
+        let ms = self.millis.rem_euclid(MILLIS_PER_DAY);
+        let small = |n: i64| u8::try_from(n).unwrap_or(0);
+        (u16::try_from(year).unwrap_or(0), small(month), small(day), small(ms / 3_600_000), small(ms / 60_000 % 60), small(ms / 1000 % 60))
+    }
+
     pub fn to_system_time(self) -> SystemTime {
         let magnitude = Duration::from_millis(self.millis.unsigned_abs());
         if self.millis >= 0 { UNIX_EPOCH + magnitude } else { UNIX_EPOCH - magnitude }
@@ -196,6 +204,7 @@ mod tests {
         assert_eq!(ts("1970-01-01T00:00:00Z"), Timestamp::UNIX_EPOCH);
         // 2026-10-21T13:02:11.250Z, worked out by hand: 20747 days, then 13:02:11.25.
         let t = Timestamp::from_unix_millis(20_747 * MILLIS_PER_DAY + (13 * 3600 + 2 * 60 + 11) * 1000 + 250).unwrap();
+        assert_eq!(t.civil(), (2026, 10, 21, 13, 2, 11));
         assert_eq!(t.to_string(), "2026-10-21T13:02:11.250Z");
         assert_eq!(ts("2026-10-21T13:02:11.250Z"), t);
         assert_eq!(ts("2026-10-21T15:02:11.25+02:00"), t, "offsets are applied");

@@ -7,7 +7,10 @@
 //! - Calls of the same command with the same coalescing key, one right after the other (no undo, redo or other change
 //!   in between), merge too, so that a slider drag is one step. Of a run of edits that each set a value whole, only the
 //!   oldest inverse is kept ([`Edit::overwrites`]).
-//! - A new step clears the redo steps; the oldest steps go beyond [`LIMIT`].
+//! - A new step clears the redo steps; the oldest steps go beyond [`LIMIT`], and beyond [`BUDGET`], the memory the
+//!   steps' edits may hold together ([`Edit::weight`]): a step that puts back an output with its retouching, or an
+//!   output's adjustments as they were before each brushed stroke of a mask, can hold megabytes. The newest step is
+//!   kept whatever it holds.
 //! - The history isn't saved with the project, and saving doesn't change it. The project is dirty when its state isn't
 //!   the one last saved: undoing back to the saved state makes it clean again. Bookkeeping that isn't a step of its own
 //!   (a system edit) makes it dirty until the next save.
@@ -19,6 +22,10 @@ pub type StepList = Vec<(String, &'static str)>;
 
 /// The most undo steps kept.
 pub const LIMIT: usize = 1000;
+
+/// What the steps' edits may hold together, in bytes, by [`Edit::weight`]: beyond it the oldest undo steps go, then
+/// the redo steps furthest away.
+pub const BUDGET: usize = 256 << 20;
 
 /// One undo or redo step.
 #[derive(Clone, Debug)]
@@ -32,6 +39,8 @@ pub(crate) struct Step {
     /// The project's state before and after the step.
     pub(crate) before: u64,
     pub(crate) after: u64,
+    /// What `edit` holds ([`Edit::weight`]), worked out once.
+    weight: usize,
 }
 
 /// The undo and redo steps of the open project. See the module documentation.
@@ -39,6 +48,8 @@ pub(crate) struct Step {
 pub(crate) struct History {
     pub(crate) undo: Vec<Step>,
     pub(crate) redo: Vec<Step>,
+    /// What the steps may hold together: [`BUDGET`], less in tests.
+    budget: usize,
     /// The project's current state, and the next state id to give out.
     current: u64,
     next: u64,
@@ -51,7 +62,30 @@ pub(crate) struct History {
 impl History {
     /// The history of a project just opened (saved as it is).
     pub(crate) fn new() -> History {
-        History { undo: Vec::new(), redo: Vec::new(), current: 0, next: 1, saved: Some(0), unsaved_system: false, mergeable: false }
+        History { undo: Vec::new(), redo: Vec::new(), budget: BUDGET, current: 0, next: 1, saved: Some(0), unsaved_system: false, mergeable: false }
+    }
+
+    /// What the steps' edits hold together, in bytes.
+    pub(crate) fn weight(&self) -> usize {
+        self.undo.iter().chain(&self.redo).map(|s| s.weight).fold(0, usize::saturating_add)
+    }
+
+    /// Drops the oldest undo steps beyond [`LIMIT`] and the budget, but never the newest; then, still over the
+    /// budget, the redo steps furthest from now, but never the next.
+    fn trim(&mut self) {
+        let mut weight = self.weight();
+        let mut gone = 0;
+        while gone + 1 < self.undo.len() && (self.undo.len() - gone > LIMIT || weight > self.budget) {
+            weight = weight.saturating_sub(self.undo.get(gone).map_or(0, |s| s.weight));
+            gone += 1;
+        }
+        self.undo.drain(..gone);
+        let mut gone = 0;
+        while gone + 1 < self.redo.len() && weight > self.budget {
+            weight = weight.saturating_sub(self.redo.get(gone).map_or(0, |s| s.weight));
+            gone += 1;
+        }
+        self.redo.drain(..gone);
     }
 
     fn fresh(&mut self) -> u64 {
@@ -64,13 +98,12 @@ impl History {
     pub(crate) fn record(&mut self, label: &str, command: &'static str, inverse: Edit, coalesce: Option<String>) {
         let before = self.current;
         let after = self.fresh();
-        self.undo.push(Step { label: label.to_owned(), command, edit: inverse, coalesce, before, after });
+        let weight = inverse.weight();
+        self.undo.push(Step { label: label.to_owned(), command, edit: inverse, coalesce, before, after, weight });
         self.current = after;
         self.redo.clear();
         self.mergeable = true;
-        if self.undo.len() > LIMIT {
-            self.undo.remove(0);
-        }
+        self.trim();
     }
 
     /// Whether a call of `command` with this coalescing key merges into the last step.
@@ -94,10 +127,12 @@ impl History {
             parts.insert(0, inverse);
         }
         step.edit = if parts.len() == 1 { parts.pop().unwrap_or(Edit::Batch(Vec::new())) } else { Edit::Batch(parts) };
+        step.weight = step.edit.weight();
         step.after = after;
         self.redo.clear();
         self.current = after;
         self.mergeable = true;
+        self.trim();
     }
 
     /// The step to undo, taken off the stack.
@@ -114,7 +149,8 @@ impl History {
     pub(crate) fn undone(&mut self, step: Step, redo: Edit) {
         self.current = step.before;
         self.mergeable = false;
-        self.redo.push(Step { edit: redo, ..step });
+        self.redo.push(Step { weight: redo.weight(), edit: redo, ..step });
+        self.trim();
     }
 
     pub(crate) fn take_redo(&mut self) -> Option<Step> {
@@ -129,7 +165,8 @@ impl History {
     pub(crate) fn redone(&mut self, step: Step, undo: Edit) {
         self.current = step.after;
         self.mergeable = false;
-        self.undo.push(Step { edit: undo, ..step });
+        self.undo.push(Step { weight: undo.weight(), edit: undo, ..step });
+        self.trim();
     }
 
     /// A change that is no step (bookkeeping): the project needs saving.
@@ -240,5 +277,36 @@ mod tests {
             set(&mut p, &mut h, f64::from(u32::try_from(i % 20).unwrap()), None);
         }
         assert_eq!(h.undo.len(), LIMIT);
+    }
+
+    #[test]
+    fn the_history_keeps_within_its_budget() {
+        // Steps that each put back a table of about 10 kB, in a history that may hold 100 kB.
+        let table = |i: u32| serde_json::json!({ "note": "x".repeat(10_000), "exposure": f64::from(i) }).as_object().unwrap().clone();
+        let exposure = |p: &Project| p.preferences.group(Group::Develop).get("exposure").and_then(serde_json::Value::as_f64);
+        let mut p = Project::new(None).unwrap();
+        let mut h = History::new();
+        h.budget = 100_000;
+        for i in 0..30 {
+            let inverse = p.apply(Edit::SetPreferences { group: Group::Develop, table: table(i) }).unwrap();
+            h.record("Set", "develop.set", inverse, None);
+            assert!(h.weight() <= h.budget, "{} bytes in {} steps", h.weight(), h.undo.len());
+        }
+        let kept = h.undo.len();
+        assert!((8..=10).contains(&kept), "{kept} steps");
+        // What is left undoes in order, back to where the oldest step kept started.
+        while h.undo_label().is_some() {
+            undo(&mut p, &mut h);
+        }
+        assert_eq!(exposure(&p), Some(f64::from(29 - u32::try_from(kept).unwrap())));
+        assert!(h.redo.len() + 1 >= kept && h.weight() <= h.budget, "{} redo steps, {} bytes", h.redo.len(), h.weight());
+        // A step larger than the whole budget is kept all the same, alone.
+        let big = serde_json::json!({ "note": "y".repeat(300_000) }).as_object().unwrap().clone();
+        p.apply(Edit::SetPreferences { group: Group::Develop, table: big }).unwrap();
+        let inverse = p.apply(Edit::SetPreferences { group: Group::Develop, table: table(0) }).unwrap();
+        h.record("Set", "develop.set", inverse, None);
+        assert_eq!((h.undo.len(), h.redo.len()), (1, 0), "the step that puts the large table back");
+        undo(&mut p, &mut h);
+        assert_eq!(p.preferences.group(Group::Develop)["note"].as_str().map(str::len), Some(300_000));
     }
 }

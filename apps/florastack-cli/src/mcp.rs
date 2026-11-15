@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use florastack_engine::automation::Access;
 use florastack_engine::{Engine, ErrorInfo, Value, automation, branding, control, json};
 use rmcp::{
     ErrorData, ServerHandler, ServiceExt,
@@ -18,18 +19,19 @@ use crate::client::Failure;
 
 #[derive(Clone)]
 enum Backend {
-    Headless(Arc<Mutex<Engine>>),
+    /// The engine of this process, whose clients are held to an access level.
+    Headless(Arc<Mutex<Engine>>, Access),
     Desktop(control::Client),
 }
 
 impl Backend {
     async fn request(&self, method: &str, params: Value) -> Result<Value, ErrorInfo> {
         match self {
-            Self::Headless(engine) => {
-                let (engine, method) = (engine.clone(), method.to_owned());
+            Self::Headless(engine, access) => {
+                let (engine, method, access) = (engine.clone(), method.to_owned(), *access);
                 tokio::task::spawn_blocking(move || {
                     let mut engine = engine.lock().map_err(|_| control::error("internal", "engine lock was poisoned"))?;
-                    automation::request(&mut engine, &method, params).map_err(|e| e.info())
+                    automation::request(&mut engine, access, &method, params).map_err(|e| e.info())
                 })
                 .await
                 .map_err(|_| control::error("internal", "engine worker stopped"))?
@@ -45,17 +47,28 @@ struct Server {
 }
 
 impl Server {
-    async fn new(backend: Backend) -> Result<Self, ErrorInfo> {
+    /// The tools `access` allows, of those the backend lists (a desktop app lists what its own level allows).
+    async fn new(backend: Backend, access: Access) -> Result<Self, ErrorInfo> {
         let commands = backend.request("commands.list", json!({})).await?;
         let mut tools = Vec::new();
         for command in commands.as_array().ok_or_else(|| control::error("internal", "registry returned no command list"))? {
             let name = command.get("name").and_then(Value::as_str).ok_or_else(|| control::error("internal", "command has no name"))?;
+            // What the command may change: nothing, the project, or files outside it. One that doesn't say is taken
+            // to change files.
+            let needs = match command["effects"].as_str() {
+                Some("none") => Access::Read,
+                Some("project") => Access::Project,
+                _ => Access::Full,
+            };
+            if access < needs {
+                continue;
+            }
             // JSON schemas, titles and descriptions are passed through, including local $defs and required fields.
             let tool = json!({
                 "name": name, "title": command.get("title"),
                 "description": format!("{}\n\n{}", command["summary"].as_str().unwrap_or_default(), command["help"].as_str().unwrap_or_default()),
                 "inputSchema": command.get("params"), "outputSchema": command.get("result"),
-                "annotations": {"readOnlyHint": command["kind"] == "query"}
+                "annotations": {"readOnlyHint": needs == Access::Read}
             });
             tools.push(serde_json::from_value(tool).map_err(|e| control::error("internal", &e.to_string()))?);
         }
@@ -157,16 +170,16 @@ impl ServerHandler for Server {
     }
 }
 
-pub fn serve(engine: Engine, connect: Option<&str>, token_file: Option<&std::path::Path>) -> Result<(), Failure> {
+pub fn serve(engine: Engine, connect: Option<&str>, token_file: Option<&std::path::Path>, access: Access) -> Result<(), Failure> {
     let backend = match (connect, token_file) {
         (Some(address), Some(path)) => Backend::Desktop(
             control::Client::new(control::address(address).map_err(failure)?, control::read_token(path).map_err(failure)?).map_err(failure)?,
         ),
-        (None, None) => Backend::Headless(Arc::new(Mutex::new(engine))),
+        (None, None) => Backend::Headless(Arc::new(Mutex::new(engine)), access),
         _ => return Err(Failure::usage("--connect and --token-file must be given together")),
     };
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
-        let server = Server::new(backend).await.map_err(|info| Failure { exit: 1, info })?;
+        let server = Server::new(backend, access).await.map_err(|info| Failure { exit: 1, info })?;
         let running = server.serve(rmcp::transport::stdio()).await.map_err(failure)?;
         running.waiting().await.map_err(failure)?;
         Ok(())

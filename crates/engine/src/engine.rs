@@ -249,6 +249,13 @@ impl Engine {
         self.session.project().ok()
     }
 
+    /// The latest stack preview (`stack.preview`'s), for a viewer to show with [`crate::view::display`]: linear
+    /// samples with the frames' color space, and an alpha channel where no frame covers a pixel. None before the
+    /// first preview of the open project.
+    pub fn stack_preview(&self) -> Option<std::sync::Arc<florastack_core::Image<f32>>> {
+        self.session.stack_preview.clone()
+    }
+
     /// Reads a stacked output as full-precision linear samples in its recorded color space. The returned image
     /// owns its samples; changing it cannot change the project. Retouching is available through export commands.
     pub fn read_output(&self, id: florastack_project::OutputId) -> Result<florastack_core::Image<f32>, CommandError> {

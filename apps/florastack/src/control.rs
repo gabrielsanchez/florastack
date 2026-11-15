@@ -1,4 +1,8 @@
 //! Host-only view operations. Engine commands use the registry; UI requests change only view state.
+//!
+//! The channel's clients are held to the access level it was started with (`--control-access`): the engine's commands
+//! by what they declare they change, and of the host's own requests, `ui.screenshot`, which writes a file where the
+//! client says, needs `full`, and `ui.close` that discards unsaved changes needs `project`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,7 +10,7 @@ use std::sync::Arc;
 
 use florastack_engine::{
     ErrorInfo, Value,
-    automation::decode,
+    automation::{Access, decode},
     control::{self, Pending},
     json,
 };
@@ -15,7 +19,14 @@ use serde::Deserialize;
 use crate::{FloraStackApp, app::Selection, prefs::Tab};
 
 impl FloraStackApp {
-    pub fn enable_control(&mut self, ctx: &egui::Context, port: u16, token: String) -> Result<std::net::SocketAddr, control::ControlError> {
+    pub fn enable_control(
+        &mut self,
+        ctx: &egui::Context,
+        port: u16,
+        token: String,
+        access: Access,
+    ) -> Result<std::net::SocketAddr, control::ControlError> {
+        self.control_access = access;
         let ctx = ctx.clone();
         let server = control::Server::start(port, token, Arc::new(move || ctx.request_repaint()))?;
         let address = server.address;
@@ -32,7 +43,11 @@ impl FloraStackApp {
                 continue;
             }
             if pending.method == "ui.screenshot" {
-                screenshot(ctx, pending);
+                if self.control_access < Access::Full {
+                    pending.respond(Err(forbidden("ui.screenshot", "writes a file", self.control_access, Access::Full)));
+                } else {
+                    screenshot(ctx, pending);
+                }
                 continue;
             }
             let result = self.control_request(&pending.method, pending.params.clone());
@@ -78,15 +93,23 @@ impl FloraStackApp {
             }
             "ui.close" => {
                 let p: Close = decode(method, params).map_err(|e| e.info())?;
+                if p.discard_changes && self.control_access < Access::Project {
+                    return Err(forbidden("ui.close", "discards the project's unsaved changes", self.control_access, Access::Project));
+                }
                 if self.shell.engine().is_dirty() && !p.discard_changes {
                     return Err(control::error("unavailable", "save the project or pass discardChanges before closing"));
                 }
                 self.close_from_control();
                 Ok(json!({"closing": true}))
             }
-            _ => self.shell.automation(method, params).map_err(|e| e.info()),
+            _ => self.shell.automation(self.control_access, method, params).map_err(|e| e.info()),
         }
     }
+}
+
+/// The error for a host request beyond the channel's access level, as the engine's for a command.
+fn forbidden(method: &str, does: &str, access: Access, needs: Access) -> ErrorInfo {
+    control::error("forbidden", &format!("`{method}` {does}, which this connection's access level ({access}) doesn't allow: it needs `{needs}`"))
 }
 
 #[derive(Deserialize)]

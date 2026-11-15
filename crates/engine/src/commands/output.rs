@@ -546,6 +546,13 @@ fn yes() -> bool {
     true
 }
 
+/// When an output was made, as its files' metadata say it (the modification date): the time of the stack, in UTC,
+/// not of the writing, so that an output written twice, or made again from its sidecar, gives the same bytes.
+pub(crate) fn made(output: &florastack_project::Output) -> florastack_codecs::Timestamp {
+    let (year, month, day, hour, minute, second) = output.created().civil();
+    florastack_codecs::Timestamp { year, month, day, hour, minute, second }
+}
+
 fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandError> {
     let project = session.project()?;
     let folder = session.folder()?;
@@ -578,6 +585,7 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
     let cache = session.cache_dir()?;
     let spec = p.spec;
     let with_metadata = p.metadata;
+    let made = made(output);
     let plan = JobPlan::new(move |ctx| {
         ctx.stage(0);
         let mut warnings = early;
@@ -585,7 +593,7 @@ fn save(session: &Session, p: SaveParams) -> Result<JobPlan<Written>, CommandErr
         let pixels = super::annotation::render(pixels.read(&cache, &mut warnings)?, &layers, calibration)?;
         ctx.checkpoint()?;
         let metadata = if with_metadata { frame_metadata(source.as_deref(), &mut warnings) } else { None };
-        let metadata = OutputMetadata { source: metadata, frame_count: Some(frame_count), modified: None };
+        let metadata = OutputMetadata { source: metadata, frame_count: Some(frame_count), modified: Some(made) };
         ctx.checkpoint()?;
         ctx.stage(1);
         let mut publication = Publication::default();

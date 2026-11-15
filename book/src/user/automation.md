@@ -25,6 +25,27 @@ project; arbitrary files cannot be read as resources. Read the project resource 
 By default MCP owns an isolated headless engine. `--device cpu` before `mcp` selects CPU processing. Unnamed projects
 are kept in the CLI's temporary-project root; save one with `project.saveAs` to keep it elsewhere.
 
+## Access levels
+
+An MCP server and a control channel give their clients one of three access levels, by what each command declares it
+may change (the *Changes* column of the [command reference](../reference/commands.md)):
+
+| Level | Clients may run |
+|---|---|
+| `read` | Queries only: nothing changes, in the project or outside it. |
+| `project` | Also the commands that change the open project or the session (adding frames, aligning, stacking, retouching, saving), and that write in the project's own folder. |
+| `full` | Every command, those that write files outside the project folder too: exports, presets, new projects, the watch folder, the trash. The default. |
+
+`florastack-cli mcp --access project` and `florastack --control --control-access project` set the level. A client
+is offered only the tools of its level (`commands.list` leaves the others out), and a command beyond it is refused
+with the error code `forbidden` before it runs. Of the desktop app's own requests, `ui.screenshot` needs `full`, and
+`ui.close` with `discardChanges` needs `project`. An MCP server bridged to a desktop app is held to both levels, its
+own and the app's.
+
+The levels are about what changes, not about what is read: at every level a client can read the project's state and
+have files that it names read (`project.findStacks`, `preset.read`), and at `project` it can open any project folder
+and add any image file as a frame. The level is the host's choice, made when it starts; a client can't raise it.
+
 ## Desktop control and bridging
 
 Generate a token file with Python (or an equivalent cryptographic random generator):
@@ -41,7 +62,8 @@ redirected (`florastack.exe --control ... 2> control.txt`, or a pipe as `scripts
 or fix the port with `--control-port`. Control is
 disabled unless `--control` is supplied. It always binds to IPv4 loopback; clients accept only numeric loopback
 addresses. There is no HTTP listener. Authentication is required on every request, before it reaches the UI thread.
-The token grants the same local file, project and device capabilities as engine commands.
+The token grants the same local file, project and device capabilities as engine commands, within the access level
+the app was started with (`--control-access`, above).
 
 To bridge MCP to that app, launch:
 

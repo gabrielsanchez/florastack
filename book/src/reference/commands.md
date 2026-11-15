@@ -95,7 +95,7 @@ Examples:
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Instant | No | An open project | Nothing |
+| Instant | No | An open project | The project or the session |
 
 Parameters: none.
 
@@ -180,7 +180,7 @@ Measures the output's frames' focus at a quarter of their size, as the depth-map
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters: none.
 
@@ -270,7 +270,7 @@ Reads the output with its visible retouch strokes (the output open for retouchin
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -301,7 +301,7 @@ The preview fits in `width` by `height` pixels (never enlarged). When the output
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -562,7 +562,7 @@ Checks that the folder holds `model.safetensors` (the official checkpoint: its s
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | Nothing | Nothing |
+| Job, on the preview lane | No | Nothing | The project or the session |
 
 Parameters:
 
@@ -1299,7 +1299,7 @@ What `compute.info` does on its first call, again: a device on the best adapter 
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | Nothing | Nothing |
+| Job, on the preview lane | No | Nothing | The project or the session |
 
 Parameters:
 
@@ -1913,7 +1913,7 @@ Reads and develops the frames whose preview is missing or out of date (their fil
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters: none.
 
@@ -2072,7 +2072,7 @@ For viewers: the result is a lossless image in the project's cache, whose `path`
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -2235,7 +2235,7 @@ Uses the selected output's immutable depth and confidence maps and its visible r
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -2557,7 +2557,7 @@ Examples:
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the heavy lane | No | Nothing | Nothing |
+| Job, on the heavy lane | No | Nothing | The project or the session |
 
 Parameters:
 
@@ -2677,11 +2677,11 @@ Example:
 
 **New project.** Creates a project folder and opens the new project, closing the project that is open.
 
-With a `name`, the project folder is `<name>.florastack` in `folder`; without one, the project is temporary (unnamed) and goes in the temporary-projects folder, where orphan cleanup offers to move it to the trash once it is old and still unnamed. The project that is open is closed first, which is refused while it has unsaved changes, unless `discardChanges`.
+With a `name`, the project folder is `<name>.florastack` in `folder`; without one, the project is temporary (unnamed) and goes in the temporary-projects folder, where orphan cleanup offers to move it to the trash once it is old and still unnamed. The project that is open is closed first, which is refused while it has unsaved changes, unless `discardChanges`. The folder is made wherever `folder` says, so the command counts as one that writes files outside the open project.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Instant | No | Nothing | The project or the session |
+| Instant | No | Nothing | Files outside the project |
 
 Parameters:
 
@@ -2948,7 +2948,7 @@ Example:
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Instant | No | A project open for editing | Nothing |
+| Instant | No | A project open for editing | The project or the session |
 
 Parameters: none.
 
@@ -2972,7 +2972,7 @@ The result is cached as the output's `retouched` map, so that opening it again n
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Instant | No | An open project | Nothing |
+| Instant | No | An open project | The project or the session |
 
 Parameters: none.
 
@@ -2996,7 +2996,7 @@ Measures the output's frames' focus at a quarter of their size, as the depth-map
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters: none.
 
@@ -3022,7 +3022,7 @@ Reads the output and paints its visible retouch strokes over it, or reads the re
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the heavy lane | No | An open project | Nothing |
+| Job, on the heavy lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -3056,7 +3056,7 @@ Example:
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Instant | No | A project open for editing | Nothing |
+| Instant | No | A project open for editing | The project or the session |
 
 Parameters:
 
@@ -3149,7 +3149,7 @@ A frame is read and developed as stacking reads it, its brightness gain applied,
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -3359,11 +3359,11 @@ Example:
 
 **Preview stack.** Stacks the aligned frames at a quarter of their size, as a quick preview.
 
-The weighted average of `stack.average`, or with `method` "pyramid", "depth-map" or "wavelet" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames reduced to a quarter of their size on each side with the settings scaled to match, so that it shows in seconds what the full stack will look like. Takes the same settings as that method's command. The result is a linear 32-bit float TIFF in the project's `previews/` folder, as a path, kept until the project is closed: no output, no undo step. Runs beside other jobs as a preview; a newer call replaces an older one still running, so call it after every change of a setting.
+The weighted average of `stack.average`, or with `method` "pyramid", "depth-map" or "wavelet" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames reduced to a quarter of their size on each side with the settings scaled to match, so that it shows in seconds what the full stack will look like. Takes the same settings as that method's command. The engine keeps the latest preview in memory for its viewer, until the project is closed: no output, no undo step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one still running, so call it after every change of a setting.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 
@@ -3373,6 +3373,7 @@ Parameters:
 | `consistency` | boolean | Whether the wavelet method's consistency filter is on; the project's when left out. |
 | `decisions` | `"luminance"` \| `"channels"` | The pyramid's decisions, luminance or channels; the project's when left out. |
 | `grit` | number, from 0.0 to 1.0 | The pyramid's or the wavelet method's grit suppression, 0 or from 0.25 to 1; the project's when left out. |
+| `keepFile` | boolean | For `stack.preview` alone: also write the preview as a linear 32-bit float TIFF in the project's `previews/` folder and return its `path`. Off by default: the engine keeps the preview in memory for its viewer. Default: `false`. |
 | `level` | number, at least 0.0 | The depth-map method's threshold level, from 0; the project's when left out. |
 | `levels` | integer, from 0 to 10 | The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out. |
 | `lowpass` | `"focus"` \| `"average"` \| `"select"` | How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out. |
@@ -3396,7 +3397,7 @@ Result:
 | `framing` | `"narrow"` \| `"wide"` \| `"common"` | The output's field of view. See the module documentation. |
 | `height` | integer |  |
 | `method` | string | The method, "average", "pyramid", "depth-map" or "wavelet". |
-| `path` | string | The preview: a linear 32-bit float TIFF, with an alpha channel when some pixels are covered by no frame. |
+| `path` | string | The preview as a file, when `keepFile` asked for one: a linear 32-bit float TIFF, with an alpha channel when some pixels are covered by no frame. |
 | `settings` | object | The settings at full scale, and the framing. |
 | `skipped` | array of integer | The enabled frames left out, because their alignment was rejected. |
 | `uncovered` | integer | How many pixels no frame covers. |
@@ -3556,6 +3557,7 @@ Parameters:
 | `final.consistency` | boolean | Whether the wavelet method's consistency filter is on; the project's when left out. |
 | `final.decisions` | `"luminance"` \| `"channels"` | The pyramid's decisions, luminance or channels; the project's when left out. |
 | `final.grit` | number, from 0.0 to 1.0 | The pyramid's or the wavelet method's grit suppression, 0 or from 0.25 to 1; the project's when left out. |
+| `final.keepFile` | boolean | For `stack.preview` alone: also write the preview as a linear 32-bit float TIFF in the project's `previews/` folder and return its `path`. Off by default: the engine keeps the preview in memory for its viewer. Default: `false`. |
 | `final.level` | number, at least 0.0 | The depth-map method's threshold level, from 0; the project's when left out. |
 | `final.levels` | integer, from 0 to 10 | The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out. |
 | `final.lowpass` | `"focus"` \| `"average"` \| `"select"` | How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out. |
@@ -3579,6 +3581,7 @@ Parameters:
 | `slabs.consistency` | boolean | Whether the wavelet method's consistency filter is on; the project's when left out. |
 | `slabs.decisions` | `"luminance"` \| `"channels"` | The pyramid's decisions, luminance or channels; the project's when left out. |
 | `slabs.grit` | number, from 0.0 to 1.0 | The pyramid's or the wavelet method's grit suppression, 0 or from 0.25 to 1; the project's when left out. |
+| `slabs.keepFile` | boolean | For `stack.preview` alone: also write the preview as a linear 32-bit float TIFF in the project's `previews/` folder and return its `path`. Off by default: the engine keeps the preview in memory for its viewer. Default: `false`. |
 | `slabs.level` | number, at least 0.0 | The depth-map method's threshold level, from 0; the project's when left out. |
 | `slabs.levels` | integer, from 0 to 10 | The pyramid's or the wavelet method's levels at full size, 0 to 10 (0 chooses); the project's when left out. |
 | `slabs.lowpass` | `"focus"` \| `"average"` \| `"select"` | How the wavelet method makes the coarsest low-pass: focus, average or select; the project's when left out. |
@@ -3629,7 +3632,7 @@ The depth-map method follows each pixel's sharpest frame only where that frame s
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
-| Job, on the preview lane | No | An open project | Nothing |
+| Job, on the preview lane | No | An open project | The project or the session |
 
 Parameters:
 

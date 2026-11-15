@@ -172,7 +172,8 @@ fn every_command_dispatches_from_json() {
     // outputs.
     assert_eq!(calls.run("stack.get", "{}")["settings"]["average"]["radius"], 3.0);
     assert_eq!(calls.run("stack.set", r#"{ "average": { "smoothing": 2.0 } }"#)["settings"]["average"]["smoothing"], 2.0);
-    let preview = calls.run("stack.preview", "{}");
+    assert!(calls.run("stack.preview", "{}").get("path").is_none(), "kept in memory");
+    let preview = calls.run("stack.preview", r#"{ "keepFile": true }"#);
     assert!(Path::new(preview["path"].as_str().unwrap()).is_file(), "{preview}");
     // The depth map's threshold, shown: the first call measures the frames' focus, the next reuses it, and a higher
     // percentile leaves more of the picture below the threshold; each picture replaces the one before.

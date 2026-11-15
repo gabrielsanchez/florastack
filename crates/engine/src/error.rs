@@ -54,6 +54,9 @@ pub enum CommandError {
     Conflict { command: String, job: String, aspects: Aspects },
     #[error("there is no {what}")]
     NotFound { what: String },
+    /// An automation client asked for more than its access level allows (`automation::Access`).
+    #[error("`{command}` may change {changes}, which this connection's access level ({access}) doesn't allow: it needs `{needs}`")]
+    Forbidden { command: String, changes: &'static str, access: &'static str, needs: &'static str },
     #[error("cancelled")]
     Cancelled,
     // The other crates' errors are boxed, so that every `Result` of the engine stays small.
@@ -146,6 +149,7 @@ impl CommandError {
             CommandError::Unavailable { .. } => "unavailable",
             CommandError::Conflict { .. } => "conflict",
             CommandError::NotFound { .. } => "notFound",
+            CommandError::Forbidden { .. } => "forbidden",
             CommandError::Cancelled => "cancelled",
             CommandError::Project(_) | CommandError::Edit(_) => "project",
             CommandError::Data(e) => match &**e {

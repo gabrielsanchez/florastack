@@ -296,7 +296,73 @@ impl schemars::JsonSchema for Aspects {
     }
 }
 
+/// Counts the bytes written to it.
+struct Counter(usize);
+
+impl std::io::Write for Counter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The size of a value written as JSON, which stands for what it takes in memory.
+fn json_bytes(value: &impl Serialize) -> usize {
+    let mut counter = Counter(0);
+    // The counter never fails, and a value that can't be written counts as what was written of it.
+    let _ = serde_json::to_writer(&mut counter, value);
+    counter.0
+}
+
 impl Edit {
+    /// About how much the edit holds, in bytes: the size of its data written as JSON, and a little for itself. The
+    /// engine keeps its undo history within a budget by it. Most edits are small; the large ones are those that put
+    /// back something whole: an output with its retouch layers, a layer with its strokes, an output's adjustments
+    /// with their brushed masks.
+    pub fn weight(&self) -> usize {
+        const OWN: usize = 64;
+        let held = match self {
+            Edit::SetName(name) => name.as_ref().map_or(0, String::len),
+            Edit::AddFrame { file, exif } => file.path.len() + exif.as_ref().map_or(0, json_bytes),
+            Edit::InsertFrame { frame, .. } => json_bytes(frame),
+            Edit::SetFrameOrder(order) => order.len() * size_of::<FrameId>(),
+            Edit::SetPreferences { table, .. } => json_bytes(table),
+            Edit::SetDevelop(develop) => develop.as_ref().map_or(0, json_bytes),
+            Edit::SetAlignment { run, frames } => {
+                run.as_ref().map_or(0, json_bytes) + frames.iter().map(|f| 128 + f.report.as_ref().map_or(0, json_bytes)).sum::<usize>()
+            }
+            // The state an output was made from is shared with the output itself, and not counted.
+            Edit::AddOutput(new) => new.name.len() + json_bytes(&new.parameters) + 512,
+            Edit::InsertOutput { output, .. } => {
+                json_bytes(&output.parameters)
+                    + output.retouch.iter().map(json_bytes).sum::<usize>()
+                    + output.annotations.iter().map(json_bytes).sum::<usize>()
+                    + output.adjustments.as_ref().map_or(0, json_bytes)
+                    + 1024
+            }
+            Edit::RenameOutput { name, .. } | Edit::AddLayer { name, .. } => name.len(),
+            Edit::SetAnnotations { layers, .. } => layers.iter().map(json_bytes).sum(),
+            Edit::InsertLayer { layer, .. } => json_bytes(layer),
+            Edit::PushStroke { stroke, .. } => json_bytes(stroke),
+            Edit::SetAdjustments { adjustments, .. } => adjustments.as_ref().map_or(0, json_bytes),
+            Edit::Batch(edits) => edits.iter().map(Edit::weight).sum(),
+            Edit::RemoveFrame(_)
+            | Edit::SetFrameEnabled { .. }
+            | Edit::SetFrameModified { .. }
+            | Edit::RemoveOutput(_)
+            | Edit::RemoveLayer { .. }
+            | Edit::PopStroke { .. }
+            | Edit::SetLayerVisible { .. } => 0,
+            // A reference to a cache file: its path, size and hash.
+            Edit::SetProjectMap { .. } | Edit::SetPreviews { .. } | Edit::SetOutputMap { .. } | Edit::SetAlignedImage { .. } => 256,
+        };
+        held.saturating_add(OWN)
+    }
+
     /// The parts of the project the edit changes.
     pub fn aspects(&self) -> Aspects {
         match self {

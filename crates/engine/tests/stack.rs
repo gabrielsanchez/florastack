@@ -137,15 +137,38 @@ fn the_preview_is_a_quarter_of_the_stack_and_changes_nothing() {
     run(&mut engine, "align.run", "{}");
     let before = state(&engine);
     let steps = run(&mut engine, "edit.history", "{}")["undo"].as_array().unwrap().len();
+    assert!(engine.stack_preview().is_none());
     let previewed = run(&mut engine, "stack.preview", r#"{ "smoothing": 2.0 }"#);
     println!("{previewed}");
     assert_eq!((previewed["width"].as_u64(), previewed["height"].as_u64()), (Some(40), Some(30)), "{previewed}");
     assert_eq!(previewed["settings"]["smoothing"], 2.0, "the settings at full scale");
+    // The engine keeps the pixels for its viewer, and writes no file unless asked to.
+    assert!(previewed.get("path").is_none(), "{previewed}");
+    let previews = engine.project_path().unwrap().join("previews");
+    let files = |dir: &Path| {
+        std::fs::read_dir(dir).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("stack-preview")).count()
+    };
+    assert_eq!(files(&previews), 0);
+    let kept = engine.stack_preview().unwrap();
+    assert_eq!((kept.width(), kept.height()), (40, 30));
+    let shown = florastack_engine::view::display(&kept, None).unwrap();
+    assert_eq!((shown.width, shown.height), (40, 30));
+    // With `keepFile` it is a TIFF too, of the same pixels; and the latest preview replaces the one kept.
+    let previewed = run(&mut engine, "stack.preview", r#"{ "smoothing": 2.0, "keepFile": true }"#);
     let path = PathBuf::from(previewed["path"].as_str().unwrap());
     let decoded = florastack_codecs::read_file(&path, &florastack_codecs::ReadOptions::default()).unwrap();
-    assert_eq!((decoded.image.width(), decoded.image.height()), (40, 30));
+    let florastack_core::AnyImage::F32(decoded) = decoded.image else { panic!("a float TIFF") };
+    assert!(decoded.rows().zip(kept.rows()).all(|(a, b)| a == b));
+    assert_eq!(files(&previews), 1);
+    let other = run(&mut engine, "stack.preview", r#"{ "smoothing": 8.0 }"#);
+    assert!(other.get("path").is_none());
+    let latest = engine.stack_preview().unwrap();
+    assert!(latest.rows().zip(kept.rows()).any(|(a, b)| a != b), "another smoothing, another preview");
     assert_eq!(state(&engine), before, "a preview changes nothing in the project");
     assert_eq!(run(&mut engine, "edit.history", "{}")["undo"].as_array().unwrap().len(), steps);
+    // It goes with the project.
+    run(&mut engine, "project.close", r#"{ "discardChanges": true }"#);
+    assert!(engine.stack_preview().is_none());
 }
 
 #[test]

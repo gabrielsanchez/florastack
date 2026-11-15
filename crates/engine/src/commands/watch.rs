@@ -281,7 +281,7 @@ pub(super) fn ingest(
             }
             if added.get("added").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
                 call(&mut engine, ctx, "watch.align", json!({}))?;
-                let preview = call(&mut engine, ctx, "stack.preview", json!({"method": p.method.name()}))?;
+                let preview = call(&mut engine, ctx, "stack.preview", json!({"method": p.method.name(), "keepFile": true}))?;
                 if let Some(path) = preview.get("path").and_then(Value::as_str) {
                     let destination = workspace.stage.path().join(&preview_name);
                     let bytes = florastack_core::fs::read(path).map_err(|e| io_error(Path::new(path), e))?;

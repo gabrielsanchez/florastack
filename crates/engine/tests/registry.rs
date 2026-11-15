@@ -5,7 +5,7 @@
 mod common;
 
 use florastack_engine::registry::valid_name;
-use florastack_engine::{CommandError, Engine, Event, Kind, Registry, Value};
+use florastack_engine::{CommandError, Effects, Engine, Event, Kind, Registry, Value};
 
 /// Every property of an object schema, at every depth, has a description, directly or on the type it is.
 fn undescribed(schema: &Value, at: &str, out: &mut Vec<String>) {
@@ -29,6 +29,32 @@ fn the_command_list_is_pinned() {
         "commands were added, removed or renamed: update crates/engine/tests/commands.txt in the same change (a renamed command keeps its old name as an alias)"
     );
     assert!(Registry::builder().standard().build().is_ok());
+}
+
+/// What each command may change is what automation hosts hold their clients to (`automation::Access`): a command that
+/// starts writing files outside the project, or stops, must show here.
+#[test]
+fn the_commands_effects_are_pinned() {
+    let pinned: Vec<&str> = include_str!("effects.txt").lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let registry = Registry::standard();
+    let declared: Vec<String> = registry
+        .list()
+        .into_iter()
+        .map(|info| {
+            let effects = match info.effects {
+                Effects::None => "none",
+                Effects::Project => "project",
+                Effects::Files => "files",
+            };
+            // Only queries change nothing: they read the session and can't do otherwise.
+            assert_eq!(info.kind == Kind::Query, info.effects == Effects::None, "{}", info.name);
+            format!("{} {effects}", info.name)
+        })
+        .collect();
+    assert_eq!(
+        declared, pinned,
+        "what a command may change was added or changed: check it against what the command does, and update crates/engine/tests/effects.txt in the same change"
+    );
 }
 
 #[test]

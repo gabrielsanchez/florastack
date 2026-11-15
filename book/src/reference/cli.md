@@ -99,7 +99,8 @@ The examples use quoting that Bash and PowerShell accept; in `cmd.exe`, escape t
 - `florastack-cli reproduce result.tif.json --out reproduced` makes an export again from its JSON sidecar, after
   checking that the original inputs are unchanged ([Scientific exports](../user/scientific-exports.md)).
 - `florastack-cli mcp` serves the engine's commands as MCP tools; `--connect HOST:PORT --token-file FILE` bridges to a
-  running desktop app instead ([Automation, MCP and Python](../user/automation.md)).
+  running desktop app instead, and `--access read`, `project` or `full` (the default) limits what its clients may
+  change ([Automation, MCP and Python](../user/automation.md)).
 
 ## project
 
