@@ -25,6 +25,9 @@
 //! - the clean set, defocus included: 0.15 px;
 //! - the noisy, dusty set: 0.3 px.
 //!
+//! The generator of occluding layers (`generate_layered`) defocuses as a lens does where one thing hides another, and
+//! the last test aligns its stacks too, with targets of their own.
+//!
 //! The same goes for brightness: the generator doesn't conserve light where it blurs a bright near object over its
 //! background, so frames focused away from it come out up to 0.8% brighter or darker than their gain says, and the
 //! estimated gain follows. Without defocus, the gain is right to within 0.1%.
@@ -32,7 +35,7 @@
 
 use florastack_align::{AlignSettings, Flag, StackAlignment, Status, align_frames};
 use florastack_core::Unmonitored;
-use florastack_core::testutil::{StackParams, SyntheticStack, generate, scene, transform_error};
+use florastack_core::testutil::{Backdrop, StackParams, SyntheticStack, generate, generate_layered, scene, transform_error};
 
 const WIDTH: usize = 320;
 const HEIGHT: usize = 240;
@@ -83,10 +86,15 @@ impl Score {
 /// by up to 1.5 pixels, so that against an aligned neighbor it moves (inpainted first, as the engine does, it doesn't:
 /// `tests/motion.rs`).
 fn run(name: &str, settings: &AlignSettings, params: impl Fn(u64) -> StackParams) -> Vec<Score> {
+    run_on(name, settings, |seed| stack(&params(seed), WIDTH, HEIGHT, seed))
+}
+
+/// [`run`] on the stacks `make` gives for seeds 1 to 3.
+fn run_on(name: &str, settings: &AlignSettings, make: impl Fn(u64) -> SyntheticStack) -> Vec<Score> {
     println!("{name}: mean and worst frame error (px), worst gain error (%)");
     let mut scores = Vec::new();
     for seed in 1..=3 {
-        let stack = stack(&params(seed), WIDTH, HEIGHT, seed);
+        let stack = make(seed);
         for master in [0, FRAMES / 2] {
             let result = align_frames(&stack.frames, master, settings, &Unmonitored).unwrap();
             for (i, frame) in result.frames.iter().enumerate() {
@@ -152,5 +160,35 @@ fn refining_against_the_master_suits_shallow_stacks() {
     let settings = AlignSettings { refine: true, ..AlignSettings::default() };
     for score in run("refined, not defocused", &settings, |seed| sharp(StackParams::noisy_dusty(FRAMES, WIDTH, HEIGHT, seed))) {
         assert!(score.mean() <= 0.05, "mean error {} px", score.mean());
+    }
+}
+
+/// A stack of the scene of occluding layers of `seed` (`scene::layered`, on a textured backdrop).
+fn layered(params: &StackParams, seed: u64) -> SyntheticStack {
+    generate_layered(&scene::layered(WIDTH, HEIGHT, 1.0, Backdrop::Textured, seed).unwrap(), params).unwrap()
+}
+
+#[test]
+fn stacks_of_occluding_layers_are_aligned() {
+    // Not defocused, the layers are detail like any other.
+    for score in run_on("layers, moved, not defocused", &AlignSettings::default(), |seed| layered(&sharp(StackParams::clean(FRAMES, seed)), seed)) {
+        assert!(score.mean() <= 0.05, "mean error {} px", score.mean());
+    }
+    // Defocused, it matters which frame is the master. The middle one, which the engine takes, has the discs and the
+    // far bristles in focus: measured 0.06 to 0.09 px clean and 0.05 to 0.07 px noisy. The first one is focused on the
+    // nearest bristle alone, a few pixels of detail in front of everything else blurred by up to 8 pixels, and its one
+    // link to the second frame, which every other frame's transform goes through, is the weak one: 0.18 to 0.21 px
+    // clean, 0.29 to 0.68 px noisy.
+    let clean = run_on("layers, clean", &AlignSettings::default(), |seed| layered(&StackParams::clean(FRAMES, seed), seed));
+    let noisy =
+        run_on("layers, noisy and dusty", &AlignSettings::default(), |seed| layered(&StackParams::noisy_dusty(FRAMES, WIDTH, HEIGHT, seed), seed));
+    for (set, first) in [(&clean, 0.25), (&noisy, 0.8)] {
+        // `run_on` aligns each stack to its first frame, then to its middle one.
+        for pair in set.chunks(2) {
+            assert!(pair[0].mean() <= first, "master first: mean error {} px", pair[0].mean());
+            assert!(pair[1].mean() <= 0.12, "master in the middle: mean error {} px", pair[1].mean());
+            // The layered generator composites its layers, which conserves their light: the gain is right to 0.1%.
+            assert!(pair.iter().all(|s| s.worst_gain() <= 0.002), "gain error {}", pair[0].worst_gain().max(pair[1].worst_gain()));
+        }
     }
 }
