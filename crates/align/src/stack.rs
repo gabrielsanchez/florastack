@@ -5,7 +5,8 @@
 //! to the frame before it in that order, its neighbor in focus, and its transform to the master is the neighbor's
 //! followed by that link. Neighbors are focused at nearly the same depth, so they share most of their detail, which
 //! frames focused far apart don't. With [`AlignSettings::refine`], each frame is then aligned again directly against
-//! the master, starting from the chained estimate.
+//! the master, starting from the chained estimate; a frame that its neighbor would have rejected and the master
+//! matches is aligned to the master instead, and the chain goes on from it.
 //!
 //! A frame whose alignment hits a limit, scores below [`AlignSettings::min_score`] or finds no match is flagged, and
 //! with [`AlignSettings::reject`] rejected: it keeps the transform of the frame it was compared with (no motion
@@ -19,7 +20,10 @@
 //!
 //! Only three prepared frames are held at a time (the master's, the last accepted one's and the new one's), however
 //! long the stack, plus each frame's small focus and motion maps: the caller reads each frame when it is asked for
-//! and can drop it once [`StackAligner::add`] returns. Once every frame is in, [`StackAligner::finish`] compares the
+//! and can drop it once [`StackAligner::add`] returns. Preparing a frame, more than half of the work on it, needs
+//! nothing of the frames before it: a caller that reads its frames from files can prepare the next one
+//! ([`StackAligner::preparer`], [`Preparer::prepare`]) while this one is aligned ([`StackAligner::add_prepared`]),
+//! which then holds a fourth. Once every frame is in, [`StackAligner::finish`] compares the
 //! focus maps, through the frames' transforms, flags the frames that are out of focus ([`Flag::OutOfFocus`]), and
 //! flags those where the subject moved where they are in focus ([`Flag::Moved`]).
 
@@ -104,8 +108,8 @@ pub struct FrameAlignment {
     /// How well the frame matched the frame it was aligned to, from 0 to 1: the correlation of their band-passed
     /// luminance once aligned. 1 for the master.
     pub score: f64,
-    /// The frame it was aligned to: its neighbor toward the master, or the last frame there that wasn't rejected.
-    /// `None` for the master.
+    /// The frame it was aligned to: its neighbor toward the master, or the last frame there that wasn't rejected, or
+    /// the master itself when refining matched it and the neighbor didn't. `None` for the master.
     pub reference: Option<usize>,
     pub status: Status,
     pub flags: Vec<Flag>,
@@ -209,6 +213,34 @@ struct Link {
     step: Params,
 }
 
+/// Prepares frames for a [`StackAligner`], from any thread: see [`StackAligner::preparer`].
+#[derive(Clone, Copy, Debug)]
+pub struct Preparer {
+    resolution: usize,
+    brightness: bool,
+    white_balance: bool,
+}
+
+/// A frame prepared for alignment ([`Preparer::prepare`]): its band-passed luminance at the working resolution and
+/// below, and what its brightness, focus and white balance are measured on. A few times the working resolution's
+/// pixels, whatever the frame's size.
+pub struct PreparedFrame {
+    prepared: Prepared,
+    width: usize,
+    height: usize,
+}
+
+impl Preparer {
+    /// Prepares `frame` for [`StackAligner::add_prepared`].
+    pub fn prepare(&self, frame: &Image<f32>) -> Result<PreparedFrame, AlignError> {
+        let mut prepared = Prepared::new(frame, self.resolution, self.brightness)?;
+        if self.white_balance {
+            prepared.colors = Colors::new(frame)?;
+        }
+        Ok(PreparedFrame { prepared, width: frame.width(), height: frame.height() })
+    }
+}
+
 /// Aligns a stack frame by frame. See the module documentation.
 pub struct StackAligner {
     settings: AlignSettings,
@@ -290,8 +322,24 @@ impl StackAligner {
     /// Aligns the next frame ([`StackAligner::next_frame`]), which must have the master's size, and returns its
     /// alignment. Reports progress to `monitor` and stops with [`AlignError::Cancelled`] when it is cancelled.
     pub fn add(&mut self, frame: &Image<f32>, monitor: &dyn Monitor) -> Result<&FrameAlignment, AlignError> {
+        if self.next_frame().is_none() {
+            return Err(AlignError::Finished);
+        }
+        monitor.checkpoint()?;
+        let prepared = self.preparer().prepare(frame)?;
+        self.add_prepared(prepared, monitor)
+    }
+
+    /// What prepares this aligner's frames, which can be done ahead and on another thread: the result is the same
+    /// as [`StackAligner::add`]'s.
+    pub fn preparer(&self) -> Preparer {
+        Preparer { resolution: self.settings.resolution as usize, brightness: self.settings.brightness, white_balance: self.settings.white_balance }
+    }
+
+    /// [`StackAligner::add`] for a frame prepared already, by this aligner's [`StackAligner::preparer`].
+    pub fn add_prepared(&mut self, frame: PreparedFrame, monitor: &dyn Monitor) -> Result<&FrameAlignment, AlignError> {
         let index = self.next_frame().ok_or(AlignError::Finished)?;
-        let (w, h) = (frame.width(), frame.height());
+        let PreparedFrame { prepared, width: w, height: h } = frame;
         if let Some(g) = &self.geometry
             && (g.width, g.height) != (w, h)
         {
@@ -299,11 +347,6 @@ impl StackAligner {
         }
         if let Some(mask) = &self.defects {
             mask.check_size(w, h)?;
-        }
-        monitor.checkpoint()?;
-        let mut prepared = Prepared::new(frame, self.settings.resolution as usize, self.settings.brightness)?;
-        if self.settings.white_balance {
-            prepared.colors = Colors::new(frame)?;
         }
         if let Some(slot) = self.focus.get_mut(index) {
             *slot = Some(prepared.focus.clone());
@@ -382,8 +425,9 @@ impl StackAligner {
             None => (self.master, master, Params::default(), Params::default()),
         };
         let expected = (predicted.get(Term::ShiftX), predicted.get(Term::ShiftY));
+        let (mut reference_index, mut reference) = (reference_index, reference);
         let link = ecc::align(reference, &prepared, &geometry, &self.terms, predicted, Some(expected));
-        let mut total = compose(&geometry, &base, &link.params);
+        let (mut total, mut score, mut step) = (compose(&geometry, &base, &link.params), link.score, link.params);
 
         let mut flags = Vec::new();
         if let Some(term) = link.pushed.or_else(|| geometry.beyond_limits(&total, LIMIT_TOLERANCE)) {
@@ -397,25 +441,40 @@ impl StackAligner {
         if link.ambiguity >= AMBIGUOUS {
             flags.push(Flag::RepeatingPattern);
         }
-        if self.settings.refine && link.matched {
-            let direct = ecc::align(master, &prepared, &geometry, &self.terms, total, None);
+        if self.settings.refine {
+            // A link that can't be trusted is no place to start from: the neighbor's own transform is, with the shift
+            // looked for again by correlation.
+            let failed = flags.iter().any(|f| f.rejects());
+            let direct = if failed {
+                ecc::align(master, &prepared, &geometry, &self.terms, base, Some((base.get(Term::ShiftX), base.get(Term::ShiftY))))
+            } else {
+                ecc::align(master, &prepared, &geometry, &self.terms, total, None)
+            };
             let trusted = direct.matched
                 && direct.score >= self.settings.min_score
                 && direct.pushed.is_none()
                 && geometry.beyond_limits(&direct.params, LIMIT_TOLERANCE).is_none();
             if trusted {
                 total = direct.params;
-            } else {
+                if failed {
+                    // The master matches the frame, whatever its neighbor does: it is aligned to the master, and the
+                    // next frame's link is expected to be what the last one's was.
+                    flags.retain(|f| !f.rejects());
+                    (reference_index, reference, score, step) = (self.master, master, direct.score, predicted);
+                }
+            } else if link.matched {
                 flags.push(Flag::NotRefined);
             }
         }
+        let to_master = reference_index == self.master;
 
         let rejected = self.settings.reject && flags.iter().any(|f| f.rejects());
         // The motion map; which of its cells count is told once every frame's focus is known (`finish`).
         let motion = if rejected {
             None
         } else {
-            let link_transform = geometry.similarity(&link.params).to_affine(geometry.width, geometry.height);
+            let link = if to_master { &total } else { &link.params };
+            let link_transform = geometry.similarity(link).to_affine(geometry.width, geometry.height);
             motion::measure(reference, &prepared, &link_transform, self.settings.min_motion, self.defects.as_ref())
                 .map(|map| Motion::new(map, |_| true))
         };
@@ -428,14 +487,14 @@ impl StackAligner {
             _ => None,
         };
         if !rejected {
-            self.last = Some(Link { index, prepared, total, step: link.params });
+            self.last = Some(Link { index, prepared, total, step });
         }
         FrameAlignment {
             transform,
             similarity,
             gain,
             white_balance,
-            score: link.score.clamp(0.0, 1.0),
+            score: score.clamp(0.0, 1.0),
             reference: Some(reference_index),
             status: if rejected { Status::Rejected } else { Status::Aligned },
             flags,

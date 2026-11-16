@@ -232,3 +232,68 @@ fn cancellation_stops_at_the_next_frame() {
     align_frames(&s.frames, 0, &AlignSettings::default(), &done).unwrap();
     assert_eq!(done.seen.load(Ordering::Relaxed), 6, "progress reaches the last frame");
 }
+
+/// `a` and `b` mixed half and half.
+fn mixed(a: &Image<f32>, b: &Image<f32>) -> Image<f32> {
+    Image::from_fn(a.width(), a.height(), a.channels(), a.color_space().clone(), |x, y, c| a.get(x, y, c).unwrap().midpoint(b.get(x, y, c).unwrap()))
+        .unwrap()
+}
+
+#[test]
+fn refining_keeps_a_frame_that_matches_the_master_and_not_its_neighbor() {
+    // The second and third frames each share half of their content with the master, and a quarter with each other:
+    // the third matches the master better than it matches its neighbor.
+    let (scene, _) = scene::textured(WIDTH, HEIGHT, 21).unwrap();
+    let (first, _) = scene::textured(WIDTH, HEIGHT, 22).unwrap();
+    let (second, _) = scene::textured(WIDTH, HEIGHT, 23).unwrap();
+    let frames = [scene.clone(), mixed(&moved(&scene, 0.5, -0.25), &first), mixed(&moved(&scene, 1.25, 0.75), &second)];
+    let chained = AlignSettings { reject: false, ..AlignSettings::default() };
+    let scores = align_frames(&frames, 0, &chained, &Unmonitored).unwrap();
+    let (to_master, to_neighbor) = (scores.frames[1].score, scores.frames[2].score);
+    println!("scores: {to_master:.3} against the master, {to_neighbor:.3} against the neighbor");
+    assert!(to_neighbor < to_master - 0.1);
+
+    // Between the two scores, the neighbor's link is too weak: alone, it rejects the frame.
+    let settings = AlignSettings { min_score: to_master.midpoint(to_neighbor), ..AlignSettings::default() };
+    let result = align_frames(&frames, 0, &settings, &Unmonitored).unwrap();
+    assert_eq!((result.frames[1].status, result.frames[2].status), (Status::Aligned, Status::Rejected));
+    assert_eq!(result.frames[2].flags, [Flag::LowScore]);
+
+    // Refined, the master matches it: it is aligned to the master, to where it was moved.
+    let refined = align_frames(&frames, 0, &AlignSettings { refine: true, ..settings.clone() }, &Unmonitored).unwrap();
+    let frame = &refined.frames[2];
+    assert_eq!((frame.status, frame.reference, frame.flags.as_slice()), (Status::Aligned, Some(0), [].as_slice()), "{frame:?}");
+    assert!(frame.score >= settings.min_score, "{frame:?}");
+    assert!(frame.motion.is_some());
+    let error = transform_error(&frame.transform, &Affine::translation(1.25, 0.75), WIDTH, HEIGHT);
+    // Half of each frame is content the master doesn't have, which no alignment is exact on (the frame before it,
+    // aligned by its link, is 0.55 px off): measured 0.22 px.
+    println!("refined: {error:.4} px, score {:.3}", frame.score);
+    assert!(error < 0.5, "{error} px");
+}
+
+#[test]
+fn frames_prepared_ahead_on_another_thread_align_the_same() {
+    let s = stack(StackParams::noisy_dusty(6, WIDTH, HEIGHT, 12));
+    let settings = AlignSettings { white_balance: true, ..AlignSettings::default() };
+    let expected = align_frames(&s.frames, 3, &settings, &Unmonitored).unwrap();
+
+    let mut aligner = StackAligner::new(&settings, s.frames.len(), 3).unwrap();
+    let (preparer, order) = (aligner.preparer(), aligner.order().to_vec());
+    let mut next = Some(preparer.prepare(&s.frames[order[0]]).unwrap());
+    for at in 0..order.len() {
+        let current = next.take().unwrap();
+        let following = order.get(at + 1).map(|&i| &s.frames[i]);
+        let (done, ahead) = rayon::join(|| aligner.add_prepared(current, &Unmonitored).map(drop), || following.map(|f| preparer.prepare(f).unwrap()));
+        done.unwrap();
+        next = ahead;
+    }
+    assert_eq!(aligner.finish().unwrap(), expected);
+
+    // A frame of another size is refused when it is added, prepared or not.
+    let mut aligner = StackAligner::new(&settings, 2, 0).unwrap();
+    aligner.add(&s.frames[0], &Unmonitored).unwrap();
+    let other = Image::from_fn(WIDTH / 2, HEIGHT, 3, ColorSpace::SRGB, |x, y, _| ((x * 5 + y * 3) % 7) as f32 / 6.0).unwrap();
+    let small = aligner.preparer().prepare(&other).unwrap();
+    assert!(matches!(aligner.add_prepared(small, &Unmonitored), Err(AlignError::FrameSize { index: 1, .. })));
+}
