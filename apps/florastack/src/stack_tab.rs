@@ -164,7 +164,7 @@ pub fn show(app: &mut FloraStackApp, ui: &mut egui::Ui) {
 fn workflow(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let frames = app.shell.frames.len();
-    let aligning = app.shell.running(&["align.run"]);
+    let aligning = app.shell.running(&["align.run", "align.sortByScale"]);
     let stacking = app.shell.running(&["stack.average", "stack.pyramid", "stack.depthMap", "stack.wavelet", "stack.slabbed"]);
     egui::Grid::new("workflow").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
         ui.label(RichText::new(tr_args("step-frames", &[("count", frames.into())])).strong());
@@ -197,8 +197,10 @@ fn workflow(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     }
 }
 
-/// How alignment went: how many frames are aligned, flagged and rejected, and whether the settings changed since.
-fn alignment_status(app: &FloraStackApp, ui: &mut egui::Ui) {
+/// How alignment went: how many frames are aligned, flagged and rejected; why the alignment no longer fits the
+/// project, as the engine tells it (`align.info`'s `stale`); and the frames that aren't in the order of their
+/// magnification, with the command that sorts them.
+fn alignment_status(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     let frames = &app.shell.frames;
     let enabled = frames.iter().filter(|f| f.enabled).count();
     let aligned = frames.iter().filter(|f| f.enabled && f.alignment.is_some()).count();
@@ -212,20 +214,40 @@ fn alignment_status(app: &FloraStackApp, ui: &mut egui::Ui) {
         "align-summary",
         &[("aligned", aligned.into()), ("count", enabled.into()), ("flagged", flagged.into()), ("rejected", rejected.into())],
     ));
-    // The settings it ran with, but the framing, which applies when stacking.
-    let without_framing = |v: &Value| {
-        let mut v = v.clone();
-        if let Some(map) = v.as_object_mut() {
-            map.remove("framing");
-        }
-        v
-    };
-    let ran = &app.shell.alignment["run"]["settings"];
     let warn = ui.visuals().warn_fg_color;
-    if !ran.is_null() && without_framing(ran) != without_framing(&app.shell.align_settings) {
-        ui.colored_label(warn, tr("align-changed"));
-    } else if aligned < enabled {
+    let run = &app.shell.alignment["run"];
+    let stale = |reason: &str| run["stale"].as_array().is_some_and(|s| s.iter().any(|r| r == reason));
+    // The first that applies: each of them is cured by aligning again.
+    if stale("frames") && aligned < enabled {
         ui.colored_label(warn, tr_args("align-missing", &[("count", (enabled - aligned).into())]));
+    } else if let Some(key) = [
+        ("frames", "align-moved"),
+        ("settings", "align-changed"),
+        ("develop", "align-develop-changed"),
+        ("defects", "align-defects-changed"),
+        ("order", "align-order-changed"),
+    ]
+    .iter()
+    .find(|(reason, _)| stale(reason))
+    .map(|(_, key)| *key)
+    {
+        ui.colored_label(warn, tr(key));
+    }
+    let out_of_order = run["outOfOrder"].as_array().map_or(0, Vec::len);
+    if out_of_order > 0 {
+        ui.colored_label(warn, tr_args("align-out-of-order", &[("count", out_of_order.into())]));
+        let free = !app.shell.running(&[
+            "align.run",
+            "align.sortByScale",
+            "stack.average",
+            "stack.pyramid",
+            "stack.depthMap",
+            "stack.wavelet",
+            "stack.slabbed",
+        ]);
+        if ui.add_enabled(free, egui::Button::new(tr("align-sort"))).on_hover_text(tr("tip-align-sort")).clicked() {
+            app.shell.run("align.sortByScale", json!({}));
+        }
     }
 }
 

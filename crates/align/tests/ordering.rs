@@ -14,7 +14,8 @@ use florastack_align::{
     coverage_count, narrow_end, scale_order, warp_to_canvas,
 };
 use florastack_core::ops::{Border, Interpolation, warp_into};
-use florastack_core::testutil::{StackParams, SyntheticStack, generate, scene, transform_error};
+use florastack_core::testutil::scene::Backdrop;
+use florastack_core::testutil::{StackParams, SyntheticStack, generate, generate_layered, scene, transform_error};
 use florastack_core::{Affine, ColorSpace, Image, Rect, Unmonitored};
 use florastack_metrics::{psnr, ssim};
 
@@ -165,8 +166,9 @@ fn sorting_by_scale_restores_a_shuffled_stack() {
 /// flagged, and none of the frames focused on the scene (3 to 7). The frames focused 0.25 off it (2 and 8), 2 pixels
 /// off its nearest or farthest detail, score far below the scene's frames but aren't held to the flag: the generator
 /// blurs each pixel with its own depth's blur, so where a near bristle crosses the far background the frames' detail
-/// mixes the two depths, and frame 8 is about as sharp as the in-focus frames on a few such cells (the roadmap's
-/// follow-up on the generator's depth edges).
+/// mixes the two depths, and frame 8 is about as sharp as the in-focus frames on a few such cells: about 1% of the
+/// stack's sharp content. That is the generator's doing, not a lens's: the next test has the same frames of a scene
+/// whose layers hide one another.
 #[test]
 fn frames_focused_off_the_scene_are_flagged_out_of_focus() {
     let params = StackParams { focus_range: Some((-0.75, 1.75)), ..StackParams::clean(11, 7) };
@@ -190,6 +192,36 @@ fn frames_focused_off_the_scene_are_flagged_out_of_focus() {
     let inside = cropped(240, 180, &StackParams::clean(8, 8));
     let (alignment, _) = align_ordered(&inside.frames, &AlignSettings::default(), &Unmonitored).unwrap();
     assert!(alignment.frames.iter().all(|f| !f.flags.contains(&Flag::OutOfFocus) && f.sharp_fraction.is_some()), "{alignment:?}");
+}
+
+/// The same eleven frames of scenes of occluding layers (`generate_layered`), where a blurred foreground spreads over
+/// what is behind it and the background stays behind the foreground, as through a lens: the frame focused 0.25 past
+/// the scene (8, 2 pixels of blur on its farthest detail) has at most 0.1% of the stack's sharp content and is
+/// flagged with the frames further off (measured 0 to 0.0010, on three seeds and both backdrops; the gathering
+/// generator leaves it 0.8 to 1.3%). The frame focused 0.25 in front of the nearest bristle (2) keeps 0.4 to 2.1%,
+/// from the few cells where that bristle crosses nothing sharper, and is flagged or not as that falls: it is not held
+/// to the flag. No frame focused on the scene is flagged.
+#[test]
+fn a_frame_focused_just_past_a_scene_of_occluding_layers_is_flagged_out_of_focus() {
+    for seed in [7_u64, 8, 9] {
+        for backdrop in [Backdrop::Textured, Backdrop::SmoothRight] {
+            let params = StackParams { focus_range: Some((-0.75, 1.75)), ..StackParams::clean(11, seed) };
+            let layers = scene::layered(240 + 2 * MARGIN, 180 + 2 * MARGIN, 1.0, backdrop, seed).unwrap();
+            let stack = generate_layered(&layers, &params).unwrap();
+            let frames: Vec<Image<f32>> = stack.frames.iter().map(|f| f.crop(Rect::new(MARGIN, MARGIN, 240, 180)).unwrap()).collect();
+            let (alignment, _) = align_ordered(&frames, &AlignSettings::default(), &Unmonitored).unwrap();
+            let fractions: Vec<f64> = alignment.frames.iter().map(|f| f.sharp_fraction.unwrap()).collect();
+            let flagged: Vec<usize> = (0..11).filter(|&i| alignment.frames[i].flags.contains(&Flag::OutOfFocus)).collect();
+            println!("{backdrop:?}, seed {seed}: {:?}, flagged {flagged:?}", fractions.iter().map(|f| (f * 1e4).round() / 1e4).collect::<Vec<_>>());
+            for frame in [0, 1, 8, 9, 10] {
+                assert!(flagged.contains(&frame), "{backdrop:?}, seed {seed}, frame {frame}: {fractions:?}");
+            }
+            assert!(flagged.iter().all(|f| ![3, 4, 5, 6, 7].contains(f)), "{backdrop:?}, seed {seed}: {flagged:?}");
+            let least_in_focus = fractions[3..8].iter().copied().fold(1.0, f64::min);
+            assert!(least_in_focus > 0.05 && fractions[2] < least_in_focus / 4.0, "{backdrop:?}, seed {seed}: {fractions:?}");
+            assert!(alignment.frames.iter().all(|f| f.status != Status::Rejected), "only flagged, never rejected");
+        }
+    }
 }
 
 /// `values`, one per sample of a `width` x `height` RGB image, as that image.

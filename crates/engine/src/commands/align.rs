@@ -12,7 +12,13 @@
 //! size, narrow end, processing order), the frames' previews as shot and aligned onto the canvas of the framing set,
 //! and a mask it detected. Frames that aren't enabled lose any alignment they had, so that the frames with an
 //! alignment are the run's. Sorting by scale aligns twice, first to measure every frame's scale in the present order,
-//! then in scale order, and its commit puts the frames in that order (`Edit::SetFrameOrder`) in the same step.
+//! then in scale order, and its commit puts the frames in that order (`Edit::SetFrameOrder`) in the same step; when
+//! the project holds a run of these frames that still fits it, the scales are that run's and the frames are read
+//! once.
+//!
+//! A run records what it read its frames with (`RunReport::made_from`), and `align.info` says when it no longer fits
+//! the project (`crate::project::stale_alignment`). When only the processing order's settings changed since,
+//! `align.run` reads no frame: it orders the stored run again (`crate::project::reorder_edit`).
 //!
 //! The framing isn't recorded with the run: it follows from the transforms whenever it is asked for (`align.info`,
 //! and the stacking of roadmap 3), so that changing it needs no new alignment, and nor does the coverage of the
@@ -24,7 +30,8 @@ use std::path::PathBuf;
 
 use florastack_align::{
     AlignError, AlignSettings, DefectDetector, DefectMask, End, Flag, Framing, MIN_DETECTION_FRAMES, PreparedFrame, Preparer, Similarity,
-    StackAligner, StackAlignment, Status, detection_frames, inpaint, measuring_settings, order_stack, scale_order,
+    StackAligner, StackAlignment, Status, detection_frames, frames_out_of_place, inpaint, measuring_settings, order_of_scales, order_stack,
+    scale_order,
 };
 use florastack_codecs::ReadOptions;
 use florastack_core::{Image, Monitor};
@@ -37,8 +44,9 @@ use crate::error::CommandError;
 use crate::frames::FrameReader;
 use crate::jobs::{Commit, JobContext, JobPlan, Lane, commit};
 use crate::project::{
-    FrameMotion, MaskSource, MaskSummary, ProjectDataError, align_settings, alignment_edit, defect_mask_ref, defects_map, develop_record,
-    preview_key, read_defect_mask, store_defect_mask, stored_alignment, write_aligned_preview, write_frame_preview,
+    FrameMotion, MaskSource, MaskSummary, ProjectDataError, Stale, align_settings, alignment_edit, defect_mask_ref, defects_map, develop_record,
+    made_from, preview_key, read_defect_mask, reorder_edit, stale_alignment, store_defect_mask, stored_alignment, write_aligned_preview,
+    write_frame_preview,
 };
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
@@ -84,8 +92,13 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      or `reverse_order` on), and every frame's sharp-content fraction is measured: the frames with no \
                      in-focus detail are flagged `out-of-focus`, for you to disable with `project.setFramesEnabled`. \
                      Frames that aren't enabled lose any alignment they had. The result lists the master, the order and \
-                     the flagged and rejected frames; `align.info` has every frame's details. Runs as a job; the \
-                     alignment is recorded in one undo step when it ends, or not at all when it is cancelled.",
+                     the flagged and rejected frames; `align.info` has every frame's details. `outOfOrder` lists the \
+                     frames whose magnification doesn't fit their place in the stack, as when the files aren't in the \
+                     order of focus: `align.sortByScale` puts them in order, and until then narrow framing may keep \
+                     the field of view of a frame that isn't the narrowest. When only the processing order's settings \
+                     changed since the last run (`automatic_order`, `reverse_order`), no frame is read: the stored \
+                     alignment is ordered again. Runs as a job; the alignment is recorded in one undo step when it \
+                     ends, or not at all when it is cancelled.",
                 )
                 .undoable(),
             Lane::Heavy,
@@ -103,8 +116,9 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      pass aligns the frames as they are, to measure their scales; the frames are then sorted by scale, \
                      in the direction that keeps the stack's present trend, and aligned again in that order, as \
                      `align.run` does. Disabled frames keep their places in the list. Fails, changing nothing, when \
-                     the scales differ too little to sort by. Runs as a job, which reads every frame twice; the new \
-                     order and the alignment are one undo step.",
+                     the scales differ too little to sort by. Runs as a job, which reads every frame twice, or once \
+                     when the project holds an alignment of these frames that still fits it (`align.info` has no \
+                     `stale`) and has their scales, none rejected; the new order and the alignment are one undo step.",
             )
             .undoable(),
             Lane::Heavy,
@@ -121,7 +135,11 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                      shift), its brightness gain and score, its status and flags, its sharp-content fraction and what \
                      moved in it against its neighbor. \
                      For the run: the master, the frames' size, the narrow end, the processing order and the settings \
-                     it ran with. For each framing (narrow, wide, common): the size of the output it gives and the \
+                     it ran with; `stale`, why it no longer fits the project (frames added, enabled or moved since, \
+                     alignment or develop settings changed, another defect mask), in which case `align.run` aligns \
+                     again, and `order` alone when it only has to order the run again; and `outOfOrder`, the frames \
+                     whose magnification doesn't fit their place in the stack, which `align.sortByScale` repairs. \
+                     For each framing (narrow, wide, common): the size of the output it gives and the \
                      transform from its pixels to the master's, or why the frames can't be framed that way; `framing` \
                      is the one the settings choose.",
             )
@@ -486,7 +504,10 @@ impl Plan {
             rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
             defects: self.detected.as_ref().map(|(_, s)| s.clone()),
             frame_order: None,
+            out_of_order: frames_out_of_place(&rebased).into_iter().filter_map(id).collect(),
+            reordered: false,
         };
+        let made = made_from(&self.develop_settings, self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r)))?;
         let develop = match self.resolved_develop() {
             Some((reference, develop)) => Some(develop_record(reference, develop)?),
             None => None,
@@ -521,7 +542,7 @@ impl Plan {
                 }
                 summary.frame_order = Some(new);
             }
-            edits.push(alignment_edit(project, &ids, &rebased, &order, &settings)?);
+            edits.push(alignment_edit(project, &ids, &rebased, &order, &settings, Some(made))?);
             if let Some(develop) = develop {
                 edits.push(Edit::SetDevelop(Some(develop)));
             }
@@ -565,6 +586,13 @@ struct Aligned {
     /// After sorting by scale: the project's frame order now.
     #[serde(skip_serializing_if = "Option::is_none")]
     frame_order: Option<Vec<FrameId>>,
+    /// The frames whose magnification doesn't fit their place in the stack: the stack isn't in the order of focus,
+    /// and narrow framing may keep the field of view of a frame that isn't the narrowest. `align.sortByScale` puts
+    /// them in order.
+    out_of_order: Vec<FrameId>,
+    /// Whether the stored alignment was only ordered again, no frame read: the processing order's settings alone had
+    /// changed since it was made.
+    reordered: bool,
 }
 
 /// What an alignment job reads, and its commit changes: the frame list, the development, the alignment (with the
@@ -583,7 +611,65 @@ fn stages(plan: &Plan, passes: &'static [(&'static str, f32)]) -> Vec<(&'static 
     stages
 }
 
+/// The job that orders the stored run again instead of aligning, when that is all `align.run` has to do: the run is
+/// of the enabled frames, in their order, and only the processing order's settings changed since
+/// (`Stale::Order`). The aligned previews are made again from the frames' previews, on the canvas the new master
+/// gives.
+fn reorder(session: &Session) -> Result<Option<JobPlan<Aligned>>, CommandError> {
+    let project = session.project()?;
+    let Some(stored) = stored_alignment(project)? else { return Ok(None) };
+    let enabled: Vec<FrameId> = project.frames.iter().filter(|f| f.enabled).map(Frame::id).collect();
+    if stale_alignment(project, &stored)? != [Stale::Order] || stored.stack_order().as_ref() != Some(&enabled) {
+        return Ok(None);
+    }
+    let settings = align_settings(project)?;
+    let Some(reordered) = reorder_edit(project, &stored, &settings)? else { return Ok(None) };
+    let (rebased, order, ids) = (reordered.alignment, reordered.order, reordered.ids);
+    let id = |i: usize| ids.get(i).copied();
+    let summary = Aligned {
+        master: id(rebased.master).ok_or_else(|| CommandError::Internal { command: "align.run".to_owned() })?,
+        narrow_end: order.narrow,
+        start: order.start,
+        order: order.frames.iter().filter_map(|&i| id(i)).collect(),
+        out_of_focus: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OutOfFocus)),
+        moved: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::Moved)),
+        rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
+        defects: None,
+        frame_order: None,
+        out_of_order: frames_out_of_place(&rebased).into_iter().filter_map(id).collect(),
+        reordered: true,
+    };
+    let narrow = order.narrow_frame.filter(|&i| rebased.frames.get(i).is_some_and(|f| f.status != Status::Rejected));
+    let canvas = rebased.canvas(settings.framing, narrow).ok();
+    let previews: Vec<(FrameId, Option<CacheRef>)> =
+        project.frames.iter().filter(|f| ids.contains(&f.id())).map(|f| (f.id(), f.preview.clone())).collect();
+    let cache = session.cache_dir()?;
+    let edit = reordered.edit;
+    let job = JobPlan::new(move |ctx| {
+        let mut edits = vec![edit];
+        for (frame, preview) in previews {
+            ctx.checkpoint()?;
+            let Some(preview) = preview else { continue };
+            let aligned = match (&canvas, ids.iter().position(|&i| i == frame).and_then(|i| rebased.frames.get(i))) {
+                (Some(canvas), Some(f)) => {
+                    Some(write_aligned_preview(&cache, frame, &preview, (rebased.width, rebased.height), &f.transform, canvas)?)
+                }
+                _ => None,
+            };
+            edits.push(Edit::SetPreviews { frame, preview: Some(preview), aligned_preview: aligned });
+        }
+        Ok(commit(move |session: &mut Session| {
+            session.apply(Edit::Batch(edits))?;
+            Ok(summary)
+        }))
+    });
+    Ok(Some(job.stages(&[("Ordering the stack", 1.0)]).locks(locks())))
+}
+
 fn run(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError> {
+    if let Some(job) = reorder(session)? {
+        return Ok(job);
+    }
     let mut plan = Plan::new(session, "align.run", 1)?;
     let stages = stages(&plan, &[("Aligning frames", 1.0)]);
     let job = JobPlan::new(move |ctx| {
@@ -651,9 +737,29 @@ pub(super) fn capture_spec() -> CommandSpec {
     )
 }
 
+/// The order by scale of the enabled frames (`ids`, in the project's order), from the alignment the project holds,
+/// when that has it: a run of exactly these frames, in this order, that still fits the project (but for its
+/// processing order, which changes no scale), made with scale corrected and no frame rejected, since a rejected
+/// frame has its reference's scale and not its own. An error when those scales differ too little to sort by.
+fn known_order(session: &Session, ids: &[FrameId]) -> Result<Option<Vec<usize>>, CommandError> {
+    let project = session.project()?;
+    let Some(stored) = stored_alignment(project)? else { return Ok(None) };
+    let fits = stale_alignment(project, &stored)?.iter().all(|s| *s == Stale::Order);
+    let whole = stored.frames.iter().all(|f| f.report.as_ref().is_some_and(|r| r.status != Status::Rejected));
+    if !fits || !whole || !stored.settings.scale || stored.frames.iter().map(|f| f.frame).ne(ids.iter().copied()) {
+        return Ok(None);
+    }
+    let (w, h) = (stored.report.width, stored.report.height);
+    let scales: Option<Vec<f64>> = stored.frames.iter().map(|f| Similarity::from_affine(&f.alignment.transform, w, h).map(|s| s.scale)).collect();
+    let Some(scales) = scales else { return Ok(None) };
+    Ok(Some(order_of_scales(&scales, w, h)?))
+}
+
 fn sort_by_scale(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError> {
     let mut plan = Plan::new(session, "align.sortByScale", 2)?;
-    let stages = stages(&plan, &[("Measuring scales", 0.5), ("Aligning frames", 0.5)]);
+    let known = known_order(session, &plan.ids)?;
+    let passes: &[(&str, f32)] = if known.is_some() { &[("Aligning frames", 1.0)] } else { &[("Measuring scales", 0.5), ("Aligning frames", 0.5)] };
+    let stages = stages(&plan, passes);
     let job = JobPlan::new(move |ctx| {
         let mut stage = 0;
         if plan.detects() {
@@ -662,10 +768,15 @@ fn sort_by_scale(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, Com
         }
         plan.defects(ctx)?;
         ctx.stage(stage);
-        let present: Vec<usize> = (0..plan.ids.len()).collect();
-        let measured = plan.align(ctx, &present, &measuring_settings(&plan.settings), false)?;
-        let order = scale_order(&measured)?;
-        ctx.stage(stage + 1);
+        let order = if let Some(order) = known {
+            order
+        } else {
+            let present: Vec<usize> = (0..plan.ids.len()).collect();
+            let measured = plan.align(ctx, &present, &measuring_settings(&plan.settings), false)?;
+            stage += 1;
+            ctx.stage(stage);
+            scale_order(&measured)?
+        };
         let settings = plan.settings.clone();
         let alignment = plan.align(ctx, &order, &settings, true)?;
         let ids: Vec<FrameId> = order.iter().filter_map(|&i| plan.ids.get(i).copied()).collect();
@@ -704,6 +815,13 @@ struct RunInfo {
     order: Vec<FrameId>,
     /// The settings it ran with.
     settings: AlignSettings,
+    /// Why the run no longer fits the project, if it doesn't: `frames` (an enabled frame isn't in it, or its frames
+    /// stand in another order now), `settings` (the alignment settings changed, beyond the framing), `develop` (the
+    /// develop settings changed) or `defects` (another defect mask), for which `align.run` aligns again; or `order`
+    /// (only the processing order's settings changed), for which it orders this run again. Empty when it fits.
+    stale: Vec<Stale>,
+    /// The frames whose magnification doesn't fit their place in the stack, which `align.sortByScale` would move.
+    out_of_order: Vec<FrameId>,
     /// The output each framing gives.
     framings: Vec<FramingInfo>,
     /// The run's frames, in the project's frame order.
@@ -807,6 +925,8 @@ fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
         start: stored.report.start,
         order: stored.report.order.clone(),
         settings: stored.settings.clone(),
+        stale: stale_alignment(project, &stored)?,
+        out_of_order: stored.out_of_order(),
         framings,
         frames,
     };

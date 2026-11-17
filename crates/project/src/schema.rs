@@ -52,6 +52,8 @@
 //! applied after its retouch layers.
 //! Version 7 adds each frame's optional `near`: where its file is from the folder that holds the project folder, by
 //! which a project moved with its frames finds them again.
+//! Version 8 adds to the alignment run's report an optional `made_from`: what the run read its frames with (the
+//! develop settings and the defect mask, hashed), by which a run that no longer fits the project is told.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -64,7 +66,7 @@ use crate::time::Timestamp;
 /// The `format` of every project file.
 pub const FORMAT: &str = "florastack-project";
 /// The format version this build writes, and the newest it reads.
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 /// The project file's name in the project folder.
 pub const FILE_NAME: &str = "project.json";
 /// The largest project file. Bulk data (pixels, focus statistics) lives in the cache; a project file this large is
@@ -75,7 +77,7 @@ pub const MAX_FILE_BYTES: u64 = 64 << 20;
 type Migration = fn(Map<String, Value>) -> Result<Map<String, Value>, MigrationError>;
 
 /// The migrations, from version `i` to `i + 1`.
-pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7];
+pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8];
 
 /// Version 4 adds optional annotation layers to outputs. Old outputs have no annotations.
 #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
@@ -103,6 +105,14 @@ fn v5_to_v6(mut doc: Map<String, Value>) -> Result<Map<String, Value>, Migration
 #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
 fn v6_to_v7(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
     doc.insert("version".into(), Value::from(7));
+    Ok(doc)
+}
+
+/// Version 8 adds an optional `made_from` to the alignment run's report. Old runs have none: they are never taken for
+/// stale on account of the develop settings or the defect mask.
+#[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
+fn v7_to_v8(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
+    doc.insert("version".into(), Value::from(8));
     Ok(doc)
 }
 

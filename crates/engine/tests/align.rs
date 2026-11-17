@@ -215,3 +215,136 @@ fn settings_merge_and_are_checked() {
     assert_eq!(run(&mut engine, "align.reset", "{}")["settings"], serde_json::to_value(florastack_engine::AlignSettings::default()).unwrap());
     assert!(engine.project().unwrap().preferences.group(florastack_engine::model::Group::Align).is_empty());
 }
+
+/// The names of the stages a job went through, from the engine's events.
+fn stages(events: &std::sync::mpsc::Receiver<florastack_engine::Event>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for event in events.try_iter() {
+        if let florastack_engine::Event::Job { job } = event
+            && let Some(stage) = job.progress.stage.clone().filter(|s| seen.last() != Some(s))
+        {
+            seen.push(stage);
+        }
+    }
+    seen
+}
+
+#[test]
+fn a_stack_out_of_order_is_reported_and_sorted_by_the_scales_it_was_aligned_with() {
+    let dir = TempDir::new("align-out-of-order");
+    // As a camera's focus stacking mode may shoot: the frame at the focus point first, then from the nearest on.
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(8, 0.01, None, 4));
+    let shot = [3, 0, 1, 2, 4, 5, 6, 7];
+    let (mut engine, ids) = project_with(dir.path(), &shot.map(|i| files[i].clone()));
+    let aligned = run(&mut engine, "align.run", "{}");
+    println!("{aligned}");
+    assert_eq!((ids_of(&aligned["outOfOrder"]), &aligned["rejected"], &aligned["reordered"]), (vec![ids[0]], &json!([]), &json!(false)));
+    let info = run(&mut engine, "align.info", "{}");
+    assert_eq!((ids_of(&info["run"]["outOfOrder"]), &info["run"]["stale"]), (vec![ids[0]], &json!([])));
+
+    // The run has the scales: sorting reads the frames once, to align them in their new order.
+    let events = engine.subscribe();
+    let sorted = run(&mut engine, "align.sortByScale", "{}");
+    assert_eq!(stages(&events), ["Aligning frames"], "no measuring pass");
+    let names: Vec<usize> = ids_of(&sorted["frameOrder"]).iter().map(|id| shot[ids.iter().position(|i| i == id).unwrap()]).collect();
+    assert_eq!(names, [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!((&sorted["outOfOrder"], &sorted["rejected"]), (&json!([]), &json!([])));
+    assert_eq!(run(&mut engine, "align.info", "{}")["run"]["outOfOrder"], json!([]));
+    assert_eq!(run(&mut engine, "edit.history", "{}")["undo"][0]["command"], "align.sortByScale");
+
+    // A run that no longer fits the project isn't trusted for its scales: sorting measures them again.
+    run(&mut engine, "align.set", r#"{ "rotation": false }"#);
+    let events = engine.subscribe();
+    let again = run(&mut engine, "align.sortByScale", "{}");
+    assert_eq!(stages(&events), ["Measuring scales", "Aligning frames"]);
+    assert_eq!(again["frameOrder"], sorted["frameOrder"]);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One change after another to the same project.
+fn an_alignment_that_no_longer_fits_the_project_says_why_and_a_new_order_reads_no_frame() {
+    let dir = TempDir::new("align-stale");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(7, 0.01, None, 9));
+    // The same stack aligned from the other end at once, to compare with.
+    let (mut reversed, _) = project_with(&dir.path().join("reversed"), &files[..6]);
+    run(&mut reversed, "align.set", r#"{ "reverse_order": true }"#);
+    let expected = run(&mut reversed, "align.run", "{}");
+    let expected_info = run(&mut reversed, "align.info", "{}");
+
+    let (mut engine, ids) = project_with(&dir.path().join("stale"), &files);
+    run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}], "enabled": false }}"#, ids[6]));
+    let aligned = run(&mut engine, "align.run", "{}");
+    assert_eq!((aligned["master"].as_u64(), &aligned["start"]), (Some(ids[5]), &json!("last")), "{aligned}");
+    let stale = |engine: &mut Engine| run(engine, "align.info", "{}")["run"]["stale"].clone();
+    assert_eq!(stale(&mut engine), json!([]));
+
+    // The framing never makes it stale; another setting does, and stacking says so too.
+    run(&mut engine, "align.set", r#"{ "framing": "wide" }"#);
+    assert_eq!(stale(&mut engine), json!([]));
+    assert!(run(&mut engine, "stack.preview", "{}").get("staleAlignment").is_none());
+    run(&mut engine, "align.set", r#"{ "rotation": false }"#);
+    assert_eq!(stale(&mut engine), json!(["settings"]));
+    assert_eq!(run(&mut engine, "stack.preview", "{}")["staleAlignment"], json!(["settings"]));
+    run(&mut engine, "align.set", r#"{ "rotation": true, "framing": "narrow" }"#);
+    assert_eq!(stale(&mut engine), json!([]), "set back, it fits again");
+    // The develop settings.
+    run(&mut engine, "develop.set", r#"{ "exposure": 1.0 }"#);
+    assert_eq!(stale(&mut engine), json!(["develop"]));
+    run(&mut engine, "develop.set", r#"{ "exposure": 0.0 }"#);
+    assert_eq!(stale(&mut engine), json!([]));
+    // A frame enabled since isn't in the run; disabled again, the run is whole. A frame of the run disabled is only
+    // left out of the stack.
+    run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}], "enabled": true }}"#, ids[6]));
+    assert_eq!(stale(&mut engine), json!(["frames"]));
+    run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}, {}], "enabled": false }}"#, ids[6], ids[2]));
+    assert_eq!(stale(&mut engine), json!([]));
+    run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}], "enabled": true }}"#, ids[2]));
+
+    // Only the processing order: `align.run` orders the run again, with the frames' files gone.
+    run(&mut engine, "align.set", r#"{ "reverse_order": true }"#);
+    assert_eq!(stale(&mut engine), json!(["order"]));
+    for file in &files {
+        std::fs::remove_file(file).unwrap();
+    }
+    let before = state(&engine);
+    let frames_before = run(&mut engine, "align.info", "{}")["run"]["frames"].clone();
+    let events = engine.subscribe();
+    let reordered = run(&mut engine, "align.run", "{}");
+    println!("{reordered}");
+    assert_eq!(stages(&events), ["Ordering the stack"]);
+    assert_eq!(reordered["reordered"], true);
+    for key in ["master", "narrowEnd", "start", "order", "outOfFocus", "moved", "rejected", "outOfOrder"] {
+        assert_eq!(reordered[key], expected[key], "{key}");
+    }
+    assert_eq!(reordered["master"].as_u64(), Some(ids[0]), "the wide end's frame");
+    let info = run(&mut engine, "align.info", "{}");
+    assert_eq!(info["run"]["stale"], json!([]));
+    let (ours, theirs) = (info["run"]["frames"].as_array().unwrap(), expected_info["run"]["frames"].as_array().unwrap());
+    assert_eq!(ours.len(), 6);
+    let numbers = |v: &Value| -> Vec<f64> { v.as_array().unwrap().iter().flat_map(|r| r.as_array().unwrap()).map(|n| n.as_f64().unwrap()).collect() };
+    for (k, (a, b)) in ours.iter().zip(theirs).enumerate() {
+        // Rebased twice instead of once: the same but for rounding.
+        for key in ["scale", "rotation", "gain", "score"] {
+            assert!((a[key].as_f64().unwrap() - b[key].as_f64().unwrap()).abs() < 1e-9, "frame {k}, {key}: {a} {b}");
+        }
+        assert!(numbers(&a["transform"]).iter().zip(numbers(&b["transform"])).all(|(x, y)| (x - y).abs() < 1e-7), "frame {k}: {a} {b}");
+        for key in ["status", "flags", "sharpFraction", "reference"] {
+            assert_eq!(a[key], b[key], "frame {k}, {key}");
+        }
+        // What moved in a frame against its neighbor is kept as it was measured.
+        assert_eq!(a.get("motion"), frames_before[k].get("motion"), "frame {k}");
+    }
+    // The aligned previews are on the new master's canvas, and it is all one undo step.
+    let aligned_previews = |engine: &Engine| -> Vec<Option<String>> {
+        engine.project().unwrap().frames.iter().map(|f| f.aligned_preview.as_ref().and_then(|p| p.key.clone())).collect()
+    };
+    let now = aligned_previews(&engine);
+    assert!(now[..6].iter().all(Option::is_some), "{now:?}");
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(state(&engine), before);
+    assert!(aligned_previews(&engine)[1..6].iter().zip(&now[1..6]).all(|(a, b)| a != b), "another canvas");
+    // Nothing has changed since it was ordered again: `align.run` aligns anew, and finds the files gone.
+    run(&mut engine, "edit.redo", "{}");
+    let job = common::job_of(engine.dispatch_json("align.run", "{}").unwrap());
+    assert!(engine.wait(job).is_err(), "it reads the frames");
+}

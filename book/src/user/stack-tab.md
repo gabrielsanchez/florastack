@@ -36,7 +36,9 @@ Which corrections alignment makes:
 - **Brightness**: matches each frame's brightness to the master's, for flickering lights or drifting exposure.
 - **White balance**: matches each frame's color to the master's with a gain per color channel, for JPEGs shot with automatic white balance or light that changes color (a cloud, mixed daylight and lamps). It changes the color, not the brightness, which **Brightness** matches. Off by default; a frame's tooltip in the frame list shows its gains.
 
-Changing these needs a new alignment: the tab says so, and **Align** runs it again.
+Changing these needs a new alignment: the tab says so, and **Align** runs it again. It says so too when the develop settings or the dust and hot pixel mask changed since the frames were aligned, or when frames were added, enabled or moved. A stack made before aligning again uses the alignment as it is.
+
+When frames aren't in the order of their magnification, the tab says how many and offers **Sort by scale**: focusing changes the magnification steadily, so a frame out of that order is out of the order of focus. Some cameras' focus stacking modes shoot the frame at the focus point first and then from the nearest to the farthest, which leaves the first frame out of place. Sorting puts the frames in order and aligns them again, as one undo step; having just aligned them, it reads each frame once.
 
 ## Framing
 
@@ -128,7 +130,7 @@ The longer side, in pixels, that frames are reduced to for alignment. Alignment 
 
 ## Order
 
-By default the stack is processed from its end with the narrower field of view, so that every frame covers the output. **Reverse the order** processes it from the other end.
+By default the stack is processed from its end with the narrower field of view, so that every frame covers the output. **Reverse the order** processes it from the other end. Changing the order alone needs no new alignment: **Align** then orders the aligned stack again, without reading the frames.
 
 ## Out of focus
 
