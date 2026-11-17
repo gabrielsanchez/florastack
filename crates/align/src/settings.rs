@@ -75,7 +75,8 @@ pub struct AlignSettings {
     /// After chaining each frame to its neighbor, align it again directly against the master, starting from the
     /// chained estimate, so that the small errors of a long chain don't add up. The direct estimate is kept only
     /// when it scores at least `min_score`: frames focused far from the master share little detail with it, so this
-    /// helps shallow stacks of similar frames most.
+    /// helps shallow stacks of similar frames most. A frame that doesn't match its neighbor well enough, and would be
+    /// rejected, is aligned to the master instead when it matches that.
     pub refine: bool,
     /// The largest shift relative to the master, in percent of the frame's width horizontally and of its height
     /// vertically, from 0 to 50.

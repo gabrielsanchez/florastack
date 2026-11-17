@@ -108,4 +108,4 @@ pub use prepare::MIN_SIDE;
 pub use settings::{AlignSettings, DEFAULT_MIN_MOTION, DEFAULT_MIN_SHARP_FRACTION, MAX_RESOLUTION, MIN_RESOLUTION, Term};
 pub use sort::{MIN_SPREAD, align_by_scale, measuring_settings, scale_order};
 pub use split::{Boundary, GAP_FACTOR, LINK_SIDE, Link, MIN_GAP, Neighbors, Reason, SplitSettings, boundaries, gap_threshold, link};
-pub use stack::{Flag, FrameAlignment, StackAligner, StackAlignment, Status, align_frames};
+pub use stack::{Flag, FrameAlignment, PreparedFrame, Preparer, StackAligner, StackAlignment, Status, align_frames};

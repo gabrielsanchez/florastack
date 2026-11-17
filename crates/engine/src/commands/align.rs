@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use florastack_align::{
-    AlignError, AlignSettings, DefectDetector, DefectMask, End, Flag, Framing, MIN_DETECTION_FRAMES, Similarity, StackAligner, StackAlignment,
-    Status, detection_frames, inpaint, measuring_settings, order_stack, scale_order,
+    AlignError, AlignSettings, DefectDetector, DefectMask, End, Flag, Framing, MIN_DETECTION_FRAMES, PreparedFrame, Preparer, Similarity,
+    StackAligner, StackAlignment, Status, detection_frames, inpaint, measuring_settings, order_stack, scale_order,
 };
 use florastack_codecs::ReadOptions;
 use florastack_core::{Image, Monitor};
@@ -424,18 +424,42 @@ impl Plan {
         Ok(())
     }
 
+    /// Reads the `i`-th frame, inpainted, and prepares it for the aligner.
+    fn load(&mut self, i: usize, with: &Preparer) -> Result<(Image<f32>, PreparedFrame), CommandError> {
+        let image = self.read(i)?;
+        let ready = with.prepare(&image).map_err(|e| self.frame_error(i, e))?;
+        Ok((image, ready))
+    }
+
     /// Aligns the frames in the order `positions` gives (`positions[k]` is the index in `ids` of the frame at position
-    /// `k`), from their middle frame, reading each one when the aligner asks for it, inpainted; with `previews`, writes
-    /// each frame's preview too.
+    /// `k`), from their middle frame, reading each one in the aligner's order, inpainted; with `previews`, writes
+    /// each frame's preview too. While a frame is aligned, the next one is read and prepared beside it
+    /// (`rayon::join`, as stacking reads its frames, `stack::each`): two frames are in memory at most. With a single
+    /// thread nothing would overlap, so each frame is read once the one before is aligned.
     fn align(&mut self, ctx: &JobContext, positions: &[usize], settings: &AlignSettings, previews: bool) -> Result<StackAlignment, CommandError> {
         let n = positions.len();
         let mut aligner = StackAligner::new(settings, n, n / 2)?;
         aligner.set_defects(self.mask.clone());
-        while let Some(k) = aligner.next_frame() {
+        let with = aligner.preparer();
+        let order: Vec<usize> =
+            aligner.order().iter().map(|&k| positions.get(k).copied().ok_or_else(|| self.internal())).collect::<Result<_, _>>()?;
+        let overlap = rayon::current_num_threads() > 1;
+        let mut next = None;
+        for (at, &i) in order.iter().enumerate() {
             ctx.checkpoint()?;
-            let i = positions.get(k).copied().ok_or_else(|| self.internal())?;
-            let image = self.read(i)?;
-            aligner.add(&image, ctx).map_err(|e| self.frame_error(i, e))?;
+            let (image, ready) = match next.take() {
+                Some(frame) => frame,
+                None => self.load(i, &with)?,
+            };
+            match order.get(at + 1) {
+                Some(&following) if overlap => {
+                    let (done, read) = rayon::join(|| aligner.add_prepared(ready, ctx).map(drop), || self.load(following, &with));
+                    // This frame's error first: it is what the user would have met without reading ahead.
+                    done.map_err(|e| self.frame_error(i, e))?;
+                    next = Some(read?);
+                }
+                _ => aligner.add_prepared(ready, ctx).map(drop).map_err(|e| self.frame_error(i, e))?,
+            }
             if previews {
                 let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
                 let key = preview_key(frame, &self.develop_settings, self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r)))?;

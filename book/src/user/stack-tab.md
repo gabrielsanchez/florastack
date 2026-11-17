@@ -108,7 +108,7 @@ How strongly the sharpest frame wins in the weighted average. Raise it for a cri
 
 ## Refine
 
-After aligning each frame to its neighbor, align it again directly against the master frame, so that small errors don't add up along a long stack. It helps shallow stacks of similar frames most; deep stacks, whose far frames share little detail with the master, keep their chained alignment.
+After aligning each frame to its neighbor, align it again directly against the master frame, so that small errors don't add up along a long stack. It helps shallow stacks of similar frames most; deep stacks, whose far frames share little detail with the master, keep their chained alignment. A frame that doesn't match its neighbor well enough, and would be rejected, is aligned to the master instead when it matches that.
 
 ## Limits
 

@@ -267,7 +267,7 @@ threshold-when-stacking = Its contrast threshold is set when you stack.
 
 align-heading = Alignment
 align-refine = Refine against the master
-tip-align-refine = Aligns each frame again directly against the master frame, so that small errors don't add up along a long stack. Helps shallow stacks of similar frames most.
+tip-align-refine = Aligns each frame again directly against the master frame, so that small errors don't add up along a long stack, and keeps a frame that matches the master where its neighbor would have rejected it. Helps shallow stacks of similar frames most.
 align-max-shift = Largest shift (%)
 align-max-scale = Largest scale change (%)
 align-max-rotation = Largest rotation (°)
