@@ -28,6 +28,16 @@ ignore = [
     { id = "RUSTSEC-2026-0369", reason = "zip 7 via candle-core: ZipArchive::extract, never called; FloraStack reads no .npz or PyTorch file" },
     { id = "RUSTSEC-2026-0429", reason = "zip 7 via candle-core: ZipArchive::extract, never called; FloraStack reads no .npz or PyTorch file" },
     { id = "RUSTSEC-2024-0436", reason = "paste via candle-core's gemm: archived by its author, no flaw; candle 0.9.2 is pinned to stay free of C" },
+    # Four more zip 7 advisories through candle-core (2026-11-17), none in what the build has or calls: candle takes zip
+    # with no features, so neither its AES decryption (`aes-crypto`) nor its legacy decoders (`legacy-zip`) are
+    # compiled; `ZipArchive::extract` is never called, and candle reads with `ZipArchive`, never `ZipStreamReader`.
+    { id = "RUSTSEC-2026-0545", reason = "zip 7 via candle-core: AES entries, the aes-crypto feature isn't enabled" },
+    { id = "RUSTSEC-2026-0546", reason = "zip 7 via candle-core: ZipArchive::extract, never called; FloraStack reads no .npz or PyTorch file" },
+    { id = "RUSTSEC-2026-0547", reason = "zip 7 via candle-core: legacy decoders, the legacy-zip feature isn't enabled" },
+    { id = "RUSTSEC-2026-0548", reason = "zip 7 via candle-core: ZipStreamReader, which candle never uses" },
+    # chrono, through LightCraft's metadata and RAW crates, schemars and rmcp: unmaintained since 2026-11, no flaw.
+    # Drop it when they move to jiff or time.
+    { id = "RUSTSEC-2026-0543", reason = "chrono via lightcraft-meta, lightcraft-raw, schemars and rmcp: unmaintained, no flaw; no replacement in reach" },
 ]
 
 [licenses]
