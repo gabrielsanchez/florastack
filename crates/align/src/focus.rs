@@ -48,6 +48,12 @@ pub(crate) const PEAK: f64 = 4.0;
 /// Cells whose sharpest frame has less than this fraction of the energy of the stack's detail (the 99th percentile of
 /// the cells' sharpest energies) are left out: dark, featureless parts of the scene.
 const FLOOR: f64 = 1e-3;
+/// A point of the scene has detail in focus, for movement (`motion.rs`), where its sharpest frame has at least this
+/// share of the energy of the stack's detail (the 99th percentile of the cells' sharpest energies). An area that no
+/// frame has in focus has far less: on the local corpus stacks (20 MP camera JPEGs), most of the blurred foregrounds
+/// and backgrounds that passed for movement had 0.1 to 0.3%, and their frames' energies differed by less than a
+/// factor of 2; on the synthetic stacks, the moving patch's cells in focus have 1.2 to 60%, half of them above 6%.
+pub(crate) const DETAILED: f64 = 0.01;
 /// The fewest peaked cells that fractions are told from, and the smallest share of the cells. On synthetic stacks,
 /// frames defocused through the scene have peaks on about 70% of the cells, and frames moved but not defocused on at
 /// most 0.5%, where noise and dust happen to differ.
@@ -109,6 +115,9 @@ pub(crate) struct Sharpness {
     /// How many cells had a focus peak, of how many compared.
     pub peaked: usize,
     pub cells: usize,
+    /// The energy of the stack's detail (the 99th percentile of the cells' sharpest energies), when the frames'
+    /// focus could be told: what [`FocusField`] measures detail against.
+    pub detail: Option<f64>,
 }
 
 /// How a frame's map is read at the master's cells: master pixels to the map's cells, the map, and the square of the
@@ -141,30 +150,42 @@ fn samplers<'a>(maps: &'a [Option<FocusMap>], transforms: &[Affine], gains: &[f6
         .collect()
 }
 
-/// The frames' focus maps laid over the scene: how sharp a frame is at one of its pixels, against the sharpest frame
-/// at the same point of the scene. Motion is flagged only where a frame is among the sharpest (`motion.rs`).
+/// The frames' focus maps laid over the scene: whether a frame is in focus at one of its pixels. Motion is flagged
+/// only where a frame is (`motion.rs`).
 pub(crate) struct FocusField<'a> {
     samplers: Vec<Option<Sampler<'a>>>,
     /// From each frame's pixels to the master's.
     to_master: Vec<Option<Affine>>,
+    /// The energy of the stack's detail ([`Sharpness::detail`]); `None` when the frames' focus can't be told.
+    detail: Option<f64>,
 }
 
 impl<'a> FocusField<'a> {
-    pub(crate) fn new(maps: &'a [Option<FocusMap>], transforms: &[Affine], gains: &[f64]) -> FocusField<'a> {
-        FocusField { samplers: samplers(maps, transforms, gains), to_master: transforms.iter().map(Affine::inverse).collect() }
+    pub(crate) fn new(maps: &'a [Option<FocusMap>], transforms: &[Affine], gains: &[f64], detail: Option<f64>) -> FocusField<'a> {
+        let detail = detail.filter(|d| d.is_finite() && *d > 0.0);
+        FocusField { samplers: samplers(maps, transforms, gains), to_master: transforms.iter().map(Affine::inverse).collect(), detail }
     }
 
-    /// Frame `frame`'s focus energy at its pixel `p`, as a share of the largest any frame has at the same point of the
-    /// scene; `None` where that can't be told (fewer than three frames to compare, a frame without a map, or no detail
-    /// there in any frame).
-    pub(crate) fn relative(&self, frame: usize, p: (f64, f64)) -> Option<f64> {
+    /// Whether frame `frame` is in focus at its pixel `p`: the scene has detail in focus there (its sharpest frame has
+    /// at least [`DETAILED`] of the stack's detail), whether some frames show it sharp and others blurred or every
+    /// frame shows it sharp, and the frame's energy is at least [`NEAR`] of the sharpest frame's. A point that every
+    /// frame shows blurred, far out of focus, is in focus in none, however the blur changes from frame to frame.
+    /// `None` where it can't be told: fewer than three frames, focus that the stack doesn't show (its fractions are
+    /// `None`, as on frames moved but not refocused), a frame without a map, or a point fewer than three frames
+    /// cover.
+    pub(crate) fn in_focus(&self, frame: usize, p: (f64, f64)) -> Option<bool> {
+        let detail = self.detail?;
         if self.samplers.len() < 3 {
             return None;
         }
         let m = self.to_master.get(frame).copied().flatten()?.apply(p.0, p.1);
-        let own = self.samplers.get(frame)?.as_ref()?.at(m)?;
-        let max = self.samplers.iter().flatten().filter_map(|s| s.at(m)).filter(|v| v.is_finite()).fold(0.0, f64::max);
-        (max > 0.0 && own.is_finite()).then(|| own / max)
+        let own = self.samplers.get(frame)?.as_ref()?.at(m).filter(|v| v.is_finite())?;
+        let values: Vec<f64> = self.samplers.iter().flatten().filter_map(|s| s.at(m)).filter(|v| v.is_finite()).collect();
+        if values.len() < 3 {
+            return None;
+        }
+        let max = values.iter().copied().fold(0.0, f64::max);
+        Some(max >= DETAILED * detail && max > 0.0 && own >= NEAR * max)
     }
 }
 
@@ -172,7 +193,7 @@ impl<'a> FocusField<'a> {
 /// without one), their transforms from the master's pixels and their gains; the master's cells are the ones compared.
 pub(crate) fn sharp_fractions(maps: &[Option<FocusMap>], transforms: &[Affine], gains: &[f64], master: usize) -> Sharpness {
     let n = maps.len();
-    let nothing = Sharpness { fractions: vec![None; n], peaked: 0, cells: 0 };
+    let nothing = Sharpness { fractions: vec![None; n], peaked: 0, cells: 0, detail: None };
     let Some(Some(grid)) = maps.get(master) else { return nothing };
     if n < 3 || transforms.len() != n || gains.len() != n {
         return nothing;
@@ -240,7 +261,7 @@ pub(crate) fn sharp_fractions(maps: &[Option<FocusMap>], transforms: &[Affine], 
         return Sharpness { peaked, cells: cell_count, ..nothing };
     }
     let fractions = in_focus.iter().zip(&covered).map(|(&f, &c)| (c > 0).then(|| f as f64 / c as f64)).collect();
-    Sharpness { fractions, peaked, cells: cell_count }
+    Sharpness { fractions, peaked, cells: cell_count, detail: Some(detail) }
 }
 
 /// `plane` at `(u, v)`, bilinearly, if the point lies inside its pixel centers.
@@ -309,5 +330,37 @@ mod tests {
         let bad = [Affine::IDENTITY, Affine::IDENTITY, Affine { m: [[f64::NAN; 3]; 2] }, Affine::IDENTITY];
         let found = sharp_fractions(&partial, &bad, &[1.0, f64::NAN, 1.0, 1.0], 0);
         assert_eq!((found.fractions[2], found.fractions[3]), (None, None), "{found:?}");
+    }
+
+    #[test]
+    fn a_frame_is_in_focus_where_the_stack_has_detail_in_focus_and_it_is_among_the_sharpest() {
+        // The left half sharp in frame 0 and blurred in the others; the right half blurred far in every frame, a
+        // little less in frame 3.
+        let (sharp, _) = scene::textured(240, 180, 3).unwrap();
+        let blurred = |sigma: f64| {
+            let mut b = sharp.clone();
+            gaussian_blur_in_place(&mut b, sigma, BlurMethod::Exact).unwrap();
+            b
+        };
+        let halves = |left: &Image<f32>, right: &Image<f32>| {
+            Image::from_fn(240, 180, 3, ColorSpace::LINEAR, |x, y, c| if x < 120 { left.get(x, y, c) } else { right.get(x, y, c) }.unwrap()).unwrap()
+        };
+        let (b4, b6, b16, b12) = (blurred(4.0), blurred(6.0), blurred(16.0), blurred(12.0));
+        let frames = [halves(&sharp, &b16), halves(&b4, &b16), halves(&b6, &b16), halves(&b6, &b12)];
+        let maps: Vec<Option<FocusMap>> = frames.iter().map(|f| Some(map(f))).collect();
+        let transforms = vec![Affine::IDENTITY; 4];
+        let found = sharp_fractions(&maps, &transforms, &[1.0; 4], 0);
+        let field = FocusField::new(&maps, &transforms, &[1.0; 4], found.detail);
+        let (left, right) = ((60.0, 90.0), (180.0, 90.0));
+        assert_eq!((field.in_focus(0, left), field.in_focus(1, left)), (Some(true), Some(false)));
+        // Frame 3 is the sharpest on the right, but nothing is in focus there.
+        assert_eq!((field.in_focus(3, right), field.in_focus(0, right)), (Some(false), Some(false)));
+        // The same scene sharp in every frame: detail in focus everywhere, with no peak.
+        let same: Vec<Option<FocusMap>> = (0..4).map(|_| Some(map(&sharp))).collect();
+        let everywhere = FocusField::new(&same, &transforms, &[1.0; 4], found.detail);
+        assert_eq!(everywhere.in_focus(2, right), Some(true));
+        // Without the stack's focus, nothing can be told.
+        assert_eq!(FocusField::new(&maps, &transforms, &[1.0; 4], None).in_focus(0, left), None);
+        assert_eq!(FocusField::new(&maps[..2], &transforms[..2], &[1.0; 2], found.detail).in_focus(0, left), None);
     }
 }

@@ -45,8 +45,8 @@ use crate::frames::FrameReader;
 use crate::jobs::{Commit, JobContext, JobPlan, Lane, commit};
 use crate::project::{
     FrameMotion, MaskSource, MaskSummary, ProjectDataError, Stale, align_settings, alignment_edit, defect_mask_ref, defects_map, develop_record,
-    made_from, preview_key, read_defect_mask, reorder_edit, stale_alignment, store_defect_mask, stored_alignment, write_aligned_preview,
-    write_frame_preview,
+    made_from, motion_map, preview_key, read_defect_mask, reorder_edit, stale_alignment, store_defect_mask, stored_alignment, write_aligned_preview,
+    write_frame_preview, write_motion_map,
 };
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
@@ -318,7 +318,7 @@ impl Plan {
     /// settings and the defect mask, as its preview's key says them ([`preview_key`]).
     pub(crate) fn frame_key(&self, i: usize) -> Result<String, CommandError> {
         let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
-        Ok(preview_key(frame, &self.develop_settings, self.mask_ref.as_ref())?)
+        Ok(preview_key(frame, &self.develop_settings, self.reader.develop(), self.mask_ref.as_ref())?)
     }
 
     /// What RAW frames are developed with, for the same keys: the stack's development when the project holds it,
@@ -480,7 +480,8 @@ impl Plan {
             }
             if previews {
                 let frame = self.frames.get(i).ok_or_else(|| self.internal())?;
-                let key = preview_key(frame, &self.develop_settings, self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r)))?;
+                let mask = self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r));
+                let key = preview_key(frame, &self.develop_settings, self.reader.develop(), mask)?;
                 let reference = write_frame_preview(&self.cache, frame.id(), &image, key)?;
                 self.previews.push((frame.id(), reference));
             }
@@ -507,7 +508,7 @@ impl Plan {
             out_of_order: frames_out_of_place(&rebased).into_iter().filter_map(id).collect(),
             reordered: false,
         };
-        let made = made_from(&self.develop_settings, self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r)))?;
+        let made = made_from(&self.develop_settings, self.reader.develop(), self.mask_ref.as_ref().or(self.detected.as_ref().map(|(r, _)| r)))?;
         let develop = match self.resolved_develop() {
             Some((reference, develop)) => Some(develop_record(reference, develop)?),
             None => None,
@@ -524,6 +525,14 @@ impl Plan {
                 _ => None,
             };
             previews.push(Edit::SetPreviews { frame, preview: Some(preview), aligned_preview: aligned });
+        }
+        // Each aligned frame's motion map, in the cache; the frames without one (the master, the rejected ones, the
+        // frames not in the run) lose any they had.
+        let mut motions = Vec::new();
+        for (f, &id) in rebased.frames.iter().zip(&ids) {
+            if let Some(motion) = &f.motion {
+                motions.push((id, write_motion_map(&self.cache, id, motion)?));
+            }
         }
         let detected = self.detected.map(|(r, _)| r);
         let settings = self.settings;
@@ -550,6 +559,14 @@ impl Plan {
                 edits.push(Edit::SetProjectMap { name, map: Some(map) });
             }
             edits.extend(previews);
+            if let Some(name) = motion_map() {
+                for frame in &project.frames {
+                    let map = motions.iter().find(|(id, _)| *id == frame.id()).map(|(_, r)| r.clone());
+                    if frame.maps.get(&name) != map.as_ref() {
+                        edits.push(Edit::SetFrameMap { frame: frame.id(), name: name.clone(), map });
+                    }
+                }
+            }
             session.apply(Edit::Batch(edits))?;
             Ok(summary)
         }))

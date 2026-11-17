@@ -36,7 +36,7 @@ use crate::brightness::gain;
 use crate::defects::DefectMask;
 use crate::ecc::{self, LIMIT_TOLERANCE};
 use crate::error::AlignError;
-use crate::focus::{FocusField, FocusMap, NEAR, sharp_fractions};
+use crate::focus::{FocusField, FocusMap, sharp_fractions};
 use crate::framing::{Canvas, Framing};
 use crate::model::{Geometry, Params, Similarity};
 use crate::motion::{self, Motion};
@@ -391,17 +391,18 @@ impl StackAligner {
         let maps: Vec<Option<FocusMap>> = focus.into_iter().zip(&frames).map(|(map, f)| map.filter(|_| f.status != Status::Rejected)).collect();
         let found = sharp_fractions(&maps, &transforms, &gains, master);
         debug!(peaked = found.peaked, cells = found.cells, fractions = ?found.fractions, "focus");
+        let detail = found.detail;
         for (frame, fraction) in frames.iter_mut().zip(found.fractions) {
             frame.sharp_fraction = fraction;
             if fraction.is_some_and(|f| f < settings.min_sharp_fraction) {
                 frame.flags.push(Flag::OutOfFocus);
             }
         }
-        // Movement counts where its frame is among the sharpest (`motion.rs`).
-        let field = FocusField::new(&maps, &transforms, &gains);
+        // Movement counts where its frame is in focus, and everywhere when the stack's focus can't be told (`motion.rs`).
+        let field = FocusField::new(&maps, &transforms, &gains, detail);
         for (i, frame) in frames.iter_mut().enumerate() {
             let Some(motion) = frame.motion.take() else { continue };
-            let motion = Motion::new(motion.map, |p| field.relative(i, p).is_none_or(|r| r >= NEAR));
+            let motion = Motion::new(motion.map, |p| field.in_focus(i, p).unwrap_or(true));
             if motion.moved() {
                 frame.flags.push(Flag::Moved);
             }

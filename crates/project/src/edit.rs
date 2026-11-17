@@ -71,6 +71,12 @@ pub enum Edit {
         name: MapName,
         map: Option<CacheRef>,
     },
+    /// Sets one of a frame's maps (`Some`), such as its motion map, or removes it (`None`).
+    SetFrameMap {
+        frame: FrameId,
+        name: MapName,
+        map: Option<CacheRef>,
+    },
     /// Replaces a frame's previews: as shot, and aligned.
     SetPreviews {
         frame: FrameId,
@@ -358,7 +364,11 @@ impl Edit {
             | Edit::PopStroke { .. }
             | Edit::SetLayerVisible { .. } => 0,
             // A reference to a cache file: its path, size and hash.
-            Edit::SetProjectMap { .. } | Edit::SetPreviews { .. } | Edit::SetOutputMap { .. } | Edit::SetAlignedImage { .. } => 256,
+            Edit::SetProjectMap { .. }
+            | Edit::SetFrameMap { .. }
+            | Edit::SetPreviews { .. }
+            | Edit::SetOutputMap { .. }
+            | Edit::SetAlignedImage { .. } => 256,
         };
         held.saturating_add(OWN)
     }
@@ -374,8 +384,9 @@ impl Edit {
             Edit::SetFrameModified { .. } => Aspects::NONE,
             Edit::SetPreferences { group, .. } => Aspects::of_group(*group),
             Edit::SetDevelop(_) => Aspects::DEVELOP,
-            // The stack's maps (the defect mask) are what alignment reads its frames with.
-            Edit::SetAlignment { .. } | Edit::SetProjectMap { .. } => Aspects::ALIGN,
+            // The stack's maps (the defect mask) are what alignment reads its frames with; a frame's maps (its motion
+            // map) are what alignment found in it.
+            Edit::SetAlignment { .. } | Edit::SetProjectMap { .. } | Edit::SetFrameMap { .. } => Aspects::ALIGN,
             // A frame's warped image is cached, as its previews are.
             Edit::SetPreviews { .. } | Edit::SetAlignedImage { .. } => Aspects::PREVIEWS,
             // An output's layers go with it.
@@ -410,6 +421,7 @@ impl Edit {
             | (Edit::SetAnnotations { output: a, .. }, Edit::SetAnnotations { output: b, .. })
             | (Edit::SetAdjustments { output: a, .. }, Edit::SetAdjustments { output: b, .. }) => a == b,
             (Edit::SetProjectMap { name: a, .. }, Edit::SetProjectMap { name: b, .. }) => a == b,
+            (Edit::SetFrameMap { frame: a, name: n, .. }, Edit::SetFrameMap { frame: b, name: m, .. }) => a == b && n == m,
             (Edit::SetLayerVisible { output: a, layer: l, .. }, Edit::SetLayerVisible { output: b, layer: m, .. }) => a == b && l == m,
             (Edit::SetOutputMap { output: a, name: n, .. }, Edit::SetOutputMap { output: b, name: m, .. }) => a == b && n == m,
             _ => false,
@@ -460,6 +472,14 @@ impl Project {
                     None => self.maps.remove(&name),
                 };
                 Ok(Edit::SetProjectMap { name, map: old })
+            }
+            Edit::SetFrameMap { frame, name, map } => {
+                let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
+                let old = match map {
+                    Some(map) => f.maps.insert(name.clone(), map),
+                    None => f.maps.remove(&name),
+                };
+                Ok(Edit::SetFrameMap { frame, name, map: old })
             }
             Edit::SetPreviews { frame, preview, aligned_preview } => {
                 let f = self.frame_mut(frame).ok_or(EditError::NoFrame(frame))?;
@@ -701,6 +721,7 @@ mod tests {
             },
             Edit::SetProjectMap { name: MapName::new("defects").unwrap(), map: Some(cache_ref(1)) },
             Edit::SetPreviews { frame: b, preview: Some(cache_ref(2)), aligned_preview: Some(cache_ref(3)) },
+            Edit::SetFrameMap { frame: a, name: MapName::new("motion").unwrap(), map: Some(cache_ref(6)) },
             Edit::AddOutput(Box::new(NewOutput {
                 name: "Average".into(),
                 method: "average".into(),
@@ -791,6 +812,7 @@ mod tests {
             (Edit::Batch(vec![Edit::SetName(Some("Ok".into())), Edit::RemoveFrame(a), Edit::RemoveFrame(a)]), EditError::NoFrame(a)),
             (Edit::PopStroke { output: OutputId(5), layer: LayerId(6) }, EditError::NoOutput(OutputId(5))),
             (Edit::SetPreviews { frame: FrameId(99), preview: None, aligned_preview: None }, EditError::NoFrame(FrameId(99))),
+            (Edit::SetFrameMap { frame: FrameId(99), name: MapName::new("motion").unwrap(), map: None }, EditError::NoFrame(FrameId(99))),
             (Edit::SetFrameModified { frame: FrameId(99), modified: None }, EditError::NoFrame(FrameId(99))),
             (
                 Edit::AddOutput(Box::new(NewOutput {

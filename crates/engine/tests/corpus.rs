@@ -10,7 +10,12 @@
 //!   through all of them put it. Neighbors two steps of focus apart still share most of their detail, the two chains
 //!   share no link, and a link that slipped or errors that add up along the chain show as a difference. Where the
 //!   sparser chain rejects a frame, as it may on a stack whose frames are far apart in focus, that frame isn't
-//!   compared.
+//!   compared;
+//! - movement is the exception: at most half the frames are flagged as moved. A subject can move in every frame, but
+//!   the corpus's stacks are of still subjects, and the change of blur from frame to frame passed for movement on
+//!   nearly every frame of them before movement was counted only where some frame has detail in focus (2.3);
+//! - detected dust is dust: a mask of at most [`MAX_DEFECTS`] of the frame. The scene's own texture, which the
+//!   frames show at other sensor pixels as they move, must not pass for it.
 //!
 //! Aligning each frame directly against the master (`refine`) is no such check on stacks this deep: the frames
 //! focused four steps from the master land up to 0.9 thousandths of the frame (4 pixels of 5184) from where the
@@ -44,6 +49,10 @@ const MIN_MEAN_GAP: f64 = 2e-4;
 /// further from the master. Which chain is nearer the truth these frames can't say; the roadmap keeps the question
 /// (2.1), with the defocus model that would answer it.
 const MAX_DISAGREEMENT: f64 = 1.0;
+
+/// The most of the frame a detected defect mask may cover: real dust covers a few hundred spots of a few pixels at
+/// most, far less than a thousandth of the frame.
+const MAX_DEFECTS: f64 = 0.001;
 
 /// A stack's frames, in name order: the image files of `dir` but its `reference`, a trusted result that `stack.toml`
 /// may name.
@@ -162,6 +171,11 @@ fn real_stacks_are_aligned_whole_evenly_and_the_same_by_two_chains() {
         println!("  magnification over {:.4}, in gaps of {mean:.5} on average and {largest:.5} at most", scales[scales.len() - 1] / scales[0]);
         assert!(largest <= MAX_GAP_RATIO * mean, "{name}: a gap of {largest} in magnification, {mean} on average");
 
+        // Movement: flagged on a few frames at most.
+        let moved: Vec<u64> = all.iter().filter(|f| f.flags.iter().any(|g| g == "moved")).map(|f| f.id).collect();
+        println!("  moved: {moved:?}");
+        assert!(moved.len() * 2 <= all.len(), "{name}: {} of {} frames flagged as moved: {moved:?}", moved.len(), all.len());
+
         // Every other frame, chained by itself.
         let odd: Vec<String> = ids.iter().skip(1).step_by(2).map(ToString::to_string).collect();
         run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}], "enabled": false }}"#, odd.join(", ")));
@@ -196,6 +210,14 @@ fn real_stacks_are_aligned_whole_evenly_and_the_same_by_two_chains() {
         println!("  the two chains are at most {worst:.3} thousandths of the frame apart, on {compared} frames");
         checked += usize::from(compared >= 2);
         assert!(worst <= MAX_DISAGREEMENT, "{name}: the two chains put a frame {worst} thousandths of the frame apart");
+
+        // Dust and hot pixels, detected on every frame.
+        run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}], "enabled": true }}"#, odd.join(", ")));
+        let detected = run(&mut engine, "defects.detect", "{}");
+        let summary = &detected["summary"];
+        let share = summary["pixels"].as_f64().unwrap() / (width * height) as f64;
+        println!("  defects: {} spots, {:.5} of the frame", summary["spots"], share);
+        assert!(share <= MAX_DEFECTS, "{name}: the detected mask covers {share} of the frame: {detected}");
     }
     assert!(checked > 0, "no stack's frames could be chained two apart");
 }
