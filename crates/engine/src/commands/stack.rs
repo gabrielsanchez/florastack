@@ -66,8 +66,8 @@ use crate::compute::{Backend, Compute, GpuDevice};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::project::{
-    align_settings, confidence_map, depth_map, develop_record, extended_map, stack_settings, stored_alignment, write_image, write_image_in,
-    write_preview,
+    Stale, align_settings, confidence_map, depth_map, develop_record, extended_map, stack_settings, stale_alignment, stored_alignment, write_image,
+    write_image_in, write_preview,
 };
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
@@ -1111,6 +1111,8 @@ pub(super) struct StackPlan {
     pub(super) frames: Vec<ToStack>,
     /// Enabled frames left out: their alignment was rejected.
     pub(super) skipped: Vec<FrameId>,
+    /// Why the alignment no longer fits the project, when it doesn't (`crate::project::stale_alignment`).
+    pub(super) stale: Vec<Stale>,
     pub(super) canvas: Canvas,
     pub(super) framing: Framing,
     /// The frames' size, which the transforms are in.
@@ -1162,6 +1164,8 @@ impl StackPlan {
             return Err(session.unavailable("the stack isn't aligned: align it first with `align.run`"));
         };
         let canvas = stored.canvas(framing)?;
+        // Frames added or enabled since are refused below; the rest is for the result to say.
+        let stale: Vec<Stale> = stale_alignment(project, &stored)?.into_iter().filter(|s| *s != Stale::Frames).collect();
         let reader = match frames {
             Some(ids) => Plan::with_frames(session, command, ids)?,
             None => Plan::new(session, command, 1)?,
@@ -1203,6 +1207,7 @@ impl StackPlan {
             reader,
             frames,
             skipped,
+            stale,
             canvas,
             framing,
             size: (stored.report.width, stored.report.height),
@@ -1718,6 +1723,10 @@ struct StackSummary {
     frames: Vec<FrameId>,
     /// The enabled frames left out, because their alignment was rejected.
     skipped: Vec<FrameId>,
+    /// Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says):
+    /// align again with `align.run` and stack again for a result with the settings as they are now.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    stale_alignment: Vec<Stale>,
     /// How many pixels no frame covers: transparent in the output (only wide framing has them).
     uncovered: usize,
     /// The settings it was stacked with, and the framing.
@@ -1864,6 +1873,7 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
         let source_state = Some(std::sync::Arc::new(source));
         let levels = plan.settings.levels(width, height);
         let (skipped, settings, framing) = (plan.skipped.clone(), plan.settings.used(), plan.framing);
+        let stale_alignment = plan.stale.clone();
         Ok(commit(move |session: &mut Session| {
             let mut edits = Vec::new();
             if let Some(develop) = develop {
@@ -1886,7 +1896,7 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
                 .last()
                 .map(florastack_project::Output::id)
                 .ok_or(CommandError::Internal { command: command.to_owned() })?;
-            Ok(StackSummary { output, width, height, frames: ids, skipped, uncovered, settings, framing, levels, range, depth })
+            Ok(StackSummary { output, width, height, frames: ids, skipped, stale_alignment, uncovered, settings, framing, levels, range, depth })
         }))
     });
     Ok(job.stages(stages).locks(locks()))
@@ -1907,6 +1917,10 @@ struct Previewed {
     frames: Vec<FrameId>,
     /// The enabled frames left out, because their alignment was rejected.
     skipped: Vec<FrameId>,
+    /// Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says):
+    /// align again with `align.run` and stack again for a result with the settings as they are now.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    stale_alignment: Vec<Stale>,
     /// How many pixels no frame covers.
     uncovered: usize,
     /// The method, "average", "pyramid", "depth-map" or "wavelet".
@@ -1944,6 +1958,7 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
             height,
             frames: plan.ids(),
             skipped: plan.skipped.clone(),
+            stale_alignment: plan.stale.clone(),
             uncovered,
             method: plan.settings.name(),
             settings: plan.settings.used(),

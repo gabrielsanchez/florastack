@@ -93,9 +93,11 @@ The frames must be in focus order, from one end of the range to the other. Files
 brackets in one folder break that order.
 
 - **Sort frames by scale** repairs it: focusing changes the magnification steadily, so the frames' scales give their
-  order. Run it from the command palette (Ctrl+K, "Sort frames by scale") or as the engine command
-  `align.sortByScale`; it aligns the frames, sorts them and aligns again, as one undo step. It fails, changing nothing,
-  when the scales differ too little to sort by, as on a rail that moves the subject rather than the camera.
+  order. Once the frames are aligned, the Stack tab says how many aren't in the order of their magnification and
+  offers **Sort by scale**; or run it from the command palette (Ctrl+K, "Sort frames by scale") or as the engine
+  command `align.sortByScale`. It sorts the frames and aligns them again, as one undo step, measuring their scales
+  first when the stack isn't aligned yet. It fails, changing nothing, when the scales differ too little to sort by, as
+  on a rail that moves the subject rather than the camera.
 - **Drag frames** in the frame list to put them in order by hand, then align again.
 - **Several stacks in one folder** belong apart: **File > Import stacks from a folder…** finds where each begins
   ([Batch and watch folders](batch-and-watch.md#several-stacks-in-one-folder)).

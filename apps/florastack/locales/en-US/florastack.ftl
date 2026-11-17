@@ -183,6 +183,16 @@ tip-stack = Stacks the aligned frames at full size into a new output, in the bac
 align-none = Not aligned yet.
 align-summary = { $aligned } of { $count } frames aligned, { $flagged } flagged, { $rejected } rejected.
 align-changed = The alignment settings changed since the frames were aligned: align them again.
+align-develop-changed = The develop settings changed since the frames were aligned: align them again.
+align-defects-changed = The dust and hot pixel mask changed since the frames were aligned: align them again.
+align-moved = The frames' order changed since they were aligned: align them again.
+align-order-changed = The processing order changed: Align orders the stack again, without reading the frames.
+align-out-of-order = { $count ->
+    [one] One frame isn't in the order of its magnification: the stack isn't in the order of focus.
+   *[other] { $count } frames aren't in the order of their magnification: the stack isn't in the order of focus.
+}
+align-sort = Sort by scale
+tip-align-sort = Puts the frames in the order of their magnification, which is their order of focus, and aligns them again. Until then, each frame is aligned to a neighbor that isn't its nearest in focus, and narrow framing may keep the field of view of a frame that isn't the narrowest.
 align-missing = { $count ->
     [one] One frame isn't aligned yet: align again.
    *[other] { $count } frames aren't aligned yet: align again.

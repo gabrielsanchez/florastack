@@ -651,7 +651,7 @@ Example:
 
 **Alignment.** The stack's alignment as the project holds it: each frame's, the processing order and the output's framings.
 
-For each aligned frame: its transform from the master's pixels and its terms (scale, rotation, shift), its brightness gain and score, its status and flags, its sharp-content fraction and what moved in it against its neighbor. For the run: the master, the frames' size, the narrow end, the processing order and the settings it ran with. For each framing (narrow, wide, common): the size of the output it gives and the transform from its pixels to the master's, or why the frames can't be framed that way; `framing` is the one the settings choose.
+For each aligned frame: its transform from the master's pixels and its terms (scale, rotation, shift), its brightness gain and score, its status and flags, its sharp-content fraction and what moved in it against its neighbor. For the run: the master, the frames' size, the narrow end, the processing order and the settings it ran with; `stale`, why it no longer fits the project (frames added, enabled or moved since, alignment or develop settings changed, another defect mask), in which case `align.run` aligns again, and `order` alone when it only has to order the run again; and `outOfOrder`, the frames whose magnification doesn't fit their place in the stack, which `align.sortByScale` repairs. For each framing (narrow, wide, common): the size of the output it gives and the transform from its pixels to the master's, or why the frames can't be framed that way; `framing` is the one the settings choose.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -699,7 +699,7 @@ Example:
 
 **Align frames.** Aligns the enabled frames and orders the stack from its narrow end.
 
-Reads and develops every enabled frame in turn and aligns each to its neighbor, correcting the terms the settings say. Then the end of the stack with the narrower field of view becomes its start, and its frame the master that the others are aligned to (unless `automatic_order` is off, or `reverse_order` on), and every frame's sharp-content fraction is measured: the frames with no in-focus detail are flagged `out-of-focus`, for you to disable with `project.setFramesEnabled`. Frames that aren't enabled lose any alignment they had. The result lists the master, the order and the flagged and rejected frames; `align.info` has every frame's details. Runs as a job; the alignment is recorded in one undo step when it ends, or not at all when it is cancelled.
+Reads and develops every enabled frame in turn and aligns each to its neighbor, correcting the terms the settings say. Then the end of the stack with the narrower field of view becomes its start, and its frame the master that the others are aligned to (unless `automatic_order` is off, or `reverse_order` on), and every frame's sharp-content fraction is measured: the frames with no in-focus detail are flagged `out-of-focus`, for you to disable with `project.setFramesEnabled`. Frames that aren't enabled lose any alignment they had. The result lists the master, the order and the flagged and rejected frames; `align.info` has every frame's details. `outOfOrder` lists the frames whose magnification doesn't fit their place in the stack, as when the files aren't in the order of focus: `align.sortByScale` puts them in order, and until then narrow framing may keep the field of view of a frame that isn't the narrowest. When only the processing order's settings changed since the last run (`automatic_order`, `reverse_order`), no frame is read: the stored alignment is ordered again. Runs as a job; the alignment is recorded in one undo step when it ends, or not at all when it is cancelled.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -718,7 +718,9 @@ Result:
 | `narrowEnd` | `"first"` \| `"last"` \| `null` | The end of the stack with the narrower field of view, when the frames' scales tell. |
 | `order` | array of integer | The aligned frames, in the order the stack is processed. |
 | `outOfFocus` | array of integer | The frames with no in-focus detail: flagged for you to disable. |
+| `outOfOrder` | array of integer | The frames whose magnification doesn't fit their place in the stack: the stack isn't in the order of focus, and narrow framing may keep the field of view of a frame that isn't the narrowest. `align.sortByScale` puts them in order. |
 | `rejected` | array of integer | The frames whose alignment couldn't be trusted, and keep their neighbor's (`align.info` says why). |
+| `reordered` | boolean | Whether the stored alignment was only ordered again, no frame read: the processing order's settings alone had changed since it was made. |
 | `start` | `"first"` \| `"last"` | The end the stack is processed from. |
 
 Example:
@@ -779,7 +781,7 @@ Examples:
 
 **Sort frames by scale.** Puts the enabled frames in the order of their scale, then aligns them in that order.
 
-Repairs a stack shot or imported out of order. Focus breathing, or a rail, changes the magnification steadily with the focus, so the frames' scales give their focus order. A first pass aligns the frames as they are, to measure their scales; the frames are then sorted by scale, in the direction that keeps the stack's present trend, and aligned again in that order, as `align.run` does. Disabled frames keep their places in the list. Fails, changing nothing, when the scales differ too little to sort by. Runs as a job, which reads every frame twice; the new order and the alignment are one undo step.
+Repairs a stack shot or imported out of order. Focus breathing, or a rail, changes the magnification steadily with the focus, so the frames' scales give their focus order. A first pass aligns the frames as they are, to measure their scales; the frames are then sorted by scale, in the direction that keeps the stack's present trend, and aligned again in that order, as `align.run` does. Disabled frames keep their places in the list. Fails, changing nothing, when the scales differ too little to sort by. Runs as a job, which reads every frame twice, or once when the project holds an alignment of these frames that still fits it (`align.info` has no `stale`) and has their scales, none rejected; the new order and the alignment are one undo step.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -798,7 +800,9 @@ Result:
 | `narrowEnd` | `"first"` \| `"last"` \| `null` | The end of the stack with the narrower field of view, when the frames' scales tell. |
 | `order` | array of integer | The aligned frames, in the order the stack is processed. |
 | `outOfFocus` | array of integer | The frames with no in-focus detail: flagged for you to disable. |
+| `outOfOrder` | array of integer | The frames whose magnification doesn't fit their place in the stack: the stack isn't in the order of focus, and narrow framing may keep the field of view of a frame that isn't the narrowest. `align.sortByScale` puts them in order. |
 | `rejected` | array of integer | The frames whose alignment couldn't be trusted, and keep their neighbor's (`align.info` says why). |
+| `reordered` | boolean | Whether the stored alignment was only ordered again, no frame read: the processing order's settings alone had changed since it was made. |
 | `start` | `"first"` \| `"last"` | The end the stack is processed from. |
 
 Example:
@@ -3276,6 +3280,7 @@ Result:
 | `range` | object | How the pyramid's or the wavelet method's result was brought into range. |
 | `settings` | object | The settings it was stacked with, and the framing. |
 | `skipped` | array of integer | The enabled frames left out, because their alignment was rejected. |
+| `staleAlignment` | array of `"frames"` \| `"settings"` \| `"order"` \| `"develop"` \| `"defects"` | Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says): align again with `align.run` and stack again for a result with the settings as they are now. |
 | `uncovered` | integer | How many pixels no frame covers: transparent in the output (only wide framing has them). |
 | `width` | integer | Its size, in pixels. |
 
@@ -3320,6 +3325,7 @@ Result:
 | `range` | object | How the pyramid's or the wavelet method's result was brought into range. |
 | `settings` | object | The settings it was stacked with, and the framing. |
 | `skipped` | array of integer | The enabled frames left out, because their alignment was rejected. |
+| `staleAlignment` | array of `"frames"` \| `"settings"` \| `"order"` \| `"develop"` \| `"defects"` | Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says): align again with `align.run` and stack again for a result with the settings as they are now. |
 | `uncovered` | integer | How many pixels no frame covers: transparent in the output (only wide framing has them). |
 | `width` | integer | Its size, in pixels. |
 
@@ -3400,6 +3406,7 @@ Result:
 | `path` | string | The preview as a file, when `keepFile` asked for one: a linear 32-bit float TIFF, with an alpha channel when some pixels are covered by no frame. |
 | `settings` | object | The settings at full scale, and the framing. |
 | `skipped` | array of integer | The enabled frames left out, because their alignment was rejected. |
+| `staleAlignment` | array of `"frames"` \| `"settings"` \| `"order"` \| `"develop"` \| `"defects"` | Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says): align again with `align.run` and stack again for a result with the settings as they are now. |
 | `uncovered` | integer | How many pixels no frame covers. |
 | `width` | integer | Its size, in pixels: a quarter of the full stack's on each side. |
 
@@ -3448,6 +3455,7 @@ Result:
 | `range` | object | How the pyramid's or the wavelet method's result was brought into range. |
 | `settings` | object | The settings it was stacked with, and the framing. |
 | `skipped` | array of integer | The enabled frames left out, because their alignment was rejected. |
+| `staleAlignment` | array of `"frames"` \| `"settings"` \| `"order"` \| `"develop"` \| `"defects"` | Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says): align again with `align.run` and stack again for a result with the settings as they are now. |
 | `uncovered` | integer | How many pixels no frame covers: transparent in the output (only wide framing has them). |
 | `width` | integer | Its size, in pixels. |
 
@@ -3700,6 +3708,7 @@ Result:
 | `range` | object | How the pyramid's or the wavelet method's result was brought into range. |
 | `settings` | object | The settings it was stacked with, and the framing. |
 | `skipped` | array of integer | The enabled frames left out, because their alignment was rejected. |
+| `staleAlignment` | array of `"frames"` \| `"settings"` \| `"order"` \| `"develop"` \| `"defects"` | Why the alignment it was stacked with no longer fits the project, when it doesn't (as `align.info` says): align again with `align.run` and stack again for a result with the settings as they are now. |
 | `uncovered` | integer | How many pixels no frame covers: transparent in the output (only wide framing has them). |
 | `width` | integer | Its size, in pixels. |
 

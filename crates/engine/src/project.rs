@@ -23,8 +23,8 @@
 use std::path::Path;
 
 use florastack_align::{
-    AlignError, AlignSettings, Canvas, DefectMask, End, Flag, Framing, MotionRegion, ProcessingOrder, StackAlignment, Status, aligned_thumbnail,
-    thumbnail,
+    AlignError, AlignSettings, Canvas, DefectMask, End, Flag, FrameAlignment, Framing, MotionRegion, ProcessingOrder, Similarity, StackAlignment,
+    Status, aligned_thumbnail, order_stack, out_of_place, thumbnail,
 };
 use florastack_codecs::{
     BitDepth, ChromaSubsampling, CodecError, ExifSummary, OrientationPolicy, OutputFormat, OutputMetadata, OutputProfile, OutputSpec, ReadOptions,
@@ -270,10 +270,93 @@ pub struct RunReport {
     pub order: Vec<FrameId>,
     /// The frame at the narrow end, whose field of view narrow framing keeps.
     pub narrow_frame: Option<FrameId>,
+    /// What the frames were read with, to tell when the run no longer fits the project ([`stale_alignment`]); none
+    /// in a run recorded before project format 8, which can't tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made_from: Option<MadeFrom>,
+}
+
+/// What an alignment run read its frames with, beyond its own settings: what changes the pixels it aligned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MadeFrom {
+    /// The develop settings, hashed.
+    pub develop: String,
+    /// The defect mask inpainted in the frames, by the hash of its file; none without a mask.
+    pub defects: Option<String>,
+}
+
+/// What an alignment run that reads its frames with `develop` and inpaints `mask` is made from.
+pub fn made_from(develop: &DevelopSettings, mask: Option<&CacheRef>) -> Result<MadeFrom, ProjectDataError> {
+    let develop = serde_json::to_vec(develop).map_err(|source| ProjectError::Data { what: "develop settings", source })?;
+    Ok(MadeFrom { develop: ContentHash::of(&develop).to_string(), defects: mask.map(|m| m.hash.to_string()) })
+}
+
+/// Why a stored alignment run no longer fits the project ([`stale_alignment`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Stale {
+    /// An enabled frame isn't in the run, or the run's frames stand in another order now.
+    Frames,
+    /// The alignment settings changed, beyond the framing and the processing order.
+    Settings,
+    /// Only the processing order's settings changed (`automatic_order`, `reverse_order`): `align.run` orders the
+    /// run again without reading a frame.
+    Order,
+    /// The develop settings changed.
+    Develop,
+    /// The defect mask changed, was added or was removed.
+    Defects,
+}
+
+/// The settings that don't change how frames align: the framing follows from the transforms whenever it is asked
+/// for, and the processing order from the frames' scales.
+const FRAMING_KEY: &str = "framing";
+const ORDER_KEYS: [&str; 2] = ["automatic_order", "reverse_order"];
+
+/// `settings` as data, without `keys`.
+fn settings_without(settings: &AlignSettings, keys: &[&str]) -> Result<Value, ProjectDataError> {
+    let mut data = to_data("alignment settings", settings)?;
+    if let Some(map) = data.as_object_mut() {
+        for key in keys {
+            map.remove(*key);
+        }
+    }
+    Ok(data)
+}
+
+/// Why `stored`, the run `project` holds, no longer fits it: nothing when aligning again would read the same frames,
+/// the same way, with the same settings. A change of framing never makes a run stale, and frames disabled since the
+/// run are only left out of the stack.
+pub fn stale_alignment(project: &Project, stored: &StoredAlignment) -> Result<Vec<Stale>, ProjectDataError> {
+    let mut stale = Vec::new();
+    let enabled = project.frames.iter().filter(|f| f.enabled);
+    let run: Vec<FrameId> = stored.frames.iter().map(|f| f.frame).collect();
+    let moved = stored.stack_order().is_some_and(|order| order != run);
+    if moved || enabled.clone().any(|f| !run.contains(&f.id())) {
+        stale.push(Stale::Frames);
+    }
+    let now = align_settings(project)?;
+    let all = [FRAMING_KEY, ORDER_KEYS[0], ORDER_KEYS[1]];
+    if settings_without(&now, &all)? != settings_without(&stored.settings, &all)? {
+        stale.push(Stale::Settings);
+    } else if settings_without(&now, &[FRAMING_KEY])? != settings_without(&stored.settings, &[FRAMING_KEY])? {
+        stale.push(Stale::Order);
+    }
+    if let Some(from) = &stored.report.made_from {
+        let present = made_from(&develop_settings(project)?, defect_mask_ref(project))?;
+        if present.develop != from.develop {
+            stale.push(Stale::Develop);
+        }
+        if present.defects != from.defects {
+            stale.push(Stale::Defects);
+        }
+    }
+    Ok(stale)
 }
 
 /// The edit that records an alignment run: `alignment`, of the frames `ids` (in the order it aligned them), ordered as
-/// `order` says, with the settings it ran with. Every other frame of `project` loses its alignment and report, so that
+/// `order` says, with the settings it ran with and what it read the frames with (`made_from`). Every other frame of `project` loses its alignment and report, so that
 /// the frames with an alignment are the run's.
 pub fn alignment_edit(
     project: &Project,
@@ -281,6 +364,7 @@ pub fn alignment_edit(
     alignment: &StackAlignment,
     order: &ProcessingOrder,
     settings: &AlignSettings,
+    made_from: Option<MadeFrom>,
 ) -> Result<Edit, ProjectDataError> {
     let id = |i: usize| ids.get(i).copied().ok_or(AlignError::Master { master: i, frames: ids.len() });
     let report = RunReport {
@@ -290,6 +374,7 @@ pub fn alignment_edit(
         start: order.start,
         order: order.frames.iter().map(|&i| id(i)).collect::<Result<_, _>>()?,
         narrow_frame: order.narrow_frame.map(id).transpose()?,
+        made_from,
     };
     let run = AlignmentRun {
         master: id(alignment.master)?,
@@ -357,6 +442,89 @@ impl StoredAlignment {
         let narrow = self.report.narrow_frame.and_then(|n| used.iter().position(|f| f.frame == n));
         Canvas::new(framing, &transforms, self.report.width, self.report.height, narrow)
     }
+
+    /// The run's frames in the stack's order, as the run aligned them: its processing order, from the end it starts
+    /// at. `None` when the report's order doesn't list exactly the run's frames, as a run this version didn't write
+    /// might.
+    pub fn stack_order(&self) -> Option<Vec<FrameId>> {
+        let mut order = self.report.order.clone();
+        if self.report.start == End::Last {
+            order.reverse();
+        }
+        let same = order.len() == self.frames.len() && self.frames.iter().all(|f| order.contains(&f.frame));
+        same.then_some(order)
+    }
+
+    /// The run's frames whose magnification doesn't fit their place in the stack (`florastack_align::out_of_place`),
+    /// which sorting by scale would move: in the project's frame order.
+    pub fn out_of_order(&self) -> Vec<FrameId> {
+        let (w, h) = (self.report.width, self.report.height);
+        let scales: Vec<f64> =
+            self.frames.iter().map(|f| Similarity::from_affine(&f.alignment.transform, w, h).map_or(f64::NAN, |s| s.scale)).collect();
+        out_of_place(&scales, w, h).into_iter().filter_map(|i| self.frames.get(i).map(|f| f.frame)).collect()
+    }
+
+    /// The run as florastack-align gave it, its frames in the stack's order ([`StoredAlignment::stack_order`]), with
+    /// their ids: what [`order_stack`] orders again. The frames' motion maps aren't stored, so they have no motion
+    /// here. `None` when the project doesn't hold the whole run: a frame without a report, or a transform that isn't
+    /// a similarity.
+    pub fn alignment(&self) -> Option<(Vec<FrameId>, StackAlignment)> {
+        let ids = self.stack_order()?;
+        let (width, height) = (self.report.width, self.report.height);
+        let index = |id: FrameId| ids.iter().position(|&i| i == id);
+        let mut frames = Vec::with_capacity(ids.len());
+        for id in &ids {
+            let stored = self.frames.iter().find(|f| f.frame == *id)?;
+            let report = stored.report.as_ref()?;
+            frames.push(FrameAlignment {
+                transform: stored.alignment.transform,
+                similarity: Similarity::from_affine(&stored.alignment.transform, width, height)?,
+                gain: stored.alignment.brightness_gain,
+                white_balance: stored.alignment.white_balance,
+                score: stored.alignment.quality,
+                reference: match report.reference {
+                    Some(reference) => Some(index(reference)?),
+                    None => None,
+                },
+                status: report.status,
+                flags: report.flags.clone(),
+                sharp_fraction: report.sharp_fraction,
+                motion: None,
+            });
+        }
+        let master = index(self.master)?;
+        Some((ids, StackAlignment { master, frames, width, height }))
+    }
+}
+
+/// A stored run ordered again, as [`reorder_edit`] gives it.
+pub struct Reordered {
+    /// The edit that records it.
+    pub edit: Edit,
+    /// The run's frames, in the stack's order.
+    pub ids: Vec<FrameId>,
+    /// Their alignment, relative to the new master, and the new processing order.
+    pub alignment: StackAlignment,
+    pub order: ProcessingOrder,
+}
+
+/// The edit that orders `stored`, the run `project` holds, as `settings` say now, without aligning again: the
+/// processing order and its master chosen again from the frames' scales (`florastack_align::order_stack`), every
+/// transform, gain and white balance rebased onto that master, and the rest of each frame's report, with what moved
+/// in it, kept. `None` when the project doesn't hold the whole run ([`StoredAlignment::alignment`]).
+pub fn reorder_edit(project: &Project, stored: &StoredAlignment, settings: &AlignSettings) -> Result<Option<Reordered>, ProjectDataError> {
+    let Some((ids, alignment)) = stored.alignment() else { return Ok(None) };
+    let (alignment, order) = order_stack(&alignment, settings)?;
+    let mut edit = alignment_edit(project, &ids, &alignment, &order, settings, stored.report.made_from.clone())?;
+    if let Edit::SetAlignment { frames, .. } = &mut edit {
+        for frame in frames {
+            let motion = stored.frames.iter().find(|f| f.frame == frame.frame).and_then(|f| f.report.as_ref()).and_then(|r| r.motion.as_ref());
+            if let (Some(motion), Some(report)) = (motion, frame.report.as_mut().and_then(Value::as_object_mut)) {
+                report.insert("motion".to_owned(), to_data("frame motion", motion)?);
+            }
+        }
+    }
+    Ok(Some(Reordered { edit, ids, alignment, order }))
 }
 
 /// The project's alignment run, if it has one: its settings, its report and its frames.

@@ -10,7 +10,7 @@ use florastack_codecs::{ExifSummary, Format};
 use florastack_core::{AnyImage, ColorSpace, Encoding, Image};
 use florastack_engine::model::FrameId;
 use florastack_engine::project::{
-    FrameMotion, FrameReport, MaskSource, MaskSummary, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, read_image,
+    FrameMotion, FrameReport, MadeFrom, MaskSource, MaskSummary, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, read_image,
     set_develop_settings, store_develop, write_image, write_preview,
 };
 use florastack_project::{Area, Input, MapName, Maps, NewOutput, ProjectFolder, to_data};
@@ -342,12 +342,20 @@ fn the_shapes_stored_in_project_files_are_pinned() {
     // A defect mask's summary, its cache key.
     let mask = MaskSummary { source: MaskSource::Detected, width: 6000, height: 4000, pixels: 1234, spots: 7 };
     assert_eq!(serde_json::to_value(&mask).unwrap(), json!({ "source": "detected", "width": 6000, "height": 4000, "pixels": 1234, "spots": 7 }));
-    let run =
-        RunReport { width: 6000, height: 4000, narrow_end: Some(End::Last), start: End::First, order: vec![id(1), id(3)], narrow_frame: Some(id(3)) };
-    assert_eq!(
-        to_data("alignment run", &run).unwrap(),
-        json!({ "width": 6000, "height": 4000, "narrow_end": "last", "start": "first", "order": [1, 3], "narrow_frame": 3 })
-    );
+    let mut run = RunReport {
+        width: 6000,
+        height: 4000,
+        narrow_end: Some(End::Last),
+        start: End::First,
+        order: vec![id(1), id(3)],
+        narrow_frame: Some(id(3)),
+        made_from: None,
+    };
+    let stored = json!({ "width": 6000, "height": 4000, "narrow_end": "last", "start": "first", "order": [1, 3], "narrow_frame": 3 });
+    assert_eq!(to_data("alignment run", &run).unwrap(), stored);
+    assert_eq!(serde_json::from_value::<RunReport>(stored).unwrap(), run, "a run recorded before format 8");
+    run.made_from = Some(MadeFrom { develop: "ab".repeat(32), defects: None });
+    assert_eq!(to_data("alignment run", &run).unwrap()["made_from"], json!({ "develop": "ab".repeat(32), "defects": null }));
     assert_eq!(serde_json::to_value(Framing::ALL).unwrap(), json!(["narrow", "wide", "common"]));
     assert_eq!(
         serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined, Flag::Moved]).unwrap(),
