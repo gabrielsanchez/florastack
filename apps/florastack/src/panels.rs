@@ -259,12 +259,8 @@ fn frame_details(app: &mut FloraStackApp, ui: &mut egui::Ui, frame: &FrameRow, s
     }
     let chosen = app.shell.alignment["chosenMaster"].as_u64() == Some(frame.id);
     label.context_menu(|ui| master_menu(app, ui, frame, chosen));
-    if app.shell.alignment["run"]["master"].as_u64() == Some(frame.id) {
-        let help = if chosen { tr("frame-master-chosen-help") } else { tr("frame-master-help") };
-        ui.label(RichText::new(tr("frame-master")).small().strong()).on_hover_text(help);
-    }
     if let Some(alignment) = &frame.alignment {
-        quality(ui, alignment, min_score);
+        quality(ui, alignment, min_score, chosen);
     }
     if !frame.flags.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -370,8 +366,8 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
 }
 
 /// A frame's alignment quality, under its name: the master, rejected, or how well it matched its neighbor, with its
-/// terms in the tooltip.
-fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64) {
+/// terms in the tooltip; for the master, whether it was `chosen` by hand.
+fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64, chosen: bool) {
     let score = alignment["score"].as_f64().unwrap_or(0.0);
     let (text, warn) = match alignment["status"].as_str() {
         Some("master") => (tr("quality-master"), false),
@@ -396,6 +392,13 @@ fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64) {
         Some(&[red, green, blue]) => {
             let color = |g: f64| format!("{g:.3}").into();
             format!("{tip}\n{}", tr_args("quality-tip-white-balance", &[("red", color(red)), ("green", color(green)), ("blue", color(blue))]))
+        }
+        _ => tip,
+    };
+    let tip = match alignment["status"].as_str() {
+        Some("master") => {
+            let who = if chosen { tr("frame-master-chosen-help") } else { tr("frame-master-help") };
+            format!("{who}\n{tip}")
         }
         _ => tip,
     };
