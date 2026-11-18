@@ -28,10 +28,13 @@
 //! ([`StackAligner::set_defects`](crate::StackAligner::set_defects)) aren't measured.
 //!
 //! Movement matters where the frame gives the stack detail: once the stack is aligned, a moved cell counts only where
-//! its frame is among the sharpest at that point of the scene (its focus energy at least half the sharpest frame's,
-//! from the frames' focus maps, `focus.rs`). Elsewhere the frame is out of focus, the stack takes that part from other
-//! frames, and the edges of a foreground far out of focus, which widen as the focus moves away, would pass for
-//! movement.
+//! its frame is in focus at that point of the scene: where some frame has detail in focus there (a focus peak, or
+//! detail sharp in every frame) and this frame's focus energy is at least half the sharpest frame's (`focus.rs`,
+//! `FocusField::in_focus`). Elsewhere the frame is out of focus, the stack takes that part from other frames, and the
+//! edges of a foreground far out of focus, which widen as the focus moves away, would pass for movement; so would an
+//! area that no frame has in focus, where every frame is as blurred as the sharpest and the blur changes shape as the
+//! focus moves (on real stacks, a blurred foreground or background moved by 4 to 6 pixels in nearly every frame).
+//! Where the stack's focus can't be told, as on frames moved but not refocused, every moved cell counts.
 //!
 //! [`Motion`] sums a frame's map up: its **score**, the share of the measured cells that moved where the frame is in
 //! focus; its largest displacement; and its **regions**, the 8-connected groups of those cells, as rectangles of frame
@@ -195,6 +198,9 @@ pub struct Motion {
     pub peak: f64,
     /// The regions that moved, largest first.
     pub regions: Vec<MotionRegion>,
+    /// The cells that count as moved, row by row as the map's: moved where the frame is in focus. The regions are
+    /// their 8-connected groups.
+    pub counted: Vec<bool>,
 }
 
 impl Motion {
@@ -489,7 +495,7 @@ fn summarize(map: MotionMap, keep: impl Fn((f64, f64)) -> bool) -> Motion {
     let score = if measured == 0 { 0.0 } else { count as f64 / measured as f64 };
     let mut regions = regions(&map, &moved);
     regions.sort_by(|a, b| b.cells.cmp(&a.cells).then(a.y.cmp(&b.y)).then(a.x.cmp(&b.x)));
-    Motion { map, score, peak, regions }
+    Motion { map, score, peak, regions, counted: moved }
 }
 
 /// The 8-connected groups of `moved` cells, as rectangles of frame pixels.

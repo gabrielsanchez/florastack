@@ -19,8 +19,8 @@ use crate::error::CommandError;
 use crate::frames::FrameReader;
 use crate::jobs::{JobPlan, Lane, commit};
 use crate::project::{
-    FrameMotion, PREVIEW_SIDE, ProjectDataError, align_settings, aligned_preview_key, defect_mask_ref, develop_settings, frame_report, preview_key,
-    read_defect_mask, stored_alignment, write_aligned_preview, write_frame_preview,
+    FrameMotion, PREVIEW_SIDE, ProjectDataError, align_settings, aligned_preview_key, defect_mask_ref, develop_settings, frame_report, motion_map,
+    preview_key, read_defect_mask, stored_alignment, write_aligned_preview, write_frame_preview,
 };
 use crate::registry::{CommandSpec, Meta, NoParams, Requires};
 use crate::session::Session;
@@ -69,6 +69,7 @@ struct Wanted {
 /// What every frame's previews should be made from now, in the project's order.
 fn wanted(project: &Project) -> Result<Vec<(FrameId, Wanted)>, CommandError> {
     let develop = develop_settings(project)?;
+    let resolved = crate::project::develop(project)?;
     let mask = defect_mask_ref(project);
     let framing = align_settings(project).map_or(Framing::Narrow, |s| s.framing);
     let stored = stored_alignment(project).ok().flatten();
@@ -85,7 +86,7 @@ fn wanted(project: &Project) -> Result<Vec<(FrameId, Wanted)>, CommandError> {
                     .map(|s| ((stored.report.width, stored.report.height), s.alignment.transform, *canvas)),
                 _ => None,
             };
-            Ok((f.id(), Wanted { preview: preview_key(f, &develop, mask)?, aligned }))
+            Ok((f.id(), Wanted { preview: preview_key(f, &develop, resolved.as_ref(), mask)?, aligned }))
         })
         .collect()
 }
@@ -134,6 +135,11 @@ struct FilmstripFrame {
     /// What moved in it against its neighbor, once aligned, when it was aligned.
     #[serde(skip_serializing_if = "Option::is_none")]
     motion: Option<FrameMotion>,
+    /// Its motion map, cell by cell, a JSON file (`MotionMapFile`: the grid, from its cells to the frame's pixels,
+    /// each cell's displacement and whether it counts as moved), for a view to overlay; none for the master and the
+    /// frames that aren't aligned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motion_map: Option<String>,
 }
 
 fn list(session: &Session, _: NoParams) -> Result<Filmstrip, CommandError> {
@@ -154,6 +160,7 @@ fn list(session: &Session, _: NoParams) -> Result<Filmstrip, CommandError> {
             aligned_preview: aligned.map(path),
             flags: report.as_ref().map(|r| r.flags.clone()).unwrap_or_default(),
             motion: report.and_then(|r| r.motion),
+            motion_map: motion_map().and_then(|name| f.maps.get(&name)).map(path),
         });
     }
     Ok(Filmstrip { side: PREVIEW_SIDE, framing, stale, frames })

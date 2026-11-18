@@ -153,7 +153,7 @@ impl CommandError {
             CommandError::Cancelled => "cancelled",
             CommandError::Project(_) | CommandError::Edit(_) => "project",
             CommandError::Data(e) => match &**e {
-                ProjectDataError::Project(_) => "project",
+                ProjectDataError::Project(_) | ProjectDataError::MotionMap => "project",
                 ProjectDataError::Codec(_)
                 | ProjectDataError::Frame(FrameError::Codec(_))
                 | ProjectDataError::ReadFrame { source: FrameError::Codec(_), .. } => "codec",

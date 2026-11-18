@@ -64,6 +64,8 @@ pub enum ProjectDataError {
     },
     #[error(transparent)]
     Align(#[from] AlignError),
+    #[error("the motion map isn't one this version reads: align the stack again")]
+    MotionMap,
     #[error(transparent)]
     Stack(#[from] StackError),
 }
@@ -280,16 +282,31 @@ pub struct RunReport {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MadeFrom {
-    /// The develop settings, hashed.
+    /// How the frames were developed ([`development_key`]): the stack's resolved development, hashed, for RAW frames;
+    /// the develop settings, hashed, otherwise.
     pub develop: String,
     /// The defect mask inpainted in the frames, by the hash of its file; none without a mask.
     pub defects: Option<String>,
 }
 
 /// What an alignment run that reads its frames with `develop` and inpaints `mask` is made from.
-pub fn made_from(develop: &DevelopSettings, mask: Option<&CacheRef>) -> Result<MadeFrom, ProjectDataError> {
-    let develop = serde_json::to_vec(develop).map_err(|source| ProjectError::Data { what: "develop settings", source })?;
-    Ok(MadeFrom { develop: ContentHash::of(&develop).to_string(), defects: mask.map(|m| m.hash.to_string()) })
+pub fn made_from(develop: &DevelopSettings, resolved: Option<&RawDevelop>, mask: Option<&CacheRef>) -> Result<MadeFrom, ProjectDataError> {
+    Ok(MadeFrom { develop: development_key(develop, resolved)?, defects: mask.map(|m| m.hash.to_string()) })
+}
+
+/// How frames are developed, as the keys of what is made from them say it: the stack's resolved development when
+/// there is one (`resolved`: what the project holds, or what the job reading the frames resolved), hashed with its
+/// settings, whatever frame it was resolved on, so that a development resolved anew, on another frame, tells; and the
+/// develop settings alone, hashed, otherwise, as for image files, which have no development to resolve.
+pub fn development_key(develop: &DevelopSettings, resolved: Option<&RawDevelop>) -> Result<String, ProjectDataError> {
+    if let Some(r) = resolved {
+        let bytes =
+            serde_json::to_vec(&(r.settings(), r.resolved())).map_err(|source| ProjectError::Data { what: "resolved development", source })?;
+        Ok(format!("resolved {}", ContentHash::of(&bytes)))
+    } else {
+        let bytes = serde_json::to_vec(develop).map_err(|source| ProjectError::Data { what: "develop settings", source })?;
+        Ok(ContentHash::of(&bytes).to_string())
+    }
 }
 
 /// Why a stored alignment run no longer fits the project ([`stale_alignment`]).
@@ -344,7 +361,7 @@ pub fn stale_alignment(project: &Project, stored: &StoredAlignment) -> Result<Ve
         stale.push(Stale::Order);
     }
     if let Some(from) = &stored.report.made_from {
-        let present = made_from(&develop_settings(project)?, defect_mask_ref(project))?;
+        let present = made_from(&develop_settings(project)?, develop(project)?.as_ref(), defect_mask_ref(project))?;
         if present.develop != from.develop {
             stale.push(Stale::Develop);
         }
@@ -575,6 +592,86 @@ pub fn confidence_map() -> Option<MapName> {
     MapName::new(CONFIDENCE).ok()
 }
 
+/// The name of a frame's motion map among its maps ([`MotionMapFile`]).
+pub const MOTION: &str = "motion";
+
+/// The motion map's name, as a [`MapName`] (always a valid one).
+pub fn motion_map() -> Option<MapName> {
+    MapName::new(MOTION).ok()
+}
+
+/// The `format` of a motion map's file.
+pub const MOTION_FORMAT: &str = "florastack-motion";
+/// The most cells a motion map's file may hold: florastack-align's maps have at most 64 on a side.
+const MAX_MOTION_CELLS: usize = 128 * 128;
+
+/// A frame's motion map as its cache file holds it, a JSON file (`frame-<id>-motion.json`): what moved in the frame
+/// against the frame it was aligned to, cell by cell (florastack-align's `MotionMap`), for a view to overlay on the
+/// frame. The project keeps only the regions and the score in the frame's report.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MotionMapFile {
+    /// Always [`MOTION_FORMAT`].
+    pub format: String,
+    /// The file's version: 1.
+    pub version: u32,
+    /// The grid's size, in cells.
+    pub width: usize,
+    pub height: usize,
+    /// From a cell's coordinates to the frame's pixels, as the rows of an affine transform `[[a, b, c], [d, e, f]]`:
+    /// cell `(x, y)`'s center is at `(a x + b y + c, d x + e y + f)`.
+    pub to_frame: [[f64; 3]; 2],
+    /// The displacement from which a cell moved, in frame pixels.
+    pub threshold: f64,
+    /// The cells, row by row: the displacement of the frame's content against its reference along x and y, in frame
+    /// pixels, and their correlation once displaced; `null` where a cell couldn't be measured (flat, on a single
+    /// edge, or near a defect).
+    pub cells: Vec<Option<[f32; 3]>>,
+    /// Whether each cell counts as moved: moved where the frame is in focus. The report's regions are their groups.
+    pub counted: Vec<bool>,
+}
+
+impl MotionMapFile {
+    /// The file of a frame's motion.
+    pub fn of(motion: &florastack_align::Motion) -> MotionMapFile {
+        let map = &motion.map;
+        MotionMapFile {
+            format: MOTION_FORMAT.to_owned(),
+            version: 1,
+            width: map.width(),
+            height: map.height(),
+            to_frame: map.to_frame().m,
+            threshold: map.threshold(),
+            cells: map.cells().iter().map(|c| c.map(|c| [c.dx, c.dy, c.correlation])).collect(),
+            counted: motion.counted.clone(),
+        }
+    }
+
+    /// Checks what types can't say: the format, the version and the grid's size against its cells.
+    fn check(&self) -> Result<(), ProjectDataError> {
+        let cells = self.width.checked_mul(self.height).filter(|&n| n > 0 && n <= MAX_MOTION_CELLS);
+        let fits = cells.is_some_and(|n| self.cells.len() == n && self.counted.len() == n);
+        if self.format != MOTION_FORMAT || self.version != 1 || !fits || !self.to_frame.iter().flatten().all(|v| v.is_finite()) {
+            return Err(ProjectDataError::MotionMap);
+        }
+        Ok(())
+    }
+}
+
+/// Writes frame `id`'s motion map into the project's cache.
+pub fn write_motion_map(folder: &impl AsRef<CacheDir>, id: FrameId, motion: &florastack_align::Motion) -> Result<CacheRef, ProjectDataError> {
+    let bytes = serde_json::to_vec(&MotionMapFile::of(motion)).map_err(|source| ProjectError::Data { what: "motion map", source })?;
+    Ok(folder.as_ref().store(Area::Cache, &format!("frame-{}-motion", id.get()), "json", &bytes, None)?)
+}
+
+/// Reads a frame's motion map from the project's cache, after checking the file against its reference.
+pub fn read_motion_map(folder: &impl AsRef<CacheDir>, reference: &CacheRef) -> Result<MotionMapFile, ProjectDataError> {
+    let bytes = folder.as_ref().read(reference)?;
+    let file: MotionMapFile = serde_json::from_slice(&bytes).map_err(|source| ProjectError::Data { what: "motion map", source })?;
+    file.check()?;
+    Ok(file)
+}
+
 /// The name of the stack's defect mask among the project's maps.
 pub const DEFECTS: &str = "defects";
 
@@ -652,12 +749,20 @@ pub fn read_mask_file(path: &Path) -> Result<DefectMask, ProjectDataError> {
     mask_from_image(florastack_codecs::read(&bytes, &ReadOptions::default())?.image)
 }
 
-/// The key of a frame's preview: the frame's contents, the develop settings it was developed with and the defect mask
-/// it was inpainted with. A preview whose key differs is out of date.
-pub fn preview_key(frame: &Frame, develop: &DevelopSettings, mask: Option<&CacheRef>) -> Result<String, ProjectDataError> {
-    let develop = serde_json::to_vec(develop).map_err(|source| ProjectError::Data { what: "develop settings", source })?;
+/// The key of a frame's preview: the frame's contents, how it was developed and the defect mask it was inpainted
+/// with. A preview whose key differs is out of date. How it was developed is the stack's resolved development when
+/// there is one (`resolved`: what the project holds, or what the job reading the frame resolved), whatever frame it was
+/// resolved on, so that a development resolved anew, on another frame, makes the previews stale; and the develop
+/// settings alone otherwise, as for a stack of image files, which have no development to resolve.
+pub fn preview_key(
+    frame: &Frame,
+    develop: &DevelopSettings,
+    resolved: Option<&RawDevelop>,
+    mask: Option<&CacheRef>,
+) -> Result<String, ProjectDataError> {
+    let developed = development_key(develop, resolved)?;
     let mask = mask.map_or_else(|| "none".to_owned(), |m| m.hash.to_string());
-    Ok(format!("frame {} develop {} defects {mask}", frame.hash, ContentHash::of(&develop)))
+    Ok(format!("frame {} develop {developed} defects {mask}", frame.hash))
 }
 
 /// The key of a frame's aligned preview: its preview, its transform and the canvas, hashed.

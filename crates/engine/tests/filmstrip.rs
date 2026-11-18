@@ -101,6 +101,36 @@ fn a_subject_that_moved_is_flagged_and_shown_in_the_filmstrip() {
     assert!(x >= px - RADIUS - 12.0 && y >= py - RADIUS - 12.0 && x + w <= px + RADIUS + 12.0 && y + h <= py + RADIUS + 12.0, "{motion}");
     let (dx, dy) = (region["dx"].as_f64().unwrap(), region["dy"].as_f64().unwrap());
     assert!((dx - 4.0).abs() < 0.3 && (dy + 3.0).abs() < 0.3, "4 right and 3 up: {motion}");
+    // Its motion map, cell by cell, for a view to overlay: the counted cells are the region's, and moved as it did.
+    let map_file: Value = serde_json::from_slice(&std::fs::read(film["frames"][5]["motionMap"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!((&map_file["format"], &map_file["version"]), (&json!("florastack-motion"), &json!(1)));
+    let (cw, cells) = (num(&map_file["width"]), map_file["cells"].as_array().unwrap());
+    let to_frame = &map_file["toFrame"];
+    let at = |i: usize, row: usize| {
+        to_frame[row][0].as_f64().unwrap() * (i % cw) as f64
+            + to_frame[row][1].as_f64().unwrap() * (i / cw) as f64
+            + to_frame[row][2].as_f64().unwrap()
+    };
+    let counted: Vec<usize> = map_file["counted"].as_array().unwrap().iter().enumerate().filter(|(_, c)| **c == true).map(|(i, _)| i).collect();
+    assert_eq!(counted.len(), num(&region["cells"]) + motion["regions"].as_array().unwrap()[1..].iter().map(|r| num(&r["cells"])).sum::<usize>());
+    let mut moved: Vec<(f64, f64)> = Vec::new();
+    for &i in &counted {
+        let (cx, cy) = (at(i, 0), at(i, 1));
+        assert!(
+            cx >= x - 1.0 && cx <= x + w + 1.0 && cy >= y - 1.0 && cy <= y + h + 1.0 || motion["regions"].as_array().unwrap().len() > 1,
+            "{map_file}"
+        );
+        let cell = cells[i].as_array().unwrap();
+        moved.push((cell[0].as_f64().unwrap(), cell[1].as_f64().unwrap()));
+    }
+    // Cells on the patch's edge see only part of it move: the middle one moved as the patch did.
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let (mx, my) = (median(moved.iter().map(|m| m.0).collect()), median(moved.iter().map(|m| m.1).collect()));
+    assert!((mx - 4.0).abs() < 0.5 && (my + 3.0).abs() < 0.5, "{moved:?}");
+    assert!(film["frames"][4].get("motionMap").is_none(), "the master has none");
     let info = run(&mut engine, "align.info", "{}");
     let narrow = info["run"]["framings"].as_array().unwrap().iter().find(|f| f["framing"] == "narrow").unwrap().clone();
     let canvas = (num(&narrow["width"]), num(&narrow["height"]));
@@ -141,4 +171,33 @@ fn a_still_stack_flags_no_movement() {
     run(&mut engine, "project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, path_list(&files)));
     let aligned = run(&mut engine, "align.run", "{}");
     assert_eq!(aligned["moved"], json!([]), "{aligned}");
+}
+
+/// A RAW frame's preview, and the alignment run, are keyed by the development the job resolved on it, which the
+/// commit stores: current once aligned, and out of date once the develop settings change
+/// (`crate::project::development_key`).
+#[test]
+fn the_previews_of_raw_frames_are_current_once_aligned() {
+    let Some(path) = florastack_testkit::fixture("raw", "dng-canon-eos-5d-mark-iii.dng") else {
+        florastack_testkit::skip!(Corpus, "corpus/fixtures/raw/dng-canon-eos-5d-mark-iii.dng is missing: run `cargo xtask corpus --fixtures`");
+        return;
+    };
+    let dir = TempDir::new("filmstrip-raw");
+    let mut engine = Engine::new(config(dir.path()));
+    run(&mut engine, "project.new", &format!(r#"{{ "name": "Raw", "folder": {} }}"#, quoted(dir.path())));
+    run(&mut engine, "project.addFrames", &format!(r#"{{ "paths": [{}] }}"#, path_list(&[path])));
+    run(&mut engine, "align.run", "{}");
+    assert!(engine.project().unwrap().develop.is_some(), "resolved and stored");
+    assert_eq!(run(&mut engine, "filmstrip.list", "{}")["stale"], 0);
+    // The run records the development it read the frame with, which is the one stored: it fits.
+    assert_eq!(run(&mut engine, "align.info", "{}")["run"]["stale"], json!([]));
+    run(&mut engine, "develop.set", r#"{ "exposure": 1.0 }"#);
+    assert_eq!(run(&mut engine, "align.info", "{}")["run"]["stale"], json!(["develop"]));
+    assert_eq!(run(&mut engine, "filmstrip.list", "{}")["stale"], 2, "the preview, and the aligned preview made from it");
+    // Made again before the new settings' development is stored, the preview is keyed by the settings; aligning
+    // stores the development and makes it again.
+    run(&mut engine, "filmstrip.update", "{}");
+    assert_eq!(run(&mut engine, "filmstrip.list", "{}")["stale"], 0);
+    run(&mut engine, "align.run", "{}");
+    assert_eq!(run(&mut engine, "filmstrip.list", "{}")["stale"], 0);
 }

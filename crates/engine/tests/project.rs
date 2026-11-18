@@ -10,8 +10,8 @@ use florastack_codecs::{ExifSummary, Format};
 use florastack_core::{AnyImage, ColorSpace, Encoding, Image};
 use florastack_engine::model::FrameId;
 use florastack_engine::project::{
-    FrameMotion, FrameReport, MadeFrom, MaskSource, MaskSummary, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, read_image,
-    set_develop_settings, store_develop, write_image, write_preview,
+    FrameMotion, FrameReport, MadeFrom, MaskSource, MaskSummary, PREVIEW_SIDE, RunReport, add_frame, develop, develop_settings, exif, preview_key,
+    read_image, set_develop_settings, store_develop, write_image, write_preview,
 };
 use florastack_project::{Area, Input, MapName, Maps, NewOutput, ProjectFolder, to_data};
 use florastack_raw::{ChromaticAberration, Chromaticity, DevelopSettings, NoiseReduction, RawDevelop, Resolved, WhiteBalance};
@@ -75,6 +75,27 @@ fn the_development_comes_back_from_a_reopened_project() {
     set_develop_settings(&mut reopened, &DevelopSettings { exposure: 1.0, ..settings() }).unwrap();
     assert_eq!(develop(&reopened).unwrap(), None);
     assert!(set_develop_settings(&mut reopened, &DevelopSettings { exposure: f32::NAN, ..settings() }).is_err());
+}
+
+#[test]
+fn a_preview_is_keyed_by_the_development_resolved_whatever_frame_it_was_resolved_on() {
+    let (_, mut project) = ProjectFolder::create(TempDir::new("preview-keys").path(), "Keys").unwrap();
+    let frame = project.add_frame(
+        florastack_project::FrameFile { path: "/a.dng".into(), size: 1, modified: None, hash: florastack_project::ContentHash::of(b"a") },
+        None,
+    );
+    let frame = project.frame(frame).unwrap().clone();
+    let resolved =
+        |x: f64| RawDevelop::from_resolved(&settings(), Resolved { white: Chromaticity { x, y: 0.33 }, chromatic_aberration: [0.0, 0.0] }).unwrap();
+    let key = |r: Option<&RawDevelop>| preview_key(&frame, &settings(), r, None).unwrap();
+    // The same settings resolved on another frame, to another white: another preview.
+    let (a, b) = (resolved(0.31), resolved(0.32));
+    assert_ne!(key(Some(&a)), key(Some(&b)));
+    assert_eq!(key(Some(&a)), key(Some(&resolved(0.31))));
+    // Image files have no development to resolve: the settings alone, as before.
+    assert_ne!(key(None), key(Some(&a)));
+    assert_eq!(key(None), preview_key(&frame, &settings(), None, None).unwrap());
+    assert!(key(None).starts_with(&format!("frame {} develop ", frame.hash)) && key(Some(&a)).contains(" develop resolved "));
 }
 
 #[test]

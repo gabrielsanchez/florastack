@@ -138,7 +138,7 @@ Frames with less in-focus detail than this share are flagged as out of focus: ty
 
 ## Motion
 
-Frames in which part of the subject moved at least this many pixels against the frame before are flagged as moved. Play the [filmstrip](#filmstrip) to see what moved.
+Frames in which part of the subject moved at least this many pixels against the frame before are flagged as moved. Only movement where the frame is in focus counts: a blurred foreground or background changes shape as the focus moves, and the stack takes those parts from other frames anyway. Play the [filmstrip](#filmstrip) to see what moved. Blurred highlights (round discs of light) can still pass for movement, since they grow and shift with the focus.
 
 ## Defects
 
