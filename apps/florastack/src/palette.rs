@@ -52,12 +52,15 @@ pub struct Palette {
     focus: bool,
 }
 
-/// Whether every character of `needle` appears in `hay` in order (case ignored), and how well: a match at the start
-/// of the text, or of a word, scores higher. `None` when it doesn't match.
+/// Whether every character of `needle` appears in `hay` in order (case ignored), and how well: the whole text scores
+/// highest, then a match at the start of the text, or of a word. `None` when it doesn't match.
 fn score(needle: &str, hay: &str) -> Option<i32> {
     let (needle, hay) = (needle.to_lowercase(), hay.to_lowercase());
     if needle.is_empty() {
         return Some(0);
+    }
+    if hay == needle {
+        return Some(1200);
     }
     if hay.starts_with(&needle) {
         return Some(1000);
@@ -238,6 +241,7 @@ mod tests {
         assert!(score("fra", "Align frames") > score("agn", "Align frames"));
         assert_eq!(score("xyz", "Align frames"), None);
         assert!(score("aln", "align.run").is_some(), "letters in order");
+        assert!(score("align.set", "align.set") > score("align.set", "align.setmaster"), "the whole name before a longer one");
     }
 
     #[test]

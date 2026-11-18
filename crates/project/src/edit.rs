@@ -66,6 +66,8 @@ pub enum Edit {
         run: Option<AlignmentRun>,
         frames: Vec<AlignedFrame>,
     },
+    /// Sets the frame the user chose to be the master (`Some`), or leaves the choice to the processing order (`None`).
+    SetChosenMaster(Option<FrameId>),
     /// Sets one of the stack's maps (`Some`), such as its defect mask, or removes it (`None`).
     SetProjectMap {
         name: MapName,
@@ -362,7 +364,8 @@ impl Edit {
             | Edit::RemoveOutput(_)
             | Edit::RemoveLayer { .. }
             | Edit::PopStroke { .. }
-            | Edit::SetLayerVisible { .. } => 0,
+            | Edit::SetLayerVisible { .. }
+            | Edit::SetChosenMaster(_) => 0,
             // A reference to a cache file: its path, size and hash.
             Edit::SetProjectMap { .. }
             | Edit::SetFrameMap { .. }
@@ -386,7 +389,7 @@ impl Edit {
             Edit::SetDevelop(_) => Aspects::DEVELOP,
             // The stack's maps (the defect mask) are what alignment reads its frames with; a frame's maps (its motion
             // map) are what alignment found in it.
-            Edit::SetAlignment { .. } | Edit::SetProjectMap { .. } | Edit::SetFrameMap { .. } => Aspects::ALIGN,
+            Edit::SetAlignment { .. } | Edit::SetChosenMaster(_) | Edit::SetProjectMap { .. } | Edit::SetFrameMap { .. } => Aspects::ALIGN,
             // A frame's warped image is cached, as its previews are.
             Edit::SetPreviews { .. } | Edit::SetAlignedImage { .. } => Aspects::PREVIEWS,
             // An output's layers go with it.
@@ -409,9 +412,10 @@ impl Edit {
     /// only the oldest matters.
     pub fn overwrites(&self, earlier: &Edit) -> bool {
         match (self, earlier) {
-            (Edit::SetName(_), Edit::SetName(_)) | (Edit::SetFrameOrder(_), Edit::SetFrameOrder(_)) | (Edit::SetDevelop(_), Edit::SetDevelop(_)) => {
-                true
-            }
+            (Edit::SetName(_), Edit::SetName(_))
+            | (Edit::SetFrameOrder(_), Edit::SetFrameOrder(_))
+            | (Edit::SetDevelop(_), Edit::SetDevelop(_))
+            | (Edit::SetChosenMaster(_), Edit::SetChosenMaster(_)) => true,
             (Edit::SetPreferences { group: a, .. }, Edit::SetPreferences { group: b, .. }) => a == b,
             (Edit::SetFrameEnabled { frame: a, .. }, Edit::SetFrameEnabled { frame: b, .. })
             | (Edit::SetFrameModified { frame: a, .. }, Edit::SetFrameModified { frame: b, .. })
@@ -466,6 +470,7 @@ impl Project {
             }
             Edit::SetDevelop(develop) => Ok(Edit::SetDevelop(std::mem::replace(&mut self.develop, develop))),
             Edit::SetAlignment { run, frames } => self.set_alignment(run, frames),
+            Edit::SetChosenMaster(frame) => self.set_chosen_master(frame),
             Edit::SetProjectMap { name, map } => {
                 let old = match map {
                     Some(map) => self.maps.insert(name.clone(), map),
@@ -563,6 +568,16 @@ impl Project {
     }
 
     /// Makes the edits in order, or none of them.
+    /// Chooses the master frame, which must be one of the project's, or leaves it to the processing order.
+    fn set_chosen_master(&mut self, frame: Option<FrameId>) -> Result<Edit, EditError> {
+        if let Some(id) = frame
+            && self.frame(id).is_none()
+        {
+            return Err(EditError::NoFrame(id));
+        }
+        Ok(Edit::SetChosenMaster(std::mem::replace(&mut self.chosen_master, frame)))
+    }
+
     fn apply_batch(&mut self, edits: Vec<Edit>) -> Result<Edit, EditError> {
         let mut inverses = Vec::with_capacity(edits.len());
         for edit in edits {
@@ -722,6 +737,7 @@ mod tests {
             Edit::SetProjectMap { name: MapName::new("defects").unwrap(), map: Some(cache_ref(1)) },
             Edit::SetPreviews { frame: b, preview: Some(cache_ref(2)), aligned_preview: Some(cache_ref(3)) },
             Edit::SetFrameMap { frame: a, name: MapName::new("motion").unwrap(), map: Some(cache_ref(6)) },
+            Edit::SetChosenMaster(Some(b)),
             Edit::AddOutput(Box::new(NewOutput {
                 name: "Average".into(),
                 method: "average".into(),
@@ -814,6 +830,7 @@ mod tests {
             (Edit::SetPreviews { frame: FrameId(99), preview: None, aligned_preview: None }, EditError::NoFrame(FrameId(99))),
             (Edit::SetFrameMap { frame: FrameId(99), name: MapName::new("motion").unwrap(), map: None }, EditError::NoFrame(FrameId(99))),
             (Edit::SetFrameModified { frame: FrameId(99), modified: None }, EditError::NoFrame(FrameId(99))),
+            (Edit::SetChosenMaster(Some(FrameId(99))), EditError::NoFrame(FrameId(99))),
             (
                 Edit::AddOutput(Box::new(NewOutput {
                     name: "Average".into(),

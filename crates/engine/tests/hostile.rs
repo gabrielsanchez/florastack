@@ -179,6 +179,9 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("align.set", json!({ "min_motion": 0 })),
         ("align.set", json!({ "min_motion": 1e9 })),
         ("align.set", json!({ "detect_defects": "yes" })),
+        ("align.setMaster", json!({ "frame": "first" })),
+        ("align.setMaster", json!({ "frame": -1 })),
+        ("align.setMaster", json!({ "frame": 1e30 })),
         ("stack.set", json!({ "average": { "radius": -1 } })),
         ("stack.set", json!({ "average": { "smoothing": 1e30 } })),
         ("stack.set", json!({ "average": { "power": 9 } })),
@@ -303,6 +306,7 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("adjust.removeMask", json!({ "output": fixture.output, "mask": 99 })),
         ("adjust.get", json!({ "output": 9999 })),
         ("project.moveFrames", json!({ "frames": [9999], "to": 0 })),
+        ("align.setMaster", json!({ "frame": 9999 })),
     ] {
         assert_eq!(engine.dispatch(name, params).unwrap_err().code(), "notFound", "{name}");
     }

@@ -15,7 +15,9 @@
 //!   the corpus's stacks are of still subjects, and the change of blur from frame to frame passed for movement on
 //!   nearly every frame of them before movement was counted only where some frame has detail in focus (2.3);
 //! - detected dust is dust: a mask of at most [`MAX_DEFECTS`] of the frame. The scene's own texture, which the
-//!   frames show at other sensor pixels as they move, must not pass for it.
+//!   frames show at other sensor pixels as they move, must not pass for it;
+//! - a frame off the stack's trend is one out of the order of focus (2.4): none of the stacks was knocked, and the
+//!   frame a camera shoots first, at the focus point, is the only one whose terms its neighbors don't predict.
 //!
 //! Aligning each frame directly against the master (`refine`) is no such check on stacks this deep: the frames
 //! focused four steps from the master land up to 0.9 thousandths of the frame (4 pixels of 5184) from where the
@@ -127,11 +129,11 @@ fn magnification(transform: &Affine) -> f64 {
     (m[0][0] * m[1][1] - m[0][1] * m[1][0]).abs().sqrt()
 }
 
-/// Checks that every frame of a run was aligned: a frame may be flagged for its focus, for what moved in it or for a
-/// repeating pattern, which aren't about its alignment.
+/// Checks that every frame of a run was aligned: a frame may be flagged for its focus, for what moved in it, for a
+/// repeating pattern or for its place off the stack's trend, which aren't about its alignment.
 fn check(name: &str, frames: &[Aligned]) {
     for frame in frames {
-        let trusted = frame.flags.iter().all(|f| ["out-of-focus", "moved", "repeating-pattern"].contains(&f.as_str()));
+        let trusted = frame.flags.iter().all(|f| ["out-of-focus", "moved", "repeating-pattern", "off-trend"].contains(&f.as_str()));
         assert!(frame.status != "rejected" && trusted, "{name}, frame {}: {} {:?}", frame.id, frame.status, frame.flags);
     }
 }
@@ -175,6 +177,11 @@ fn real_stacks_are_aligned_whole_evenly_and_the_same_by_two_chains() {
         let moved: Vec<u64> = all.iter().filter(|f| f.flags.iter().any(|g| g == "moved")).map(|f| f.id).collect();
         println!("  moved: {moved:?}");
         assert!(moved.len() * 2 <= all.len(), "{name}: {} of {} frames flagged as moved: {moved:?}", moved.len(), all.len());
+        // Off the trend: only a frame out of the order of focus.
+        let off: Vec<u64> = all.iter().filter(|f| f.flags.iter().any(|g| g == "off-trend")).map(|f| f.id).collect();
+        let out_of_order: Vec<u64> = info["run"]["outOfOrder"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+        println!("  off the trend: {off:?}; out of order: {out_of_order:?}");
+        assert!(off.iter().all(|f| out_of_order.contains(f)), "{name}: frames {off:?} off the trend, {out_of_order:?} out of order");
 
         // Every other frame, chained by itself.
         let odd: Vec<String> = ids.iter().skip(1).step_by(2).map(ToString::to_string).collect();

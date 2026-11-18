@@ -13,7 +13,8 @@
 //!   when that is off or the ends can't be told apart, and from the other end with [`AlignSettings::reverse_order`].
 //!   Its master is the first frame in that order that aligned: the narrow end's, by default.
 //! - [`order_stack`] does both and returns the alignment rebased onto that master ([`StackAlignment::rebased`]), and
-//!   [`align_ordered`] aligns frames in memory that way. The stack is aligned from its middle frame, which shares the
+//!   [`align_ordered`] aligns frames in memory that way. [`order_stack_on`] makes a frame the user chose the master
+//!   instead: the processing order stays, and so does the narrow end's frame, which narrow framing keeps. The stack is aligned from its middle frame, which shares the
 //!   most detail with the others, before it is rebased: rebasing composes transforms, it doesn't align again.
 
 use florastack_core::{Image, Monitor};
@@ -109,7 +110,26 @@ impl ProcessingOrder {
 /// Orders an aligned stack as `settings` say (see the module documentation): the processing order, and the
 /// alignment rebased onto its master.
 pub fn order_stack(alignment: &StackAlignment, settings: &AlignSettings) -> Result<(StackAlignment, ProcessingOrder), AlignError> {
-    let order = ProcessingOrder::new(alignment, settings);
+    order_stack_on(alignment, settings, None)
+}
+
+/// [`order_stack`], with frame `master` the master when it is given and was aligned (a rejected frame's transform is
+/// only its reference's, and it can't be the master): every transform, gain and white balance is then relative to it,
+/// so that the frames are matched to its brightness and color, and wide and common framing take its pixel grid. The
+/// processing order and the narrow end's frame are those `settings` give, so that narrow framing still keeps that
+/// frame's field of view and pixel grid. An error when `master` isn't one of the stack's frames.
+pub fn order_stack_on(
+    alignment: &StackAlignment,
+    settings: &AlignSettings,
+    master: Option<usize>,
+) -> Result<(StackAlignment, ProcessingOrder), AlignError> {
+    let mut order = ProcessingOrder::new(alignment, settings);
+    if let Some(m) = master {
+        let frame = alignment.frames.get(m).ok_or(AlignError::Master { master: m, frames: alignment.frames.len() })?;
+        if frame.status != Status::Rejected {
+            order.master = m;
+        }
+    }
     Ok((alignment.rebased(order.master)?, order))
 }
 

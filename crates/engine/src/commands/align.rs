@@ -1,6 +1,6 @@
 //! Alignment: the alignment settings, a preference group of the project (`align.get`, `align.set`, `align.reset`),
-//! aligning the stack (`align.run`, a job), sorting it by scale (`align.sortByScale`, a job), and what the project holds
-//! of its alignment (`align.info`).
+//! aligning the stack (`align.run`, a job), sorting it by scale (`align.sortByScale`, a job), choosing its master by
+//! hand (`align.setMaster`), and what the project holds of its alignment (`align.info`).
 //!
 //! Both jobs read and develop the enabled frames one at a time, inpaint the stack's defect mask in each (detecting one
 //! first when the `detect_defects` setting asks for it and the project has none: `defects.rs`), write each frame's
@@ -30,12 +30,12 @@ use std::path::PathBuf;
 
 use florastack_align::{
     AlignError, AlignSettings, DefectDetector, DefectMask, End, Flag, Framing, MIN_DETECTION_FRAMES, PreparedFrame, Preparer, Similarity,
-    StackAligner, StackAlignment, Status, detection_frames, frames_out_of_place, inpaint, measuring_settings, order_of_scales, order_stack,
+    StackAligner, StackAlignment, Status, detection_frames, frames_out_of_place, inpaint, measuring_settings, order_of_scales, order_stack_on,
     scale_order,
 };
 use florastack_codecs::ReadOptions;
 use florastack_core::{Image, Monitor};
-use florastack_project::{Aspects, CacheDir, CacheRef, Edit, Frame, FrameId, Group, Preferences, Table};
+use florastack_project::{Aspects, CacheDir, CacheRef, Edit, Frame, FrameId, Group, Preferences, Project, Table};
 use florastack_raw::{DevelopSettings, Quality, RawDevelop};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -44,13 +44,14 @@ use crate::error::CommandError;
 use crate::frames::FrameReader;
 use crate::jobs::{Commit, JobContext, JobPlan, Lane, commit};
 use crate::project::{
-    FrameMotion, MaskSource, MaskSummary, ProjectDataError, Stale, align_settings, alignment_edit, defect_mask_ref, defects_map, develop_record,
-    made_from, motion_map, preview_key, read_defect_mask, reorder_edit, stale_alignment, store_defect_mask, stored_alignment, write_aligned_preview,
-    write_frame_preview, write_motion_map,
+    FrameMotion, MaskSource, MaskSummary, ProjectDataError, Stale, align_settings, alignment_edit, chosen_master, defect_mask_ref, defects_map,
+    develop_record, made_from, motion_map, preview_key, read_defect_mask, reorder_edit, stale_alignment, store_defect_mask, stored_alignment,
+    write_aligned_preview, write_frame_preview, write_motion_map,
 };
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
 
+#[allow(clippy::too_many_lines)] // The commands' help texts and examples.
 pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::query(
@@ -123,6 +124,29 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             .undoable(),
             Lane::Heavy,
             sort_by_scale,
+        ),
+        CommandSpec::job(
+            Meta::new(
+                "align.setMaster",
+                "Make master",
+                "Makes a frame the master that the others are aligned to, or lets the stack choose it again.",
+            )
+            .help(
+                "The master is the frame whose brightness and color the others are matched to, and whose pixel \
+                     grid wide and common framing take; narrow framing keeps the field of view and pixel grid of the \
+                     frame at the stack's narrow end whichever frame is the master. By default the processing order \
+                     chooses it: the frame it starts from. A frame chosen here is the master of every alignment from \
+                     now on, while it is enabled and aligns; `null` lets the processing order choose again. When the \
+                     project holds an alignment that fits it, the alignment is rebased onto the new master, no frame \
+                     read, and the aligned previews are made again from the frames' previews; otherwise the choice \
+                     applies when the stack is next aligned. A disabled frame, or one alignment rejected, can't be \
+                     made the master. The choice and the rebased alignment are one undo step.",
+            )
+            .undoable()
+            .requires(Requires::Project)
+            .examples(&[r#"{ "frame": 3 }"#, r#"{ "frame": null }"#]),
+            Lane::Heavy,
+            set_master,
         ),
         CommandSpec::query(
             Meta::new(
@@ -234,6 +258,8 @@ pub(crate) struct Plan {
     previews: Vec<(FrameId, CacheRef)>,
     /// How RAW frames are demosaiced: the fast way for alignment and previews, the settings' way for a full stack.
     quality: Quality,
+    /// The frame the user chose to be the master, if any (`align.setMaster`).
+    chosen_master: Option<FrameId>,
 }
 
 impl Plan {
@@ -300,6 +326,7 @@ impl Plan {
             detected: None,
             previews: Vec::new(),
             quality: Quality::Preview,
+            chosen_master: project.chosen_master,
         })
     }
 
@@ -493,15 +520,19 @@ impl Plan {
     /// put in that order first when `sort`, the stack's development when this job resolved it, the defect mask when it
     /// detected one, and the frames' previews, aligned onto the canvas the settings frame the output with.
     fn commit(self, ids: Vec<FrameId>, alignment: &StackAlignment, sort: bool) -> Result<Commit<Aligned>, CommandError> {
-        let (rebased, order) = order_stack(alignment, &self.settings)?;
+        let chosen = self.chosen_master.and_then(|m| ids.iter().position(|&i| i == m));
+        let (rebased, order) = order_stack_on(alignment, &self.settings, chosen)?;
+        let master_chosen = chosen == Some(rebased.master);
         let id = |i: usize| ids.get(i).copied();
         let summary = Aligned {
             master: id(rebased.master).ok_or_else(|| self.internal())?,
+            master_chosen,
             narrow_end: order.narrow,
             start: order.start,
             order: order.frames.iter().filter_map(|&i| id(i)).collect(),
             out_of_focus: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OutOfFocus)),
             moved: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::Moved)),
+            off_trend: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OffTrend)),
             rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
             defects: self.detected.as_ref().map(|(_, s)| s.clone()),
             frame_order: None,
@@ -551,7 +582,7 @@ impl Plan {
                 }
                 summary.frame_order = Some(new);
             }
-            edits.push(alignment_edit(project, &ids, &rebased, &order, &settings, Some(made))?);
+            edits.push(alignment_edit(project, &ids, &rebased, &order, &settings, Some(made), master_chosen)?);
             if let Some(develop) = develop {
                 edits.push(Edit::SetDevelop(Some(develop)));
             }
@@ -584,6 +615,9 @@ fn flagged(alignment: &StackAlignment, ids: &[FrameId], f: impl Fn(&florastack_a
 struct Aligned {
     /// The frame the others are aligned to, which the output is framed on.
     master: FrameId,
+    /// Whether the master is the frame chosen with `align.setMaster`: false when none was, or that frame isn't
+    /// enabled or was rejected, and the processing order chose the master.
+    master_chosen: bool,
     /// The end of the stack with the narrower field of view, when the frames' scales tell.
     narrow_end: Option<End>,
     /// The end the stack is processed from.
@@ -594,6 +628,9 @@ struct Aligned {
     out_of_focus: Vec<FrameId>,
     /// The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where.
     moved: Vec<FrameId>,
+    /// The frames whose shift, scale or rotation is far from what their neighbors' predict, on a stack that otherwise
+    /// changes smoothly: out of the order of focus, knocked, or aligned wrong. Flagged for you to look at.
+    off_trend: Vec<FrameId>,
     /// The frames whose alignment couldn't be trusted, and keep their neighbor's (`align.info` says why).
     rejected: Vec<FrameId>,
     /// The defect mask this run detected and inpainted, when the settings asked for one (`detect_defects`) and the
@@ -633,7 +670,17 @@ fn stages(plan: &Plan, passes: &'static [(&'static str, f32)]) -> Vec<(&'static 
 /// (`Stale::Order`). The aligned previews are made again from the frames' previews, on the canvas the new master
 /// gives.
 fn reorder(session: &Session) -> Result<Option<JobPlan<Aligned>>, CommandError> {
-    let project = session.project()?;
+    reorder_job(session, session.project()?, Vec::new(), |aligned| aligned)
+}
+
+/// [`reorder`] for `project`, the open project or what it would be once `first` (edits made before, in the same undo
+/// step) is made; `outcome` makes the job's result from what ordering did.
+fn reorder_job<T: Serialize + Send + 'static>(
+    session: &Session,
+    project: &Project,
+    first: Vec<Edit>,
+    outcome: impl FnOnce(Aligned) -> T + Send + 'static,
+) -> Result<Option<JobPlan<T>>, CommandError> {
     let Some(stored) = stored_alignment(project)? else { return Ok(None) };
     let enabled: Vec<FrameId> = project.frames.iter().filter(|f| f.enabled).map(Frame::id).collect();
     if stale_alignment(project, &stored)? != [Stale::Order] || stored.stack_order().as_ref() != Some(&enabled) {
@@ -645,11 +692,13 @@ fn reorder(session: &Session) -> Result<Option<JobPlan<Aligned>>, CommandError> 
     let id = |i: usize| ids.get(i).copied();
     let summary = Aligned {
         master: id(rebased.master).ok_or_else(|| CommandError::Internal { command: "align.run".to_owned() })?,
+        master_chosen: chosen_master(project, &ids) == Some(rebased.master),
         narrow_end: order.narrow,
         start: order.start,
         order: order.frames.iter().filter_map(|&i| id(i)).collect(),
         out_of_focus: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OutOfFocus)),
         moved: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::Moved)),
+        off_trend: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OffTrend)),
         rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
         defects: None,
         frame_order: None,
@@ -663,7 +712,8 @@ fn reorder(session: &Session) -> Result<Option<JobPlan<Aligned>>, CommandError> 
     let cache = session.cache_dir()?;
     let edit = reordered.edit;
     let job = JobPlan::new(move |ctx| {
-        let mut edits = vec![edit];
+        let mut edits = first;
+        edits.push(edit);
         for (frame, preview) in previews {
             ctx.checkpoint()?;
             let Some(preview) = preview else { continue };
@@ -677,10 +727,70 @@ fn reorder(session: &Session) -> Result<Option<JobPlan<Aligned>>, CommandError> 
         }
         Ok(commit(move |session: &mut Session| {
             session.apply(Edit::Batch(edits))?;
-            Ok(summary)
+            Ok(outcome(summary))
         }))
     });
     Ok(Some(job.stages(&[("Ordering the stack", 1.0)]).locks(locks())))
+}
+
+/// Which frame to make the master.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MasterParams {
+    /// The frame to make the master, or `null` to let the processing order choose it again (the frame at the stack's
+    /// narrow end, by default).
+    frame: Option<FrameId>,
+}
+
+impl Params for MasterParams {}
+
+/// What choosing the master did.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct MasterSet {
+    /// The frame chosen to be the master, if any.
+    chosen_master: Option<FrameId>,
+    /// The master of the project's alignment now, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    master: Option<FrameId>,
+    /// Whether the stored alignment was rebased onto the new master, no frame read. False when the project has no
+    /// alignment that fits it otherwise: the choice then applies when the stack is next aligned.
+    reordered: bool,
+}
+
+fn set_master(session: &Session, p: MasterParams) -> Result<JobPlan<MasterSet>, CommandError> {
+    let project = session.project()?;
+    if let Some(id) = p.frame {
+        let frame = project.frame(id).ok_or_else(|| CommandError::NotFound { what: id.to_string() })?;
+        if !frame.enabled {
+            return Err(session.unavailable(format!("{id} isn't enabled: enable it with `project.setFramesEnabled` before making it the master")));
+        }
+        if crate::project::frame_report(frame).is_some_and(|r| r.status == Status::Rejected) {
+            return Err(session.unavailable(format!(
+                "{id} was rejected by alignment, and has only its neighbor's transform: it can't be the master until it aligns"
+            )));
+        }
+    }
+    let first = if project.chosen_master == p.frame { Vec::new() } else { vec![Edit::SetChosenMaster(p.frame)] };
+    let mut next = project.clone();
+    next.chosen_master = p.frame;
+    let chosen = p.frame;
+    if let Some(job) =
+        reorder_job(session, &next, first.clone(), move |aligned| MasterSet { chosen_master: chosen, master: Some(aligned.master), reordered: true })?
+    {
+        return Ok(job);
+    }
+    let master = project.alignment.as_ref().map(|a| a.master);
+    Ok(JobPlan::new(move |_| {
+        Ok(commit(move |session: &mut Session| {
+            if !first.is_empty() {
+                session.apply(Edit::Batch(first))?;
+            }
+            Ok(MasterSet { chosen_master: chosen, master, reordered: false })
+        }))
+    })
+    .stages(&[("Choosing the master", 1.0)])
+    .locks(locks()))
 }
 
 fn run(session: &Session, _: NoParams) -> Result<JobPlan<Aligned>, CommandError> {
@@ -810,6 +920,9 @@ struct Info {
     aligned: bool,
     /// The framing the settings choose.
     framing: Framing,
+    /// The frame chosen to be the master with `align.setMaster`, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chosen_master: Option<FrameId>,
     /// The run, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<RunInfo>,
@@ -821,6 +934,8 @@ struct Info {
 struct RunInfo {
     /// The frame the others are aligned to.
     master: FrameId,
+    /// Whether it is the frame chosen with `align.setMaster`, rather than the one the processing order gives.
+    master_chosen: bool,
     /// The frames' size, in pixels, which the transforms are in.
     width: usize,
     height: usize,
@@ -902,7 +1017,8 @@ struct AlignedFrameInfo {
 fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
     let project = session.project()?;
     let framing = align_settings(project)?.framing;
-    let Some(stored) = stored_alignment(project)? else { return Ok(Info { aligned: false, framing, run: None }) };
+    let chosen_master = project.chosen_master;
+    let Some(stored) = stored_alignment(project)? else { return Ok(Info { aligned: false, framing, chosen_master, run: None }) };
     let (w, h) = (stored.report.width, stored.report.height);
     let framings = Framing::ALL
         .into_iter()
@@ -936,6 +1052,7 @@ fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
         .collect();
     let run = RunInfo {
         master: stored.master,
+        master_chosen: stored.report.chosen_master,
         width: w,
         height: h,
         narrow_end: stored.report.narrow_end,
@@ -947,5 +1064,5 @@ fn info(session: &Session, _: NoParams) -> Result<Info, CommandError> {
         framings,
         frames,
     };
-    Ok(Info { aligned: true, framing, run: Some(run) })
+    Ok(Info { aligned: true, framing, chosen_master, run: Some(run) })
 }

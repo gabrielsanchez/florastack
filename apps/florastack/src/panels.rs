@@ -10,6 +10,7 @@ use crate::actions::Action;
 use crate::app::{Banner, Dialog, FILM_SIDE, FloraStackApp, Selection, THUMBNAIL_SIDE};
 use crate::i18n::{tr, tr_args};
 use crate::prefs::{Method, Tab};
+use crate::shell::FrameRow;
 
 /// The height of a frame list row's thumbnail, in points.
 const ROW_THUMBNAIL: f32 = 40.0;
@@ -235,6 +236,42 @@ fn status(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     });
 }
 
+/// A frame's context menu: make it the master (`align.setMaster`), or, when it is the master chosen, let the stack
+/// choose it again.
+fn master_menu(app: &mut FloraStackApp, ui: &mut egui::Ui, frame: &FrameRow, chosen: bool) {
+    if chosen {
+        if ui.button(tr("frame-master-automatic")).on_hover_text(tr("tip-master-automatic")).clicked() {
+            app.shell.run("align.setMaster", json!({ "frame": null }));
+            ui.close();
+        }
+    } else if ui.add_enabled(frame.enabled, egui::Button::new(tr("frame-make-master"))).on_hover_text(tr("tip-make-master")).clicked() {
+        app.shell.run("align.setMaster", json!({ "frame": frame.id }));
+        ui.close();
+    }
+}
+
+/// A frame's name, which selects it and whose context menu makes it the master, with what alignment found about it.
+fn frame_details(app: &mut FloraStackApp, ui: &mut egui::Ui, frame: &FrameRow, selected: bool, min_score: f64) {
+    let name = if frame.enabled { RichText::new(&frame.name) } else { RichText::new(&frame.name).weak().strikethrough() };
+    let label = ui.selectable_label(selected, name).on_hover_text(frame.file.display().to_string());
+    if label.clicked() {
+        app.select(Selection::Frame(frame.id));
+    }
+    let chosen = app.shell.alignment["chosenMaster"].as_u64() == Some(frame.id);
+    label.context_menu(|ui| master_menu(app, ui, frame, chosen));
+    if let Some(alignment) = &frame.alignment {
+        quality(ui, alignment, min_score, chosen);
+    }
+    if !frame.flags.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for flag in &frame.flags {
+                let (text, help) = flag_text(flag);
+                ui.colored_label(ui.visuals().warn_fg_color, RichText::new(text).small()).on_hover_text(help);
+            }
+        });
+    }
+}
+
 /// The frame list: thumbnails, names, each frame's alignment quality and flags, the enabled checkboxes, reordering by
 /// dragging a frame's name, and the filmstrip: dragging up and down over the thumbnails plays the stack frame by
 /// frame, Play plays it on its own.
@@ -291,23 +328,7 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                     scrubbing = true;
                 }
                 let info = ui.dnd_drag_source(egui::Id::unique(("frame-row", frame.id)), i, |ui| {
-                    ui.vertical(|ui| {
-                        let name = if frame.enabled { RichText::new(&frame.name) } else { RichText::new(&frame.name).weak().strikethrough() };
-                        if ui.selectable_label(selected, name).on_hover_text(frame.file.display().to_string()).clicked() {
-                            app.select(Selection::Frame(frame.id));
-                        }
-                        if let Some(alignment) = &frame.alignment {
-                            quality(ui, alignment, min_score);
-                        }
-                        if !frame.flags.is_empty() {
-                            ui.horizontal_wrapped(|ui| {
-                                for flag in &frame.flags {
-                                    let (text, help) = flag_text(flag);
-                                    ui.colored_label(ui.visuals().warn_fg_color, RichText::new(text).small()).on_hover_text(help);
-                                }
-                            });
-                        }
-                    });
+                    ui.vertical(|ui| frame_details(app, ui, frame, selected, min_score));
                 });
                 info.response
             });
@@ -345,8 +366,8 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
 }
 
 /// A frame's alignment quality, under its name: the master, rejected, or how well it matched its neighbor, with its
-/// terms in the tooltip.
-fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64) {
+/// terms in the tooltip; for the master, whether it was `chosen` by hand.
+fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64, chosen: bool) {
     let score = alignment["score"].as_f64().unwrap_or(0.0);
     let (text, warn) = match alignment["status"].as_str() {
         Some("master") => (tr("quality-master"), false),
@@ -371,6 +392,13 @@ fn quality(ui: &mut egui::Ui, alignment: &Value, min_score: f64) {
         Some(&[red, green, blue]) => {
             let color = |g: f64| format!("{g:.3}").into();
             format!("{tip}\n{}", tr_args("quality-tip-white-balance", &[("red", color(red)), ("green", color(green)), ("blue", color(blue))]))
+        }
+        _ => tip,
+    };
+    let tip = match alignment["status"].as_str() {
+        Some("master") => {
+            let who = if chosen { tr("frame-master-chosen-help") } else { tr("frame-master-help") };
+            format!("{who}\n{tip}")
         }
         _ => tip,
     };
@@ -423,6 +451,7 @@ fn flag_text(flag: &str) -> (String, String) {
         "not-refined" => ("flag-not-refined", "flag-not-refined-help"),
         "out-of-focus" => ("flag-out-of-focus", "flag-out-of-focus-help"),
         "moved" => ("flag-moved", "flag-moved-help"),
+        "off-trend" => ("flag-off-trend", "flag-off-trend-help"),
         other => return (other.to_owned(), String::new()),
     };
     (tr(label), tr(help))

@@ -413,6 +413,11 @@ pub struct Project {
     pub develop: Option<Develop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment: Option<AlignmentRun>,
+    /// The frame the user chose to be the master, which every frame's alignment is made relative to; `None` lets the
+    /// processing order choose it (the frame at the stack's narrow end, by default). A frame that is removed, disabled
+    /// or rejected by alignment keeps the choice, which applies again once the frame does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_master: Option<FrameId>,
     /// Every processing preference, by group: what presets set.
     #[serde(default)]
     pub preferences: Preferences,
@@ -462,6 +467,7 @@ impl Project {
             frames: Vec::new(),
             develop: None,
             alignment: None,
+            chosen_master: None,
             preferences: Preferences::default(),
             maps: Maps::new(),
             outputs: Vec::new(),

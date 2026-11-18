@@ -24,7 +24,7 @@ use std::path::Path;
 
 use florastack_align::{
     AlignError, AlignSettings, Canvas, DefectMask, End, Flag, FrameAlignment, Framing, MotionRegion, ProcessingOrder, Similarity, StackAlignment,
-    Status, aligned_thumbnail, order_stack, out_of_place, thumbnail,
+    Status, aligned_thumbnail, order_stack_on, out_of_place, thumbnail,
 };
 use florastack_codecs::{
     BitDepth, ChromaSubsampling, CodecError, ExifSummary, OrientationPolicy, OutputFormat, OutputMetadata, OutputProfile, OutputSpec, ReadOptions,
@@ -276,6 +276,10 @@ pub struct RunReport {
     /// in a run recorded before project format 8, which can't tell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub made_from: Option<MadeFrom>,
+    /// Whether the master is the frame the user chose (`Project::chosen_master`), rather than the one the processing
+    /// order gives; false in a run recorded before project format 9.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chosen_master: bool,
 }
 
 /// What an alignment run read its frames with, beyond its own settings: what changes the pixels it aligned.
@@ -317,8 +321,8 @@ pub enum Stale {
     Frames,
     /// The alignment settings changed, beyond the framing and the processing order.
     Settings,
-    /// Only the processing order's settings changed (`automatic_order`, `reverse_order`): `align.run` orders the
-    /// run again without reading a frame.
+    /// Only the processing order's settings (`automatic_order`, `reverse_order`) or the master chosen by hand
+    /// (`align.setMaster`) changed: `align.run` orders the run again without reading a frame.
     Order,
     /// The develop settings changed.
     Develop,
@@ -357,7 +361,7 @@ pub fn stale_alignment(project: &Project, stored: &StoredAlignment) -> Result<Ve
     let all = [FRAMING_KEY, ORDER_KEYS[0], ORDER_KEYS[1]];
     if settings_without(&now, &all)? != settings_without(&stored.settings, &all)? {
         stale.push(Stale::Settings);
-    } else if settings_without(&now, &[FRAMING_KEY])? != settings_without(&stored.settings, &[FRAMING_KEY])? {
+    } else if settings_without(&now, &[FRAMING_KEY])? != settings_without(&stored.settings, &[FRAMING_KEY])? || master_changed(project, stored) {
         stale.push(Stale::Order);
     }
     if let Some(from) = &stored.report.made_from {
@@ -372,9 +376,33 @@ pub fn stale_alignment(project: &Project, stored: &StoredAlignment) -> Result<Ve
     Ok(stale)
 }
 
+/// Whether the master of `stored`, the run `project` holds, isn't the one the project asks for now: the frame the user
+/// chose, when the run aligned it, or else the one the processing order gives, which the run has unless it was
+/// recorded with a chosen one.
+fn master_changed(project: &Project, stored: &StoredAlignment) -> bool {
+    match chosen_in_run(project, stored) {
+        Some(chosen) => chosen != stored.master,
+        None => stored.report.chosen_master,
+    }
+}
+
+/// The frame the user chose to be the master, when `stored` aligned it: a frame the run left out, or rejected (its
+/// transform is only its reference's), can't be.
+fn chosen_in_run(project: &Project, stored: &StoredAlignment) -> Option<FrameId> {
+    let chosen = project.chosen_master?;
+    let aligned = stored.frames.iter().any(|f| f.frame == chosen && f.report.as_ref().is_some_and(|r| r.status != Status::Rejected));
+    aligned.then_some(chosen)
+}
+
+/// Where the frame the user chose to be the master is among `ids`, a run's frames, if it is one of them.
+pub fn chosen_master(project: &Project, ids: &[FrameId]) -> Option<usize> {
+    project.chosen_master.and_then(|m| ids.iter().position(|&i| i == m))
+}
+
 /// The edit that records an alignment run: `alignment`, of the frames `ids` (in the order it aligned them), ordered as
-/// `order` says, with the settings it ran with and what it read the frames with (`made_from`). Every other frame of `project` loses its alignment and report, so that
-/// the frames with an alignment are the run's.
+/// `order` says, with the settings it ran with, what it read the frames with (`made_from`) and whether its master is
+/// the one the user chose (`chosen`). Every other frame of `project` loses its alignment and report, so that the frames
+/// with an alignment are the run's.
 pub fn alignment_edit(
     project: &Project,
     ids: &[FrameId],
@@ -382,6 +410,7 @@ pub fn alignment_edit(
     order: &ProcessingOrder,
     settings: &AlignSettings,
     made_from: Option<MadeFrom>,
+    chosen: bool,
 ) -> Result<Edit, ProjectDataError> {
     let id = |i: usize| ids.get(i).copied().ok_or(AlignError::Master { master: i, frames: ids.len() });
     let report = RunReport {
@@ -392,6 +421,7 @@ pub fn alignment_edit(
         order: order.frames.iter().map(|&i| id(i)).collect::<Result<_, _>>()?,
         narrow_frame: order.narrow_frame.map(id).transpose()?,
         made_from,
+        chosen_master: chosen,
     };
     let run = AlignmentRun {
         master: id(alignment.master)?,
@@ -526,13 +556,16 @@ pub struct Reordered {
 }
 
 /// The edit that orders `stored`, the run `project` holds, as `settings` say now, without aligning again: the
-/// processing order and its master chosen again from the frames' scales (`florastack_align::order_stack`), every
-/// transform, gain and white balance rebased onto that master, and the rest of each frame's report, with what moved
-/// in it, kept. `None` when the project doesn't hold the whole run ([`StoredAlignment::alignment`]).
+/// processing order and its master chosen again from the frames' scales, or the master the user chose
+/// (`florastack_align::order_stack_on`), every transform, gain and white balance rebased onto that master, and the
+/// rest of each frame's report, with what moved in it, kept. `None` when the project doesn't hold the whole run
+/// ([`StoredAlignment::alignment`]).
 pub fn reorder_edit(project: &Project, stored: &StoredAlignment, settings: &AlignSettings) -> Result<Option<Reordered>, ProjectDataError> {
     let Some((ids, alignment)) = stored.alignment() else { return Ok(None) };
-    let (alignment, order) = order_stack(&alignment, settings)?;
-    let mut edit = alignment_edit(project, &ids, &alignment, &order, settings, stored.report.made_from.clone())?;
+    let chosen = chosen_master(project, &ids);
+    let (alignment, order) = order_stack_on(&alignment, settings, chosen)?;
+    let made = stored.report.made_from.clone();
+    let mut edit = alignment_edit(project, &ids, &alignment, &order, settings, made, chosen == Some(alignment.master))?;
     if let Edit::SetAlignment { frames, .. } = &mut edit {
         for frame in frames {
             let motion = stored.frames.iter().find(|f| f.frame == frame.frame).and_then(|f| f.report.as_ref()).and_then(|r| r.motion.as_ref());

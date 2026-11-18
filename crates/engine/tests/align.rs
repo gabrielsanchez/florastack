@@ -1,7 +1,8 @@
 //! The alignment commands on synthetic stacks written as frame files: `align.run` orders the stack from its narrow
 //! end, flags the frames focused off the scene, and records the run in the project, as one undo step that survives a
 //! save; `align.info` frames the stored alignment three ways; `align.sortByScale` restores a shuffled stack and is
-//! undone whole; and stacks that can't be aligned change nothing.
+//! undone whole; `align.setMaster` makes a frame the master, rebasing the stored alignment; and stacks that can't be
+//! aligned change nothing.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -347,4 +348,70 @@ fn an_alignment_that_no_longer_fits_the_project_says_why_and_a_new_order_reads_n
     run(&mut engine, "edit.redo", "{}");
     let job = common::job_of(engine.dispatch_json("align.run", "{}").unwrap());
     assert!(engine.wait(job).is_err(), "it reads the frames");
+}
+
+#[test]
+fn a_master_chosen_by_hand_is_kept_by_every_alignment_and_a_stored_one_is_rebased_onto_it() {
+    let dir = TempDir::new("align-master");
+    // Each frame 1% larger than the one before: the last is the narrow end, whose frame the processing order makes the
+    // master.
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(7, 0.01, None, 5));
+    let (mut engine, ids) = project_with(dir.path(), &files);
+    let info = |engine: &mut Engine| run(engine, "align.info", "{}");
+
+    // Chosen before the stack is aligned, it applies when it is.
+    let set = run(&mut engine, "align.setMaster", &format!(r#"{{ "frame": {} }}"#, ids[2]));
+    assert_eq!((set["chosenMaster"].as_u64(), set.get("master"), &set["reordered"]), (Some(ids[2]), None, &json!(false)), "{set}");
+    assert_eq!(info(&mut engine)["chosenMaster"].as_u64(), Some(ids[2]));
+    let aligned = run(&mut engine, "align.run", "{}");
+    assert_eq!((aligned["master"].as_u64(), &aligned["masterChosen"], &aligned["start"]), (Some(ids[2]), &json!(true), &json!("last")), "{aligned}");
+    let stored = info(&mut engine);
+    assert_eq!((&stored["run"]["masterChosen"], &stored["run"]["stale"]), (&json!(true), &json!([])));
+    let frame = |info: &Value, id: u64| info["run"]["frames"].as_array().unwrap().iter().find(|f| f["frame"].as_u64() == Some(id)).unwrap().clone();
+    assert_eq!((&frame(&stored, ids[2])["status"], &frame(&stored, ids[2])["gain"]), (&json!("master"), &json!(1.0)));
+    // Narrow framing still keeps the narrow end's field of view and pixel grid.
+    let narrow = stored["run"]["framings"].as_array().unwrap().iter().find(|f| f["framing"] == "narrow").unwrap().clone();
+    assert_eq!((&narrow["width"], &narrow["height"]), (&json!(160), &json!(120)));
+    let filmstrip = run(&mut engine, "filmstrip.list", "{}");
+    let masters: Vec<u64> =
+        filmstrip["frames"].as_array().unwrap().iter().filter(|f| f["master"] == true).map(|f| f["frame"].as_u64().unwrap()).collect();
+    assert_eq!(masters, [ids[2]]);
+
+    // A disabled frame, or one that isn't in the project, can't be made the master; nothing changes.
+    let before = state(&engine);
+    run(&mut engine, "project.setFramesEnabled", &format!(r#"{{ "frames": [{}], "enabled": false }}"#, ids[1]));
+    let refused = engine.dispatch("align.setMaster", json!({ "frame": ids[1] })).unwrap_err();
+    assert_eq!(refused.code(), "unavailable", "{refused}");
+    assert_eq!(engine.dispatch("align.setMaster", json!({ "frame": 9999 })).unwrap_err().code(), "notFound");
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(state(&engine), before);
+
+    // Another frame chosen: the stored run is rebased onto it, with the frames' files gone, in one undo step.
+    for file in &files {
+        std::fs::remove_file(file).unwrap();
+    }
+    let events = engine.subscribe();
+    let set = run(&mut engine, "align.setMaster", &format!(r#"{{ "frame": {} }}"#, ids[4]));
+    assert_eq!(stages(&events), ["Ordering the stack"]);
+    assert_eq!((set["master"].as_u64(), &set["reordered"]), (Some(ids[4]), &json!(true)), "{set}");
+    let rebased = info(&mut engine);
+    assert_eq!((rebased["run"]["master"].as_u64(), &rebased["run"]["stale"]), (Some(ids[4]), &json!([])));
+    assert_eq!(&frame(&rebased, ids[4])["transform"], &json!([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]));
+    // Each frame's scale relative to the new master is its old one divided by the master's.
+    let scale = |info: &Value, id: u64| frame(info, id)["scale"].as_f64().unwrap();
+    for &id in &ids {
+        let expected = scale(&stored, id) / scale(&stored, ids[4]);
+        assert!((scale(&rebased, id) - expected).abs() < 1e-9, "frame {id}: {} for {expected}", scale(&rebased, id));
+    }
+    assert_eq!(run(&mut engine, "filmstrip.list", "{}")["stale"], 0, "the aligned previews are on the new master's canvas");
+
+    // Letting the processing order choose again: the narrow end's frame.
+    let automatic = run(&mut engine, "align.setMaster", r#"{ "frame": null }"#);
+    assert_eq!((automatic["master"].as_u64(), &automatic["chosenMaster"]), (Some(ids[6]), &json!(null)), "{automatic}");
+    assert_eq!(info(&mut engine)["run"]["masterChosen"], false);
+    let unchanged = state(&engine);
+    run(&mut engine, "align.setMaster", r#"{ "frame": null }"#);
+    assert_eq!(state(&engine), unchanged, "the same choice again changes nothing");
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(info(&mut engine)["run"]["master"].as_u64(), Some(ids[4]));
 }

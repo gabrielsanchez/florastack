@@ -371,16 +371,19 @@ fn the_shapes_stored_in_project_files_are_pinned() {
         order: vec![id(1), id(3)],
         narrow_frame: Some(id(3)),
         made_from: None,
+        chosen_master: false,
     };
     let stored = json!({ "width": 6000, "height": 4000, "narrow_end": "last", "start": "first", "order": [1, 3], "narrow_frame": 3 });
     assert_eq!(to_data("alignment run", &run).unwrap(), stored);
     assert_eq!(serde_json::from_value::<RunReport>(stored).unwrap(), run, "a run recorded before format 8");
     run.made_from = Some(MadeFrom { develop: "ab".repeat(32), defects: None });
     assert_eq!(to_data("alignment run", &run).unwrap()["made_from"], json!({ "develop": "ab".repeat(32), "defects": null }));
+    run.chosen_master = true;
+    assert_eq!(to_data("alignment run", &run).unwrap()["chosen_master"], json!(true));
     assert_eq!(serde_json::to_value(Framing::ALL).unwrap(), json!(["narrow", "wide", "common"]));
     assert_eq!(
-        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined, Flag::Moved]).unwrap(),
-        json!(["low-score", "repeating-pattern", "no-match", "not-refined", "moved"])
+        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined, Flag::Moved, Flag::OffTrend]).unwrap(),
+        json!(["low-score", "repeating-pattern", "no-match", "not-refined", "moved", "off-trend"])
     );
     assert_eq!(serde_json::to_value([Status::Master, Status::Aligned]).unwrap(), json!(["master", "aligned"]));
     assert_eq!(

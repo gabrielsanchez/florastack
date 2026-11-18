@@ -150,6 +150,12 @@ fn every_command_dispatches_from_json() {
     assert_eq!(info["run"]["frames"].as_array().unwrap().len(), 6);
     let sorted = calls.run("align.sortByScale", "{}");
     assert_eq!(sorted["frameOrder"].as_array().unwrap().len(), 6, "{sorted}");
+    // Another frame made the master: the stored alignment is rebased onto it.
+    let master = sorted["master"].as_u64().unwrap();
+    let other = sorted["order"].as_array().unwrap().iter().filter_map(serde_json::Value::as_u64).find(|&f| f != master).unwrap();
+    let set = calls.run("align.setMaster", &format!(r#"{{ "frame": {other} }}"#));
+    assert_eq!((set["master"].as_u64(), &set["reordered"]), (Some(other), &json!(true)), "{set}");
+    assert_eq!(calls.run("align.info", "{}")["run"]["masterChosen"], true);
     // Aligning made the filmstrip's previews, as shot and aligned.
     let filmstrip = calls.run("filmstrip.list", "{}");
     assert_eq!((filmstrip["stale"].as_u64(), filmstrip["frames"].as_array().unwrap().len()), (Some(0), 6), "{filmstrip}");

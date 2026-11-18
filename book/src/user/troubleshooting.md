@@ -124,6 +124,12 @@ A file reported as "damaged or not a valid" file is truncated or corrupt: copy i
 
 - **Frames flagged moved.** Part of the subject moved between frames: an insect's leg, a leaf in the wind. Play the
   [filmstrip](stack-tab.md#filmstrip) to see it; untick the frames, or retouch the place from one frame.
+- **A frame flagged off trend.** On a stack that otherwise changes smoothly from frame to frame, as on a rail or with
+  steady focus steps, this frame's shift, scale or rotation is far from what its neighbors' predict. Most often it is
+  out of the order of focus, as the first frame of some cameras' focus stacking modes is: **Sort by scale** puts it in
+  place. Otherwise the camera was knocked, or its alignment slipped: play the [filmstrip](stack-tab.md#filmstrip) over
+  it in **Aligned** mode, and untick it if it doesn't line up. Stacks shot by hand, whose every frame wanders, aren't
+  flagged.
 - **Low match scores** on a stack with little detail (a smooth surface, a microscope slide): lower **Lowest match
   score**, under **Advanced**.
 - **The GPU isn't used.** `compute.info`, or the status line's `CPU`, says why: no adapter, or one that failed the

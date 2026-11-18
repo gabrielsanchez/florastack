@@ -54,6 +54,9 @@
 //! which a project moved with its frames finds them again.
 //! Version 8 adds to the alignment run's report an optional `made_from`: what the run read its frames with (the
 //! develop settings and the defect mask, hashed), by which a run that no longer fits the project is told.
+//! Version 9 adds the project's optional `chosen_master`, the frame the user chose to be the master, to the
+//! alignment run's report an optional `chosen_master`, whether its master is that frame, and the `off-trend` flag to
+//! a frame's report.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -66,7 +69,7 @@ use crate::time::Timestamp;
 /// The `format` of every project file.
 pub const FORMAT: &str = "florastack-project";
 /// The format version this build writes, and the newest it reads.
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 /// The project file's name in the project folder.
 pub const FILE_NAME: &str = "project.json";
 /// The largest project file. Bulk data (pixels, focus statistics) lives in the cache; a project file this large is
@@ -77,7 +80,7 @@ pub const MAX_FILE_BYTES: u64 = 64 << 20;
 type Migration = fn(Map<String, Value>) -> Result<Map<String, Value>, MigrationError>;
 
 /// The migrations, from version `i` to `i + 1`.
-pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8];
+pub const MIGRATIONS: [Migration; VERSION as usize] = [v0::to_v1, v1::to_v2, v2::to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9];
 
 /// Version 4 adds optional annotation layers to outputs. Old outputs have no annotations.
 #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
@@ -113,6 +116,14 @@ fn v6_to_v7(mut doc: Map<String, Value>) -> Result<Map<String, Value>, Migration
 #[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
 fn v7_to_v8(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
     doc.insert("version".into(), Value::from(8));
+    Ok(doc)
+}
+
+/// Version 9 adds an optional `chosen_master` to the project and to the alignment run's report. Old projects have
+/// none: the processing order chooses the master, as it did.
+#[allow(clippy::unnecessary_wraps)] // Every migration has the same signature.
+fn v8_to_v9(mut doc: Map<String, Value>) -> Result<Map<String, Value>, MigrationError> {
+    doc.insert("version".into(), Value::from(9));
     Ok(doc)
 }
 

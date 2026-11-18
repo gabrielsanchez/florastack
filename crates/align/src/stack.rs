@@ -24,8 +24,9 @@
 //! nothing of the frames before it: a caller that reads its frames from files can prepare the next one
 //! ([`StackAligner::preparer`], [`Preparer::prepare`]) while this one is aligned ([`StackAligner::add_prepared`]),
 //! which then holds a fourth. Once every frame is in, [`StackAligner::finish`] compares the
-//! focus maps, through the frames' transforms, flags the frames that are out of focus ([`Flag::OutOfFocus`]), and
-//! flags those where the subject moved where they are in focus ([`Flag::Moved`]).
+//! focus maps, through the frames' transforms, flags the frames that are out of focus ([`Flag::OutOfFocus`]), flags
+//! those where the subject moved where they are in focus ([`Flag::Moved`]), and those off the stack's trend
+//! ([`Flag::OffTrend`], `trend.rs`).
 
 use florastack_core::{Affine, Image, Monitor};
 use schemars::JsonSchema;
@@ -42,6 +43,7 @@ use crate::model::{Geometry, Params, Similarity};
 use crate::motion::{self, Motion};
 use crate::prepare::Prepared;
 use crate::settings::{AlignSettings, Term};
+use crate::trend::off_trend;
 use crate::white_balance::{self, Colors};
 
 /// A second correlation peak at least this high, relative to the first, flags a repeating pattern.
@@ -80,6 +82,10 @@ pub enum Flag {
     /// Part of the subject moved against the frame's reference, once aligned, by at least
     /// [`AlignSettings::min_motion`] (`motion.rs`): its motion map shows where. Only flagged, never rejected.
     Moved,
+    /// The frame's shift, scale or rotation is far from what its neighbors' predict, on a stack whose frames otherwise
+    /// follow a smooth trend, as on a rail (`trend.rs`): the tripod was knocked, or the alignment slipped. Only flagged,
+    /// never rejected.
+    OffTrend,
 }
 
 impl Flag {
@@ -407,6 +413,13 @@ impl StackAligner {
                 frame.flags.push(Flag::Moved);
             }
             frame.motion = Some(motion);
+        }
+        // A rejected frame's transform is only its reference's: it has no place on the trend.
+        let similarities: Vec<Option<Similarity>> = frames.iter().map(|f| (f.status != Status::Rejected).then_some(f.similarity)).collect();
+        for i in off_trend(&similarities, width, height, settings.resolution as usize) {
+            if let Some(frame) = frames.get_mut(i) {
+                frame.flags.push(Flag::OffTrend);
+            }
         }
         Ok(StackAlignment { master, frames, width, height })
     }
