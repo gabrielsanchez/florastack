@@ -718,6 +718,7 @@ Result:
 | `masterChosen` | boolean | Whether the master is the frame chosen with `align.setMaster`: false when none was, or that frame isn't enabled or was rejected, and the processing order chose the master. |
 | `moved` | array of integer | The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where. |
 | `narrowEnd` | `"first"` \| `"last"` \| `null` | The end of the stack with the narrower field of view, when the frames' scales tell. |
+| `offTrend` | array of integer | The frames whose shift, scale or rotation is far from what their neighbors' predict, on a stack that otherwise changes smoothly: out of the order of focus, knocked, or aligned wrong. Flagged for you to look at. |
 | `order` | array of integer | The aligned frames, in the order the stack is processed. |
 | `outOfFocus` | array of integer | The frames with no in-focus detail: flagged for you to disable. |
 | `outOfOrder` | array of integer | The frames whose magnification doesn't fit their place in the stack: the stack isn't in the order of focus, and narrow framing may keep the field of view of a frame that isn't the narrowest. `align.sortByScale` puts them in order. |
@@ -832,6 +833,7 @@ Result:
 | `masterChosen` | boolean | Whether the master is the frame chosen with `align.setMaster`: false when none was, or that frame isn't enabled or was rejected, and the processing order chose the master. |
 | `moved` | array of integer | The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where. |
 | `narrowEnd` | `"first"` \| `"last"` \| `null` | The end of the stack with the narrower field of view, when the frames' scales tell. |
+| `offTrend` | array of integer | The frames whose shift, scale or rotation is far from what their neighbors' predict, on a stack that otherwise changes smoothly: out of the order of focus, knocked, or aligned wrong. Flagged for you to look at. |
 | `order` | array of integer | The aligned frames, in the order the stack is processed. |
 | `outOfFocus` | array of integer | The frames with no in-focus detail: flagged for you to disable. |
 | `outOfOrder` | array of integer | The frames whose magnification doesn't fit their place in the stack: the stack isn't in the order of focus, and narrow framing may keep the field of view of a frame that isn't the narrowest. `align.sortByScale` puts them in order. |

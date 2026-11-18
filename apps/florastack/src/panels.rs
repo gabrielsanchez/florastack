@@ -448,6 +448,7 @@ fn flag_text(flag: &str) -> (String, String) {
         "not-refined" => ("flag-not-refined", "flag-not-refined-help"),
         "out-of-focus" => ("flag-out-of-focus", "flag-out-of-focus-help"),
         "moved" => ("flag-moved", "flag-moved-help"),
+        "off-trend" => ("flag-off-trend", "flag-off-trend-help"),
         other => return (other.to_owned(), String::new()),
     };
     (tr(label), tr(help))

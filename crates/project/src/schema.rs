@@ -54,8 +54,9 @@
 //! which a project moved with its frames finds them again.
 //! Version 8 adds to the alignment run's report an optional `made_from`: what the run read its frames with (the
 //! develop settings and the defect mask, hashed), by which a run that no longer fits the project is told.
-//! Version 9 adds the project's optional `chosen_master`, the frame the user chose to be the master, and to the
-//! alignment run's report an optional `chosen_master`, whether its master is that frame.
+//! Version 9 adds the project's optional `chosen_master`, the frame the user chose to be the master, to the
+//! alignment run's report an optional `chosen_master`, whether its master is that frame, and the `off-trend` flag to
+//! a frame's report.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};

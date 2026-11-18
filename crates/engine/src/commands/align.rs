@@ -532,6 +532,7 @@ impl Plan {
             order: order.frames.iter().filter_map(|&i| id(i)).collect(),
             out_of_focus: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OutOfFocus)),
             moved: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::Moved)),
+            off_trend: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OffTrend)),
             rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
             defects: self.detected.as_ref().map(|(_, s)| s.clone()),
             frame_order: None,
@@ -627,6 +628,9 @@ struct Aligned {
     out_of_focus: Vec<FrameId>,
     /// The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where.
     moved: Vec<FrameId>,
+    /// The frames whose shift, scale or rotation is far from what their neighbors' predict, on a stack that otherwise
+    /// changes smoothly: out of the order of focus, knocked, or aligned wrong. Flagged for you to look at.
+    off_trend: Vec<FrameId>,
     /// The frames whose alignment couldn't be trusted, and keep their neighbor's (`align.info` says why).
     rejected: Vec<FrameId>,
     /// The defect mask this run detected and inpainted, when the settings asked for one (`detect_defects`) and the
@@ -694,6 +698,7 @@ fn reorder_job<T: Serialize + Send + 'static>(
         order: order.frames.iter().filter_map(|&i| id(i)).collect(),
         out_of_focus: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OutOfFocus)),
         moved: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::Moved)),
+        off_trend: flagged(&rebased, &ids, |f| f.flags.contains(&Flag::OffTrend)),
         rejected: flagged(&rebased, &ids, |f| f.status == Status::Rejected),
         defects: None,
         frame_order: None,

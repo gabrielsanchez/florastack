@@ -382,8 +382,8 @@ fn the_shapes_stored_in_project_files_are_pinned() {
     assert_eq!(to_data("alignment run", &run).unwrap()["chosen_master"], json!(true));
     assert_eq!(serde_json::to_value(Framing::ALL).unwrap(), json!(["narrow", "wide", "common"]));
     assert_eq!(
-        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined, Flag::Moved]).unwrap(),
-        json!(["low-score", "repeating-pattern", "no-match", "not-refined", "moved"])
+        serde_json::to_value([Flag::LowScore, Flag::RepeatingPattern, Flag::NoMatch, Flag::NotRefined, Flag::Moved, Flag::OffTrend]).unwrap(),
+        json!(["low-score", "repeating-pattern", "no-match", "not-refined", "moved", "off-trend"])
     );
     assert_eq!(serde_json::to_value([Status::Master, Status::Aligned]).unwrap(), json!(["master", "aligned"]));
     assert_eq!(

@@ -53,6 +53,8 @@
 //!   canvas with its coverage (`coverage.rs`).
 //! - **Sorting by scale** ([`scale_order`], [`align_by_scale`]): a first pass recovers each frame's scale, the frames
 //!   are put in scale order, which is focus order, and aligned again (`sort.rs`).
+//! - **Frames off the trend** ([`Flag::OffTrend`]): on a rail or a steady focus ramp, the terms change smoothly from
+//!   frame to frame, and a frame far from what its neighbors predict is flagged (`trend.rs`).
 //!
 //! # Defects, movement and the filmstrip
 //!
@@ -92,6 +94,7 @@ mod settings;
 mod sort;
 mod split;
 mod stack;
+mod trend;
 mod white_balance;
 
 pub use coverage::{Coverage, Covered, DEFAULT_FEATHER, coverage_count, warp_to_canvas};
