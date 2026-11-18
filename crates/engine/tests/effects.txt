@@ -20,6 +20,7 @@ align.info none
 align.reset project
 align.run project
 align.set project
+align.setMaster project
 align.sortByScale project
 annotation.get none
 annotation.set project

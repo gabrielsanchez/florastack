@@ -132,6 +132,8 @@ The longer side, in pixels, that frames are reduced to for alignment. Alignment 
 
 By default the stack is processed from its end with the narrower field of view, so that every frame covers the output. **Reverse the order** processes it from the other end. Changing the order alone needs no new alignment: **Align** then orders the aligned stack again, without reading the frames.
 
+The frame the stack is processed from is also the master, which the others are aligned to: they are matched to its brightness and color, and the **wide** and **common** framings use its pixels. To choose the master yourself, right-click a frame in the frame list and choose **Make master**; the frame list marks the master. An aligned stack is rebased onto the new master without reading the frames, and later alignments keep your choice while the frame is enabled and aligns. Choose **Let the stack choose the master** on that frame to go back. **Narrow** framing keeps the narrow end's field of view whichever frame is the master.
+
 ## Out of focus
 
 Frames with less in-focus detail than this share are flagged as out of focus: typically the blurred frames at the start and end of a stack, which add nothing but blur. They are only flagged; untick them to leave them out.

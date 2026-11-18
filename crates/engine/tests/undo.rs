@@ -95,6 +95,13 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
         },
         Case { name: "align.run", setup: aligning(), params: "{}".into() },
         Case { name: "align.sortByScale", setup: aligning(), params: "{}".into() },
+        Case { name: "align.setMaster", setup: none(), params: format!(r#"{{ "frame": {a} }}"#) },
+        Case {
+            name: "align.setMaster",
+            // The second of the frames `aligning` adds, after the fixture's frames, output and layer.
+            setup: aligning().into_iter().chain([("align.run", "{}".to_owned())]).collect(),
+            params: format!(r#"{{ "frame": {} }}"#, layer + 2),
+        },
         Case { name: "defects.detect", setup: aligning(), params: "{}".into() },
         Case { name: "defects.import", setup: none(), params: format!(r#"{{ "path": {} }}"#, quoted(&mask)) },
         Case {

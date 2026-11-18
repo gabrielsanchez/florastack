@@ -20,6 +20,7 @@ align.info
 align.reset
 align.run
 align.set
+align.setMaster
 align.sortByScale
 annotation.get
 annotation.set

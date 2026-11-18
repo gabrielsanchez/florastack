@@ -76,6 +76,7 @@ fn a_saved_project_reopens_exactly_and_can_be_retouched_at_once() {
         settings: json!({ "rotation": false }),
         report: Some(json!({ "width": 6000, "height": 4000, "narrow_end": "last", "start": "last", "order": [c.get(), a.get()] })),
     });
+    project.chosen_master = Some(c);
     let preset = Preset::parse("[align]\nrotation = false\n[stack]\nmethod = \"pyramid\"\n[stack.pyramid]\ngrit = 0.5\n").unwrap();
     project.preferences.layer(&preset.preferences);
     project.preferences.set(Group::Develop, &json!({ "white_balance": "auto", "exposure": 0.25 })).unwrap();

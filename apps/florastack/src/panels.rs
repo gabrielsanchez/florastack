@@ -10,6 +10,7 @@ use crate::actions::Action;
 use crate::app::{Banner, Dialog, FILM_SIDE, FloraStackApp, Selection, THUMBNAIL_SIDE};
 use crate::i18n::{tr, tr_args};
 use crate::prefs::{Method, Tab};
+use crate::shell::FrameRow;
 
 /// The height of a frame list row's thumbnail, in points.
 const ROW_THUMBNAIL: f32 = 40.0;
@@ -235,6 +236,46 @@ fn status(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     });
 }
 
+/// A frame's context menu: make it the master (`align.setMaster`), or, when it is the master chosen, let the stack
+/// choose it again.
+fn master_menu(app: &mut FloraStackApp, ui: &mut egui::Ui, frame: &FrameRow, chosen: bool) {
+    if chosen {
+        if ui.button(tr("frame-master-automatic")).on_hover_text(tr("tip-master-automatic")).clicked() {
+            app.shell.run("align.setMaster", json!({ "frame": null }));
+            ui.close();
+        }
+    } else if ui.add_enabled(frame.enabled, egui::Button::new(tr("frame-make-master"))).on_hover_text(tr("tip-make-master")).clicked() {
+        app.shell.run("align.setMaster", json!({ "frame": frame.id }));
+        ui.close();
+    }
+}
+
+/// A frame's name, which selects it and whose context menu makes it the master, with what alignment found about it.
+fn frame_details(app: &mut FloraStackApp, ui: &mut egui::Ui, frame: &FrameRow, selected: bool, min_score: f64) {
+    let name = if frame.enabled { RichText::new(&frame.name) } else { RichText::new(&frame.name).weak().strikethrough() };
+    let label = ui.selectable_label(selected, name).on_hover_text(frame.file.display().to_string());
+    if label.clicked() {
+        app.select(Selection::Frame(frame.id));
+    }
+    let chosen = app.shell.alignment["chosenMaster"].as_u64() == Some(frame.id);
+    label.context_menu(|ui| master_menu(app, ui, frame, chosen));
+    if app.shell.alignment["run"]["master"].as_u64() == Some(frame.id) {
+        let help = if chosen { tr("frame-master-chosen-help") } else { tr("frame-master-help") };
+        ui.label(RichText::new(tr("frame-master")).small().strong()).on_hover_text(help);
+    }
+    if let Some(alignment) = &frame.alignment {
+        quality(ui, alignment, min_score);
+    }
+    if !frame.flags.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for flag in &frame.flags {
+                let (text, help) = flag_text(flag);
+                ui.colored_label(ui.visuals().warn_fg_color, RichText::new(text).small()).on_hover_text(help);
+            }
+        });
+    }
+}
+
 /// The frame list: thumbnails, names, each frame's alignment quality and flags, the enabled checkboxes, reordering by
 /// dragging a frame's name, and the filmstrip: dragging up and down over the thumbnails plays the stack frame by
 /// frame, Play plays it on its own.
@@ -291,23 +332,7 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                     scrubbing = true;
                 }
                 let info = ui.dnd_drag_source(egui::Id::unique(("frame-row", frame.id)), i, |ui| {
-                    ui.vertical(|ui| {
-                        let name = if frame.enabled { RichText::new(&frame.name) } else { RichText::new(&frame.name).weak().strikethrough() };
-                        if ui.selectable_label(selected, name).on_hover_text(frame.file.display().to_string()).clicked() {
-                            app.select(Selection::Frame(frame.id));
-                        }
-                        if let Some(alignment) = &frame.alignment {
-                            quality(ui, alignment, min_score);
-                        }
-                        if !frame.flags.is_empty() {
-                            ui.horizontal_wrapped(|ui| {
-                                for flag in &frame.flags {
-                                    let (text, help) = flag_text(flag);
-                                    ui.colored_label(ui.visuals().warn_fg_color, RichText::new(text).small()).on_hover_text(help);
-                                }
-                            });
-                        }
-                    });
+                    ui.vertical(|ui| frame_details(app, ui, frame, selected, min_score));
                 });
                 info.response
             });

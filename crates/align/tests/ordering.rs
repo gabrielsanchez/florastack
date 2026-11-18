@@ -11,7 +11,7 @@
 
 use florastack_align::{
     AlignError, AlignSettings, Canvas, DEFAULT_FEATHER, End, Flag, Framing, ProcessingOrder, StackAlignment, Status, align_by_scale, align_ordered,
-    coverage_count, narrow_end, scale_order, warp_to_canvas,
+    coverage_count, narrow_end, order_stack_on, scale_order, warp_to_canvas,
 };
 use florastack_core::ops::{Border, Interpolation, warp_into};
 use florastack_core::testutil::scene::Backdrop;
@@ -121,6 +121,43 @@ fn the_narrow_end_sets_the_order_and_the_master() {
     let (alignment, order) = align_ordered(&s.frames, &AlignSettings::default(), &Unmonitored).unwrap();
     assert_eq!((narrow_end(&alignment), order.start, order.master, order.narrow_frame), (None, End::First, 0, None));
     assert!(alignment.rebased(9).is_err());
+}
+
+#[test]
+fn a_master_chosen_by_hand_takes_the_place_of_the_narrow_ends_frame() {
+    let s = cropped(200, 150, &moving(7, 0.06, 3));
+    let settings = AlignSettings::default();
+    let (automatic, order) = align_ordered(&s.frames, &settings, &Unmonitored).unwrap();
+    assert_eq!(order.master, 6, "the narrow end's frame");
+    for chosen in [2, 3, 6] {
+        let (alignment, chosen_order) = order_stack_on(&automatic, &settings, Some(chosen)).unwrap();
+        println!("master {chosen}: error {:.4} px", s.error(&alignment));
+        assert_eq!((alignment.master, chosen_order.master), (chosen, chosen));
+        assert_eq!(
+            (alignment.frames[chosen].status, alignment.frames[chosen].transform, alignment.frames[chosen].gain),
+            (Status::Master, Affine::IDENTITY, 1.0)
+        );
+        // The processing order, and the frame whose field of view narrow framing keeps, are the automatic ones.
+        assert_eq!((&chosen_order.frames, chosen_order.start, chosen_order.narrow_frame), (&order.frames, order.start, order.narrow_frame));
+        // Rebased onto the chosen frame as if it had been aligned to it: the transforms and the gains are the truth's.
+        assert!(s.error(&alignment) < 0.05, "{}", s.error(&alignment));
+        for (i, f) in alignment.frames.iter().enumerate() {
+            let truth = f64::from(s.stack.truth.frames[chosen].gain / s.stack.truth.frames[i].gain);
+            assert!((f.gain / truth - 1.0).abs() < 0.002, "frame {i}: gain {} for {truth}", f.gain);
+        }
+        // Narrow framing still keeps the narrow end's field of view and pixel grid, placed on the chosen frame.
+        let canvas = alignment.canvas(Framing::Narrow, chosen_order.narrow_frame).unwrap();
+        assert_eq!((canvas.width, canvas.height), (200, 150));
+        let narrow = canvas.to_frame(&alignment.frames[6].transform);
+        assert!(transform_error(&narrow, &Affine::IDENTITY, 200, 150) < 1e-9, "{narrow:?}");
+    }
+
+    // A rejected frame can't be the master, its transform being only its reference's: the automatic one is.
+    let mut rejected = automatic.clone();
+    rejected.frames[2].status = Status::Rejected;
+    let (alignment, chosen_order) = order_stack_on(&rejected, &settings, Some(2)).unwrap();
+    assert_eq!((alignment.master, chosen_order.master), (6, 6));
+    assert!(matches!(order_stack_on(&automatic, &settings, Some(7)), Err(AlignError::Master { master: 7, frames: 7 })));
 }
 
 #[test]

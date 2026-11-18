@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use florastack_align::{Canvas, DefectMask, Flag, Framing, inpaint};
+use florastack_align::{Canvas, DefectMask, Flag, Framing, Status, inpaint};
 use florastack_codecs::ReadOptions;
 use florastack_core::{Affine, Monitor};
 use florastack_project::{CacheRef, Edit, Frame, FrameId, Project};
@@ -123,6 +123,8 @@ struct Filmstrip {
 struct FilmstripFrame {
     frame: FrameId,
     enabled: bool,
+    /// Whether it is the master that the others are aligned to.
+    master: bool,
     /// The preview as shot, a JPEG file; none when it is missing or out of date.
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
@@ -156,6 +158,7 @@ fn list(session: &Session, _: NoParams) -> Result<Filmstrip, CommandError> {
         frames.push(FilmstripFrame {
             frame: f.id(),
             enabled: f.enabled,
+            master: report.as_ref().is_some_and(|r| r.status == Status::Master),
             preview: preview.map(path),
             aligned_preview: aligned.map(path),
             flags: report.as_ref().map(|r| r.flags.clone()).unwrap_or_default(),

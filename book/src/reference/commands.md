@@ -11,7 +11,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | Area | Commands |
 |---|---|
 | [adjust](#adjust) | [`adjust.addMask`](#adjustaddmask), [`adjust.close`](#adjustclose), [`adjust.describe`](#adjustdescribe), [`adjust.get`](#adjustget), [`adjust.mapDepth`](#adjustmapdepth), [`adjust.model`](#adjustmodel), [`adjust.moveMask`](#adjustmovemask), [`adjust.open`](#adjustopen), [`adjust.preview`](#adjustpreview), [`adjust.removeMask`](#adjustremovemask), [`adjust.reset`](#adjustreset), [`adjust.sampleColor`](#adjustsamplecolor), [`adjust.select`](#adjustselect), [`adjust.set`](#adjustset), [`adjust.setMask`](#adjustsetmask), [`adjust.setModel`](#adjustsetmodel), [`adjust.stroke`](#adjuststroke) |
-| [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.sortByScale`](#alignsortbyscale) |
+| [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.setMaster`](#alignsetmaster), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
 | [cache](#cache) | [`cache.info`](#cacheinfo), [`cache.removeAbandoned`](#cacheremoveabandoned), [`cache.setFolder`](#cachesetfolder) |
@@ -664,6 +664,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `aligned` | boolean | Whether the project holds an alignment run. |
+| `chosenMaster` | integer | The frame chosen to be the master with `align.setMaster`, if any. |
 | `framing` | `"narrow"` \| `"wide"` \| `"common"` | The framing the settings choose. |
 | `run` | object | The run, when there is one. |
 
@@ -714,6 +715,7 @@ Result:
 | `defects` | object | The defect mask this run detected and inpainted, when the settings asked for one (`detect_defects`) and the project had none. |
 | `frameOrder` | array of integer | After sorting by scale: the project's frame order now. |
 | `master` | integer | The frame the others are aligned to, which the output is framed on. |
+| `masterChosen` | boolean | Whether the master is the frame chosen with `align.setMaster`: false when none was, or that frame isn't enabled or was rejected, and the processing order chose the master. |
 | `moved` | array of integer | The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where. |
 | `narrowEnd` | `"first"` \| `"last"` \| `null` | The end of the stack with the narrower field of view, when the frames' scales tell. |
 | `order` | array of integer | The aligned frames, in the order the stack is processed. |
@@ -777,6 +779,37 @@ Examples:
 {"automatic_order":false,"min_sharp_fraction":0.005,"reverse_order":true}
 ```
 
+### `align.setMaster`
+
+**Make master.** Makes a frame the master that the others are aligned to, or lets the stack choose it again.
+
+The master is the frame whose brightness and color the others are matched to, and whose pixel grid wide and common framing take; narrow framing keeps the field of view and pixel grid of the frame at the stack's narrow end whichever frame is the master. By default the processing order chooses it: the frame it starts from. A frame chosen here is the master of every alignment from now on, while it is enabled and aligns; `null` lets the processing order choose again. When the project holds an alignment that fits it, the alignment is rebased onto the new master, no frame read, and the aligned previews are made again from the frames' previews; otherwise the choice applies when the stack is next aligned. A disabled frame, or one alignment rejected, can't be made the master. The choice and the rebased alignment are one undo step.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the heavy lane | Yes | An open project | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `frame` | integer | The frame to make the master, or `null` to let the processing order choose it again (the frame at the stack's narrow end, by default). |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `chosenMaster` | integer | The frame chosen to be the master, if any. |
+| `master` | integer | The master of the project's alignment now, when it has one. |
+| `reordered` | boolean | Whether the stored alignment was rebased onto the new master, no frame read. False when the project has no alignment that fits it otherwise: the choice then applies when the stack is next aligned. |
+
+Examples:
+
+```json
+{"frame":3}
+{"frame":null}
+```
+
 ### `align.sortByScale`
 
 **Sort frames by scale.** Puts the enabled frames in the order of their scale, then aligns them in that order.
@@ -796,6 +829,7 @@ Result:
 | `defects` | object | The defect mask this run detected and inpainted, when the settings asked for one (`detect_defects`) and the project had none. |
 | `frameOrder` | array of integer | After sorting by scale: the project's frame order now. |
 | `master` | integer | The frame the others are aligned to, which the output is framed on. |
+| `masterChosen` | boolean | Whether the master is the frame chosen with `align.setMaster`: false when none was, or that frame isn't enabled or was rejected, and the processing order chose the master. |
 | `moved` | array of integer | The frames in which part of the subject moved against their neighbor: `filmstrip.list` shows where. |
 | `narrowEnd` | `"first"` \| `"last"` \| `null` | The end of the stack with the narrower field of view, when the frames' scales tell. |
 | `order` | array of integer | The aligned frames, in the order the stack is processed. |

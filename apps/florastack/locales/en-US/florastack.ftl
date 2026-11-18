@@ -167,6 +167,13 @@ flag-out-of-focus = out of focus
 flag-out-of-focus-help = The frame has no in-focus detail. It is only flagged: leave it out if it adds nothing.
 flag-moved = moved
 flag-moved-help = Part of the subject moved against the neighboring frame.
+frame-master = master
+frame-master-help = The frame the others are aligned to, chosen by the processing order. Right-click a frame to make it the master instead.
+frame-master-chosen-help = The frame the others are aligned to, chosen by you. Right-click it to let the stack choose again.
+frame-make-master = Make master
+tip-make-master = Aligns the other frames to this one: they are matched to its brightness and color. A stack already aligned is rebased onto it without reading the frames.
+frame-master-automatic = Let the stack choose the master
+tip-master-automatic = The processing order chooses the master again: by default, the frame at the stack's narrow end.
 
 ## Stack tab
 

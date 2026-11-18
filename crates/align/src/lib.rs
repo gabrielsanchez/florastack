@@ -103,7 +103,7 @@ pub use filmstrip::{MIN_THUMBNAIL_SIDE, aligned_thumbnail, thumbnail};
 pub use framing::{Canvas, Framing, MAX_FACTOR};
 pub use model::Similarity;
 pub use motion::{Motion, MotionCell, MotionMap, MotionRegion};
-pub use order::{End, NARROW_MIN, ProcessingOrder, align_ordered, narrow_end, order_stack};
+pub use order::{End, NARROW_MIN, ProcessingOrder, align_ordered, narrow_end, order_stack, order_stack_on};
 pub use prepare::MIN_SIDE;
 pub use settings::{AlignSettings, DEFAULT_MIN_MOTION, DEFAULT_MIN_SHARP_FRACTION, MAX_RESOLUTION, MIN_RESOLUTION, Term};
 pub use sort::{MIN_SPREAD, OUT_OF_PLACE_MIN, align_by_scale, frames_out_of_place, measuring_settings, order_of_scales, out_of_place, scale_order};
