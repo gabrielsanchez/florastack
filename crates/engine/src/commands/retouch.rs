@@ -8,12 +8,11 @@ use florastack_core::{AnyImage, Image, Monitor};
 use florastack_project::{Area, CacheRef, Edit, FrameId, LayerId, OutputId};
 use florastack_raw::Quality;
 use florastack_retouch::{Fields, LiveStroke, Painted, Source, Stroke, union};
-use florastack_stack::{PREVIEW_FACTOR, StackShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::check_name;
-use super::stack::{Chosen, StackPlan, Units, Warping, each};
+use super::stack::{Chosen, StackPlan, Units};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobPlan, Lane, commit};
 use crate::project::{stack_settings, write_image_in};
@@ -415,22 +414,9 @@ fn map_focus(session: &Session, _: NoParams) -> Result<JobPlan<Mapped>, CommandE
             .unavailable("the frames, as aligned now, don't make this output's canvas: they were aligned or framed again since it was stacked"));
     }
     let job = JobPlan::new(move |ctx| {
-        plan.reader.load_mask()?;
-        let n = plan.frames.len();
-        let mut units = Units::new(n);
-        let reduced = depth.reduced(PREVIEW_FACTOR as f64);
-        let mut estimator = reduced.estimator(&plan.tiling)?;
-        let mut feed = Warping { plan: &mut plan, range: 0..n, reduced: true };
-        each(&mut feed, ctx, &mut units, |loaded, progress, first| {
-            loaded.source(|source| {
-                if first {
-                    estimator.begin(StackShape::of(source))?;
-                }
-                Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
-            })
-        })?;
+        let mut units = Units::new(plan.frames.len());
+        let (stats, _) = plan.reduced_focus(&depth, ctx, &mut units)?;
         ctx.stage(1);
-        let stats = estimator.finish(ctx)?;
         // The plan's order to the output's: each point's nearest frame, as its index among the output's frames.
         let order: Vec<u16> =
             plan.ids().iter().map(|id| frames.iter().position(|f| f == id).and_then(|i| u16::try_from(i).ok()).unwrap_or(NO_FRAME)).collect();

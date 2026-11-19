@@ -201,6 +201,32 @@ fn previews_keep_the_reduced_frames_and_read_no_file_again() {
 }
 
 #[test]
+fn the_depth_maps_previews_and_threshold_share_the_focus_they_measured() {
+    let dir = TempDir::new("stack-focus-memo");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 26));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    let preview = r#"{ "method": "depth-map", "threshold": "percentile", "percentile": 60 }"#;
+    // A depth-map preview measures the focus; the threshold then reuses it, and so does a preview after it.
+    run(&mut engine, "stack.preview", r#"{ "method": "depth-map" }"#);
+    let shown = run(&mut engine, "stack.threshold", r#"{ "threshold": "percentile", "percentile": 60 }"#);
+    assert_eq!(shown["measured"], false, "the preview's focus: {shown}");
+    run(&mut engine, "stack.preview", preview);
+    let reused = engine.stack_preview().unwrap();
+    // The same preview from a project opened again, which measures anew, is the same bit for bit.
+    let path = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.save", "{}");
+    run(&mut engine, "project.close", "{}");
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(&path)));
+    run(&mut engine, "stack.preview", preview);
+    let fresh = engine.stack_preview().unwrap();
+    assert_eq!(*reused, *fresh, "the kept focus is the focus measured");
+    assert_eq!(run(&mut engine, "stack.threshold", "{}")["measured"], false, "the preview kept it for the threshold");
+    // Another radius is another measurement.
+    assert_eq!(run(&mut engine, "stack.threshold", r#"{ "radius": 3.0 }"#)["measured"], true);
+}
+
+#[test]
 fn stacking_needs_a_current_alignment_and_cancelling_changes_nothing() {
     let dir = TempDir::new("stack-stale");
     let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 24));
@@ -403,7 +429,8 @@ fn a_depth_map_stack_becomes_an_output_with_its_depth_and_confidence_maps() {
         entry["parameters"],
         json!({ "radius": 0.7, "smoothing": 2.7, "threshold": "auto", "level": 0.001, "percentile": 30.0, "framing": "narrow" })
     );
-    assert_eq!(entry["maps"], json!(["confidence", "depth", "depth-frames"]));
+    // With the blend width of the pixels whose depth was filled.
+    assert_eq!(entry["maps"], json!(["confidence", "depth", "depth-blend", "depth-frames"]));
     let output = depth["output"].as_u64().unwrap();
 
     // The maps are saved as data, 16-bit: the depth map is the frame index scaled, 0 for the first frame.

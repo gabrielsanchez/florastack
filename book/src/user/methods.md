@@ -96,7 +96,9 @@ have them, and the depth map can be exported or turned into a 3D relief.
 Where no frame stands out, such as a blurred background or a smooth surface, the sharpest frame is a guess, and
 following noise there makes blotches. The **contrast threshold**, which the tab asks for before stacking, marks those
 areas, whose depth is then filled in from the confident pixels around them: raise it until noise and smooth background
-turn black in its picture, while the subject's detail stays visible.
+turn black in its picture, while the subject's detail stays visible. Where the depth was filled, each pixel is blended
+from a few frames around its depth rather than the one or two at it, which averages away their noise and the faint
+rings that frames of slightly different brightness would leave in a smooth background.
 
 **Radius** (how wide an area sharpness is measured over) and **smoothing** (how gradually it moves from one frame to
 the next) trade fine detail against seams and noise. [The Stack tab](stack-tab.md) explains each.

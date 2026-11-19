@@ -64,8 +64,9 @@ pub enum Method {
     /// The depth map's pass 1: florastack-stack's `FocusKernel` with its estimation `radius`. Its result has three
     /// channels: each pixel's interpolated depth, its confidence and its guide luminance.
     Focus { radius: f64 },
-    /// The depth map's pass 2: florastack-stack's `CompositeKernel`, compositing `frames` frames from `depth`.
-    Composite { depth: Arc<Image<f32>>, frames: usize },
+    /// The depth map's pass 2: florastack-stack's `CompositeKernel`, compositing `frames` frames from `depth`, with
+    /// each pixel's blend width from `blend` (the depth map's; 1 everywhere when `None`).
+    Composite { depth: Arc<Image<f32>>, blend: Option<Arc<Image<f32>>>, frames: usize },
 }
 
 impl Method {
@@ -399,7 +400,7 @@ impl GpuStacker {
                 Box::new(pyramid::Pyramid::new(levels, blend, channel_decisions, range_limit)?)
             }
             Method::Focus { radius } => Box::new(depth::Focus::new(gpu, radius)?),
-            Method::Composite { depth, frames } => Box::new(depth::Composite::new(depth, frames)?),
+            Method::Composite { depth, blend, frames } => Box::new(depth::Composite::new(depth, blend, frames)?),
         };
         Ok(GpuStacker { gpu: gpu.clone(), method, name, tiling, stack: None })
     }

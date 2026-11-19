@@ -15,6 +15,18 @@
 //!    object doesn't spill over the edge of another.
 //! 4. **Filling**: each pixel keeps the smoothed depth as far as its neighborhood is confident ([`REACHED`]) and takes
 //!    the rest from coarser scales (push-pull), which fill regions without detail smoothly from their edges.
+//! 5. **Blend width**: where the depth was filled, the composite blends the frames within [`FILL_BLEND`] frames of the
+//!    depth instead of the two on either side of it, in the same proportion as the depth was filled (its neighborhood's
+//!    confident share below [`REACHED`]), so that the width eases from 1 at the confident pixels to [`FILL_BLEND`] far
+//!    from them. A smooth depth sweeping through frames whose brightness differs a little showed rings where it
+//!    crossed whole frames, and each filled pixel had the noise of one or two frames; blended wider, the frames
+//!    average both away, and the frames near a filled depth are about as blurred as the frame at it, which is why it
+//!    was filled. Measured on the local wasp, whose smooth background is 82% filled: the rings around its antenna were
+//!    gone at 100%, and the background's departure from a 33-pixel box blur fell from 1.18 and 1.27 levels of 8 bits to
+//!    0.79 and 0.84 (to 0.68 and 0.71 at a width of 5, which changed 0.13% of the pixels by more than 8 levels against
+//!    3's 0.02%); the cricket's output changed by more than 2 levels at 0.8% of its pixels, at the noise of its filled
+//!    patches; on the synthetic stacks, the depth map's flat-region noise fell 5% on average over its 40 runs, with SSIM
+//!    and halos unchanged.
 //!
 //! Measured on the local camera stacks: a wasp on a smooth background (three quarters of the canvas without
 //! detail) came out with seams and dark specks around its legs without the support test, and clean with it; a cricket
@@ -44,7 +56,7 @@ use florastack_core::{ColorSpace, Image};
 use rayon::prelude::*;
 
 use super::composite::CompositeKernel;
-use super::filter::{push_pull, smooth};
+use super::filter::{Domain, push_pull, smooth, smooth_weights};
 use super::focus::FocusStats;
 use super::{MAX_SMOOTHING, Threshold};
 use crate::error::StackError;
@@ -56,6 +68,9 @@ pub const EDGE: f64 = 0.05;
 /// The share of its neighborhood that must be confident for a pixel to keep the smoothed depth whole; below it, the
 /// depth is blended with the coarser scales' in proportion.
 pub const REACHED: f32 = 0.5;
+/// The frames on either side of a filled depth that the composite blends, far from every confident pixel (see the
+/// module documentation): 1 would take only the two frames around the depth.
+pub const FILL_BLEND: f32 = 3.0;
 /// The share of a confident pixel's neighborhood that must be confident too for it to count (see the module
 /// documentation).
 pub const MIN_SUPPORT: f32 = 0.5;
@@ -102,6 +117,10 @@ pub struct DepthMap {
     pub level: f32,
     /// How many covered pixels were below the threshold, masked or without support, whose depth was filled.
     pub filled: usize,
+    /// Each pixel's blend width, in frames: the composite weighs frame `i` by `max(0, 1 - |i - depth| / width)`. 1 where
+    /// the depth was measured, up to [`FILL_BLEND`] where it was filled; `None` when it is 1 everywhere. Shared with the
+    /// compositors made from it.
+    pub blend: Option<Arc<Image<f32>>>,
 }
 
 /// A sample in `[0, 1]` as a 16-bit one.
@@ -139,7 +158,7 @@ impl DepthMap {
 
     /// A pass-2 stacker that composites the same frames, in the same order, from this depth map.
     pub fn compositor(&self, tiling: &Tiling) -> Result<Tiled<CompositeKernel>, StackError> {
-        Ok(Tiled::new(CompositeKernel::new(Arc::clone(&self.depth), self.frames)?, tiling.clone()))
+        Ok(Tiled::new(CompositeKernel::new(Arc::clone(&self.depth), self.frames)?.with_blend(self.blend.clone())?, tiling.clone()))
     }
 }
 
@@ -311,10 +330,13 @@ impl FocusStats {
         }
         let mut guide = self.guide.clone();
         guide.par_rows_mut().for_each(|row| row.iter_mut().for_each(|g| *g = g.max(0.0).cbrt()));
+        // The guide's distances, made once for both smoothings.
+        let domain = Domain::new(&guide, smoothing, EDGE)?;
+        drop(guide);
         let mut confident = confident;
         if smoothing > 0.0 && confident > 0 {
             // The support: the confident share of each pixel's neighborhood, as the smoothing sees it.
-            let (_, support) = smooth(&weights, &weights, &guide, smoothing, EDGE)?;
+            let support = smooth_weights(&weights, &domain)?;
             confident = weights
                 .par_rows_mut()
                 .zip(support.par_rows())
@@ -330,11 +352,22 @@ impl FocusStats {
                 })
                 .sum();
         }
-        let (smoothed, mut reach) = smooth(&self.depth, &weights, &guide, smoothing, EDGE)?;
-        drop((weights, guide));
+        let (smoothed, mut reach) = smooth(&self.depth, &weights, &domain)?;
+        drop((weights, domain));
         reach.par_rows_mut().for_each(|row| row.iter_mut().for_each(|k| *k = (*k / REACHED).min(1.0)));
         let mut depth = push_pull(&smoothed, &reach)?;
-        drop((smoothed, reach));
+        drop(smoothed);
+        // The blend width: 1 where the depth kept its smoothed value whole, exactly, so that those pixels composite as
+        // they would from the two frames around their depth.
+        let mut blend = reach;
+        blend.par_rows_mut().enumerate().for_each(|(y, row)| {
+            let cov = covered.and_then(|i| i.row(y));
+            for (x, k) in row.iter_mut().enumerate() {
+                let filled = if FocusStats::covers(cov, x) && k.is_finite() { 1.0 - k.clamp(0.0, 1.0) } else { 0.0 };
+                *k = 1.0 + (FILL_BLEND - 1.0) * filled;
+            }
+        });
+        let blend = if blend.par_rows().any(|row| row.iter().any(|&k| k > 1.0)) { Some(Arc::new(blend)) } else { None };
         #[allow(clippy::cast_precision_loss)] // At most MAX_FRAMES.
         let last = self.frames.saturating_sub(1) as f32;
         depth.par_rows_mut().enumerate().for_each(|(y, d)| {
@@ -355,6 +388,6 @@ impl FocusStats {
                 };
             }
         });
-        Ok(DepthMap { frames: self.frames, depth: Arc::new(depth), confidence, level, filled: covered_pixels.saturating_sub(confident) })
+        Ok(DepthMap { frames: self.frames, depth: Arc::new(depth), confidence, level, filled: covered_pixels.saturating_sub(confident), blend })
     }
 }

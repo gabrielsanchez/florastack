@@ -1,7 +1,8 @@
 // Frame `frame` folded into the depth map's composite over a tile's inner region (florastack-stack's
-// `CompositeKernel` fold): it weighs `max(0, 1 - |frame - depth|)` times its coverage, and is kept as the nearest
-// covering frame where it lies nearer the depth than any before (for wide framing, where neither frame at the depth
-// covers). Pixels that the frame doesn't cover, or with a sample that isn't finite, are skipped. Samples are clamped
+// `CompositeKernel` fold): it weighs `max(0, 1 - |frame - depth| / width)` times its coverage, with the pixel's blend
+// width from `blend` when there is one (a width of 1 or less divides nothing, as the CPU's `weight` has it), and is
+// kept as the nearest covering frame where it lies nearer the depth than any before (for wide framing, where neither
+// frame at the depth covers). Pixels that the frame doesn't cover, or with a sample that isn't finite, are skipped. Samples are clamped
 // to MAX_SAMPLE. The distance starts at BIG.
 
 struct Params {
@@ -13,6 +14,7 @@ struct Params {
     offset_y: u32,
     has_coverage: u32,
     frame: f32,
+    has_blend: u32,
 }
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -23,6 +25,7 @@ struct Params {
 @group(0) @binding(5) var<storage, read_write> total: array<f32>;
 @group(0) @binding(6) var<storage, read_write> nearest: array<f32>;
 @group(0) @binding(7) var<storage, read_write> distance: array<f32>;
+@group(0) @binding(8) var<storage, read> blend: array<f32>;
 
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -44,7 +47,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let d = abs(p.frame - depth[s]);
-    let weight = max(1.0 - d, 0.0) * min(k, 1.0);
+    var reach = d;
+    if (p.has_blend != 0u && blend[s] > 1.0) {
+        reach = d / blend[s];
+    }
+    let weight = max(1.0 - reach, 0.0) * min(k, 1.0);
     if (weight > 0.0) {
         for (var ch = 0u; ch < c; ch++) {
             sum[s * c + ch] = sum[s * c + ch] + weight * clamp(image[src * c + ch], -MAX_SAMPLE, MAX_SAMPLE);

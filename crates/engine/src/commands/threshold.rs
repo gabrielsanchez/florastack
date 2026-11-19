@@ -1,24 +1,21 @@
 //! The depth map's contrast threshold, shown before it is used (`stack.threshold`, a preview job): which parts of the
 //! stack fall below the threshold, so that their depth is filled from the confident pixels around them rather than
 //! followed. The first call measures the frames' focus at a quarter of their size, as the depth-map method's first pass
-//! does (`florastack_stack::Estimator`), and the session keeps what it found ([`FocusMemo`]); every later call with the
-//! same frames, alignment, develop settings and radius only resolves the new threshold, in milliseconds, so that a
-//! slider can follow it live. The picture is the sharpest frame's luminance at each pixel, black where the pixel is
+//! does (`florastack_stack::Estimator`), and the session keeps what it found (`SharedFocus`, which `stack.preview`
+//! with the depth map and the depth maps of `adjust` and `retouch.mapFocus` share); every later call with the same
+//! frames, alignment, develop settings and radius only resolves the new threshold, in milliseconds, so that a slider
+//! can follow it live. The picture is the sharpest frame's luminance at each pixel, black where the pixel is
 //! below the threshold and transparent where no frame covers it, as an 8-bit TIFF in the project's `previews/` folder;
 //! each call removes the one before.
 
-use std::fmt::Write as _;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use florastack_core::{AnyImage, ColorSpace, Image, Monitor, Sample};
-use florastack_project::{Area, ContentHash};
+use florastack_project::Area;
 use florastack_raw::Quality;
-use florastack_stack::{DepthSettings, FocusStats, PREVIEW_FACTOR, StackError, StackShape, ThresholdMode};
+use florastack_stack::{FocusStats, PREVIEW_FACTOR, StackError, ThresholdMode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::stack::{Chosen, DepthOverrides, StackPlan, Units, Warping, each};
+use super::stack::{Chosen, DepthOverrides, StackPlan, Units};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobPlan, Lane, commit};
 use crate::project::{stack_settings, write_image_in};
@@ -102,54 +99,15 @@ struct Shown {
     measured: bool,
 }
 
-/// What `stack.threshold` measured last, kept in the session for the next threshold: the focus statistics with the
-/// key of what they were measured from, and the picture shown last, which the next call removes.
-pub(crate) struct FocusMemo {
-    key: String,
-    stats: Arc<FocusStats>,
-    shown: Option<PathBuf>,
-}
-
-/// The key of the focus measured from `plan`'s frames with `depth`'s radius: everything it depends on, hashed.
-fn focus_key(plan: &StackPlan, depth: &DepthSettings) -> Result<String, CommandError> {
-    let c = &plan.canvas;
-    let mut text =
-        format!("focus, FloraStack {}\nradius {}\ncanvas {} {} {:?}\n", env!("CARGO_PKG_VERSION"), depth.radius, c.width, c.height, c.to_master.m);
-    for f in &plan.frames {
-        writeln!(text, "{} {:?} {} {:?}", plan.reader.frame_key(f.index)?, f.transform.m, f.gain, f.white_balance).map_err(|_| plan.internal())?;
-    }
-    Ok(format!("focus {}", ContentHash::of(text.as_bytes())))
-}
-
 fn threshold(session: &Session, p: ThresholdParams) -> Result<JobPlan<Shown>, CommandError> {
     let depth = p.overrides().settings(&stack_settings(session.project()?)?.depth_map);
     let mut plan = StackPlan::new(session, COMMAND, Chosen::DepthMap(depth.clone()), Quality::Preview)?;
-    let key = focus_key(&plan, &depth)?;
-    let memo = session.focus.as_ref();
-    let cached = memo.filter(|m| m.key == key).map(|m| Arc::clone(&m.stats));
-    let previous = memo.and_then(|m| m.shown.clone());
+    let previous = session.threshold_shown.clone();
     let job = JobPlan::new(move |ctx| {
         let reduced = depth.reduced(PREVIEW_FACTOR as f64);
-        let measured = cached.is_none();
-        let stats = if let Some(stats) = cached {
-            stats
-        } else {
-            plan.reader.load_mask()?;
-            let n = plan.frames.len();
-            let mut units = Units::new(n);
-            let mut estimator = reduced.estimator(&plan.tiling)?;
-            let mut feed = Warping { plan: &mut plan, range: 0..n, reduced: true };
-            each(&mut feed, ctx, &mut units, |loaded, progress, first| {
-                loaded.source(|source| {
-                    if first {
-                        estimator.begin(StackShape::of(source))?;
-                    }
-                    Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
-                })
-            })?;
-            ctx.stage(1);
-            Arc::new(estimator.finish(ctx)?)
-        };
+        let mut units = Units::new(plan.frames.len());
+        let (stats, measured) = plan.reduced_focus(&depth, ctx, &mut units)?;
+        ctx.stage(1);
         ctx.checkpoint()?;
         let level = stats.level(reduced.contrast_threshold());
         let (picture, below) = picture(&stats, level)?;
@@ -163,7 +121,7 @@ fn threshold(session: &Session, p: ThresholdParams) -> Result<JobPlan<Shown>, Co
             {
                 tracing::debug!("cannot remove the old threshold picture {}: {e}", old.display());
             }
-            session.focus = Some(FocusMemo { key, stats, shown: Some(path) });
+            session.threshold_shown = Some(path);
             Ok(shown)
         }))
     });

@@ -55,14 +55,16 @@ pub struct Session {
     changed: Aspects,
     history_changed: bool,
     events: Vec<Event>,
-    /// The depth map's focus statistics that `stack.threshold` measured last, for the next threshold; dropped with the
-    /// project.
-    pub(crate) focus: Option<crate::commands::threshold::FocusMemo>,
+    /// The picture `stack.threshold` showed last, which the next call removes; forgotten with the project.
+    pub(crate) threshold_shown: Option<std::path::PathBuf>,
     /// The latest stack preview (`stack.preview`), linear with the frames' color space and an alpha channel where
     /// frames leave pixels uncovered, for a viewer to read; dropped with the project.
     pub(crate) stack_preview: Option<std::sync::Arc<florastack_core::Image<f32>>>,
     /// The frames' quarter-size copies the previews read, kept between them; dropped with the project.
     pub(crate) reduced: crate::commands::stack::SharedReduced,
+    /// The depth-map method's quarter-size focus statistics the previews measured, kept between them; dropped with
+    /// the project.
+    pub(crate) reduced_focus: crate::commands::stack::SharedFocus,
     /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
     pub(crate) retouch: Option<crate::retouch::RetouchSession>,
     pub(crate) retouch_closed: bool,
@@ -108,9 +110,10 @@ impl Session {
             changed: Aspects::NONE,
             history_changed: false,
             events: Vec::new(),
-            focus: None,
+            threshold_shown: None,
             stack_preview: None,
             reduced: crate::commands::stack::SharedReduced::default(),
+            reduced_focus: crate::commands::stack::SharedFocus::default(),
             retouch: None,
             retouch_closed: false,
             adjust: None,
@@ -351,9 +354,10 @@ impl Session {
             )
         };
         let path = folder.path().display().to_string();
-        self.focus = None;
+        self.threshold_shown = None;
         self.stack_preview = None;
         self.reduced = crate::commands::stack::SharedReduced::default();
+        self.reduced_focus = crate::commands::stack::SharedFocus::default();
         self.close_retouch();
         self.open = Some(Open { folder, project, history: History::new() });
         self.events.push(Event::Project { state: ProjectEvent::Opened, path });
@@ -412,9 +416,10 @@ impl Session {
         }
         self.close_retouch();
         let Some(open) = self.open.take() else { return Ok(None) };
-        self.focus = None;
+        self.threshold_shown = None;
         self.stack_preview = None;
         self.reduced = crate::commands::stack::SharedReduced::default();
+        self.reduced_focus = crate::commands::stack::SharedFocus::default();
         let cleaned = if open.folder.is_read_only() {
             0
         } else {
