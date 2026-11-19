@@ -172,6 +172,35 @@ fn the_preview_is_a_quarter_of_the_stack_and_changes_nothing() {
 }
 
 #[test]
+fn previews_keep_the_reduced_frames_and_read_no_file_again() {
+    let dir = TempDir::new("stack-preview-memo");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 25));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    run(&mut engine, "stack.preview", r#"{ "smoothing": 2.0 }"#);
+    let first = engine.stack_preview().unwrap();
+    // With the frame files gone, previews of any method and the threshold still run, on the frames' kept copies.
+    let away: Vec<PathBuf> = files.iter().map(|f| f.with_extension("away")).collect();
+    let move_all = |from: &[PathBuf], to: &[PathBuf]| from.iter().zip(to).for_each(|(a, b)| std::fs::rename(a, b).unwrap());
+    move_all(&files, &away);
+    run(&mut engine, "stack.preview", r#"{ "smoothing": 8.0 }"#);
+    run(&mut engine, "stack.preview", r#"{ "method": "pyramid" }"#);
+    run(&mut engine, "stack.threshold", "{}");
+    run(&mut engine, "stack.preview", r#"{ "smoothing": 2.0 }"#);
+    let again = engine.stack_preview().unwrap();
+    assert!(again.rows().zip(first.rows()).all(|(a, b)| a == b), "the kept copies are the frames as read");
+    // The copies go with the project.
+    let path = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.save", "{}");
+    run(&mut engine, "project.close", "{}");
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(&path)));
+    let job = common::job_of(engine.dispatch_json("stack.preview", "{}").unwrap());
+    let e = engine.wait(job).unwrap_err();
+    assert!(e.to_string().starts_with("cannot read"), "a project opened again reads its frames: {e}");
+    move_all(&away, &files);
+}
+
+#[test]
 fn stacking_needs_a_current_alignment_and_cancelling_changes_nothing() {
     let dir = TempDir::new("stack-stale");
     let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 24));

@@ -13,7 +13,7 @@
 
 use florastack_core::fs::File;
 use std::fmt;
-use std::io::{BufWriter, ErrorKind, Read, Write};
+use std::io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -263,7 +263,9 @@ impl AsRef<CacheDir> for CacheDir {
 pub(crate) const PART_SUFFIX: &str = ".part";
 
 /// A cache file being written: bytes go to a temporary file in its folder and into its hash, and [`CacheWriter::commit`]
-/// gives it its final name and returns its reference. Dropped without a commit, it removes the temporary file.
+/// gives it its final name and returns its reference. Dropped without a commit, it removes the temporary file. It also
+/// seeks, for writers that go back to a header (florastack-codecs' streaming TIFF writer): once it has, the hash is
+/// taken from the finished file instead.
 pub struct CacheWriter {
     file: Option<BufWriter<File>>,
     temp: PathBuf,
@@ -272,6 +274,8 @@ pub struct CacheWriter {
     stem: String,
     extension: String,
     hasher: Hasher,
+    /// Whether it has seeked, so that the bytes written aren't the file's in order.
+    seeked: bool,
 }
 
 impl CacheWriter {
@@ -284,7 +288,14 @@ impl CacheWriter {
         florastack_core::fs::create_dir_all(&dir).map_err(|source| ProjectError::Write { path: dir.clone(), source })?;
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let temp = dir.join(format!(".{stem}.{}.{n}{PART_SUFFIX}", florastack_core::process::id()));
-        let file = File::create(&temp).map_err(|source| ProjectError::Write { path: temp.clone(), source })?;
+        // Readable too, for the hash after a seek.
+        let file = florastack_core::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temp)
+            .map_err(|source| ProjectError::Write { path: temp.clone(), source })?;
         Ok(CacheWriter {
             file: Some(BufWriter::with_capacity(1 << 20, file)),
             temp,
@@ -293,10 +304,11 @@ impl CacheWriter {
             stem: stem.to_owned(),
             extension: extension.to_owned(),
             hasher: Hasher::new(),
+            seeked: false,
         })
     }
 
-    /// The bytes written so far.
+    /// The bytes written so far; after a seek, the bytes written in all, which overwritten ones count twice.
     pub fn len(&self) -> u64 {
         self.hasher.len
     }
@@ -320,13 +332,21 @@ impl CacheWriter {
             return Err(ProjectError::Write { path: self.temp.clone(), source: std::io::Error::other("the cache file was already committed") });
         };
         // The file is closed at the end of this block, before it is renamed.
-        {
-            let file = writer.into_inner().map_err(|e| failed(&self.temp, e.into_error()))?;
+        let reread = {
+            let mut file = writer.into_inner().map_err(|e| failed(&self.temp, e.into_error()))?;
             file.sync_all().map_err(|e| failed(&self.temp, e))?;
-        }
+            if self.seeked {
+                file.seek(SeekFrom::Start(0)).map_err(|e| failed(&self.temp, e))?;
+                Some(ContentHash::of_reader(std::io::BufReader::new(file)).map_err(|e| failed(&self.temp, e))?)
+            } else {
+                None
+            }
+        };
         let hasher = std::mem::replace(&mut self.hasher, Hasher::new());
-        let size = hasher.len;
-        let hash = hasher.finish();
+        let (hash, size) = reread.unwrap_or_else(|| {
+            let size = hasher.len;
+            (hasher.finish(), size)
+        });
         let name = format!("{}-{}.{}", self.stem, hash.short(), self.extension);
         let path = CachePath::new(self.area, &name).ok_or_else(|| ProjectError::CacheName { name: name.clone() })?;
         let target = self.dir.join(&name);
@@ -346,6 +366,17 @@ impl Write for CacheWriter {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.file.as_mut().map_or(Ok(()), Write::flush)
+    }
+}
+
+impl Seek for CacheWriter {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        let file = self.file.as_mut().ok_or_else(|| std::io::Error::other("the cache file was already committed"))?;
+        // Telling where it is moves nothing.
+        if to != SeekFrom::Current(0) {
+            self.seeked = true;
+        }
+        file.seek(to)
     }
 }
 

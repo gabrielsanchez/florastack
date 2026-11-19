@@ -252,6 +252,30 @@ fn unreferenced_cache_files_are_listed_and_removed() {
 }
 
 #[test]
+fn a_cache_file_written_with_a_seek_back_is_hashed_as_finished() {
+    use std::io::{Seek, SeekFrom, Write};
+    let dir = TempDir::new("cache-seek");
+    let (folder, _) = ProjectFolder::create(dir.path(), "Seek").unwrap();
+    // As a streaming TIFF writer does: a placeholder header, the data, then the header written over.
+    let mut writer = folder.writer(Area::Cache, "output-1", "tiff").unwrap();
+    writer.write_all(b"head????").unwrap();
+    writer.write_all(b"the image data").unwrap();
+    assert_eq!(writer.stream_position().unwrap(), 22, "telling where it is");
+    writer.seek(SeekFrom::Start(4)).unwrap();
+    writer.write_all(b"1234").unwrap();
+    let reference = writer.commit(None).unwrap();
+    let finished = b"head1234the image data";
+    assert_eq!((reference.size, reference.hash), (22, florastack_project::ContentHash::of(finished)));
+    assert_eq!(folder.read(&reference).unwrap(), finished, "its name and hash are the finished file's");
+    // Without a seek, the hash is still taken as the bytes go.
+    let mut writer = folder.writer(Area::Cache, "output-2", "tiff").unwrap();
+    writer.write_all(finished).unwrap();
+    assert_eq!(writer.stream_position().unwrap(), 22);
+    let plain = writer.commit(None).unwrap();
+    assert_eq!((plain.size, plain.hash), (reference.size, reference.hash), "the same bytes, the same hash");
+}
+
+#[test]
 fn frame_files_are_checked_for_changes() {
     let dir = TempDir::new("frames");
     let (folder, mut project) = ProjectFolder::create(dir.path(), "Frames").unwrap();

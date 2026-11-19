@@ -220,6 +220,28 @@ fn accumulators_spilled_to_disk_give_the_same_stack() {
     assert_eq!(average(&small_scale(), &spilling, &synthetic.frames), in_memory);
     let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
     assert!(left.is_empty(), "the tile folder goes with the stack: {left:?}");
+
+    // A budget of about half the tiles' planes (16 bytes a pixel, on the canvas and the tiles' overlaps): each frame after the first reads back only the tiles beyond it, as the
+    // frames take the tiles forward and backward in turn, rather than every tile. One thread, so that the tiles are
+    // taken one at a time.
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let mut stacker = Tiled::new(WeightedAverage::new(&small_scale()).unwrap(), Tiling { budget: 200 * 150 * 16 / 2, ..spilling });
+    stacker.begin(StackShape::of(&synthetic.frames[0])).unwrap();
+    let tiles = stacker.grid().unwrap().len();
+    let mut loads = Vec::new();
+    for frame in &synthetic.frames {
+        one.install(|| stacker.add_frame(frame, &Unmonitored)).unwrap();
+        loads.push(stacker.cache_stats().unwrap().loads);
+    }
+    // Two planes a tile, each a tile of the cache: in the same order every frame read back all of them, 24.
+    let planes = 2 * tiles as u64;
+    println!("{tiles} tiles of 2 planes: planes read back after each frame {loads:?}");
+    assert_eq!(loads[0], 0, "the first frame makes the tiles' states");
+    for pair in loads.windows(2) {
+        let read = pair[1] - pair[0];
+        assert!(read > 0 && 3 * read <= 2 * planes, "a frame reads back the planes beyond the budget, not all {planes}: {loads:?}");
+    }
+    assert_eq!(one.install(|| stacker.finish(&Unmonitored)).unwrap(), in_memory);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

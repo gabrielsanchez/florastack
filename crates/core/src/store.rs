@@ -391,7 +391,7 @@ impl Drop for TempFileStore {
 /// What a [`TileCache`] has done, for tests, logs and tuning the budget.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
-    /// Accesses to tiles that were in memory.
+    /// Accesses to tiles that were in memory (`get`, `get_mut` and `take`).
     pub hits: u64,
     /// Accesses that had to read the tile back from the store.
     pub loads: u64,
@@ -572,6 +572,11 @@ impl<S: TileStore> TileCache<S> {
             Some(_) => None,
             None => Some(self.read_back::<T>(key)?),
         };
+        if image.is_some() {
+            self.stats.loads += 1;
+        } else {
+            self.stats.hits += 1;
+        }
         let Some(entry) = self.entries.remove(&key) else {
             return Ok(None);
         };

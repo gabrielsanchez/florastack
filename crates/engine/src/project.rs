@@ -174,8 +174,11 @@ pub fn write_image_in(
     image: &AnyImage,
     key: Option<String>,
 ) -> Result<CacheRef, ProjectDataError> {
-    let encoded = florastack_codecs::write(image, &lossless(image.format()), &OutputMetadata::default())?;
-    Ok(folder.as_ref().store(area, stem, "tiff", &encoded.bytes, key)?)
+    // Streamed into the file a band of rows at a time, so that the file's bytes are never whole in memory beside the
+    // image (240 MB for a 20 MP stack in f32).
+    let mut writer = folder.as_ref().writer(area, stem, "tiff")?;
+    florastack_codecs::write_to(&mut writer, &mut florastack_codecs::ImageRows(image), &lossless(image.format()), &OutputMetadata::default())?;
+    Ok(writer.commit(key)?)
 }
 
 /// Reads an image from the project's cache, after checking the file against its reference.
