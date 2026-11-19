@@ -1,14 +1,17 @@
-//! Normalized contributions of the depth compositor, including feathered coverage and its nearest-frame fallback.
-//! Two streaming passes retain three scalar planes, never one plane per input frame.
+//! Normalized contributions of the depth compositor, including feathered coverage, each pixel's blend width and the
+//! nearest-frame fallback. Two streaming passes retain three scalar planes, never one plane per input frame.
 
 use florastack_core::{ColorSpace, Image};
 
+use super::composite::{check_blend, weight};
 use crate::average::MIN_COVERAGE;
 use crate::{Patch, StackError};
 
 #[derive(Debug)]
 pub struct Contributions {
     depth: Image<f32>,
+    /// Each pixel's blend width, as the composite had it; 1 everywhere when `None`.
+    blend: Option<Image<f32>>,
     total: Image<f32>,
     nearest: Image<f32>,
     distance: Image<f32>,
@@ -35,7 +38,21 @@ impl Contributions {
         for row in distance.rows_mut() {
             row.fill(f32::INFINITY);
         }
-        Ok(Self { total: plane()?, nearest: plane()?, distance, depth, frames, added: 0 })
+        Ok(Self { total: plane()?, nearest: plane()?, distance, depth, blend: None, frames, added: 0 })
+    }
+
+    /// The contributions with each pixel's blend width (the depth map's `blend`, a plane of the depth's size), as the
+    /// composite took them.
+    pub fn with_blend(mut self, blend: Option<Image<f32>>) -> Result<Self, StackError> {
+        if let Some(b) = &blend {
+            check_blend(b, &self.depth)?;
+        }
+        self.blend = blend;
+        Ok(self)
+    }
+
+    fn width(&self, x: usize, y: usize) -> f32 {
+        self.blend.as_ref().and_then(|b| b.get(x, y, 0)).unwrap_or(1.0)
     }
 
     fn check(&self, patch: &Patch) -> Result<(), StackError> {
@@ -57,9 +74,11 @@ impl Contributions {
         }
         let i = self.added as f32;
         let c = patch.image.channels();
+        let blend = self.blend.as_ref();
         for (y, (((total, nearest), distance), depth)) in
             self.total.rows_mut().zip(self.nearest.rows_mut()).zip(self.distance.rows_mut()).zip(self.depth.rows()).enumerate()
         {
+            let widths = blend.and_then(|b| b.row(y));
             let Some(row) = patch.image.row(y) else { continue };
             for (x, ((((t, n), dist), &d), pixel)) in total.iter_mut().zip(nearest).zip(distance).zip(depth).zip(row.chunks_exact(c)).enumerate() {
                 let coverage = coverage(patch, x, y, pixel);
@@ -67,7 +86,7 @@ impl Contributions {
                     continue;
                 }
                 let delta = (i - d).abs();
-                *t += (1.0 - delta).max(0.0) * coverage;
+                *t += weight(delta, widths.and_then(|w| w.get(x)).copied().unwrap_or(1.0), coverage);
                 if delta < *dist {
                     *dist = delta;
                     *n = i;
@@ -96,7 +115,7 @@ impl Contributions {
                 out.iter_mut().zip(depth).zip(total).zip(nearest).zip(distance).zip(row.chunks_exact(c)).enumerate()
             {
                 *dst = if t > 0.0 {
-                    (1.0 - (i - d).abs()).max(0.0) * coverage(patch, x, y, pixel) / t
+                    weight((i - d).abs(), self.width(x, y), coverage(patch, x, y, pixel)) / t
                 } else if dist.is_finite() && i == n {
                     1.0
                 } else {

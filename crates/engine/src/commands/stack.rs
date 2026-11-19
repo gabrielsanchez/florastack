@@ -23,7 +23,9 @@
 //! - **Two passes** (the depth-map and wavelet methods): every frame is read twice, once to measure its focus and once
 //!   to composite, with what the second pass needs made between them: the depth map from the focus statistics, or the
 //!   wavelet method's choices of frame at every level. The depth-map method's output keeps the depth map and the
-//!   confidence map as its `depth` and `confidence` maps, 16-bit (`output.save` with `map`).
+//!   confidence map as its `depth` and `confidence` maps, 16-bit (`output.save` with `map`), the depth at full
+//!   precision as `depth-frames`, and where the depth was filled, each pixel's blend width as `depth-blend` (32-bit),
+//!   which the export's contribution maps take again.
 //! - **The CPU only** (the wavelet method, and the pyramid with a coarse limit): florastack-gpu has no kernels for
 //!   them, so they stack on the CPU even when a GPU is chosen.
 //! - **The preview** (`stack.preview`) reduces each frame to a quarter of its size as soon as it is read
@@ -169,13 +171,15 @@ fn stacking() -> Vec<CommandSpec> {
                      side: every pixel's color and contrast are its frames', for smooth tones and accurate color. Where \
                      the confidence (how clearly the sharpest frame stands out) is below the threshold, as in an \
                      out-of-focus background or on a smooth surface, the depth is filled from the confident pixels \
-                     around instead. `radius` is the estimation radius the focus is measured over, `smoothing` the \
+                     around instead, and blended from up to three frames on either side of it, which averages away \
+                     their noise and the rings frames of slightly different brightness would leave. `radius` is the estimation radius the focus is measured over, `smoothing` the \
                      reach of the depth map's smoothing, and `threshold` how the contrast threshold is chosen: `auto` \
                      (from the statistics: the pixels whose depth follows noise, or else the 10th percentile), `level` \
                      (the absolute `level`) or `percentile` (`percentile` percent of the pixels). Reads every frame \
                      twice. The output keeps the depth map (the frame index scaled to 16 bits, 0 for the first frame) \
-                     and the confidence map (0.5 at the threshold) as its `depth` and `confidence` maps, which \
-                     `output.save` writes with `map`. Where near and far detail overlap \
+                     and the confidence map (0.5 at the threshold) as its `depth` and `confidence` maps, the depth \
+                     at full precision as `depth-frames` and, where it was filled, each pixel's blend width in frames \
+                     as `depth-blend`, which `output.save` writes with `map`. Where near and far detail overlap \
                      (hair, bristles), the pyramid method is sharper. Uses the project's settings (`stack.get`), or the \
                      ones given for this stack only, and the stored alignment, as `stack.average` does. Runs as a job; \
                      the output is added in one undo step when it ends, or not at all when it is cancelled.",
@@ -1132,6 +1136,8 @@ pub(super) struct StackPlan {
     /// the order of `frames`.
     reduced: SharedReduced,
     reduced_keys: Vec<String>,
+    /// The quarter-size focus statistics kept between jobs, shared with the session.
+    focus: SharedFocus,
 }
 
 /// The frames' quarter-size copies, developed, inpainted and reduced as the previews read them (`stack.preview`,
@@ -1187,6 +1193,52 @@ impl SharedReduced {
         let mut keys: Vec<String> = memo.copies.keys().cloned().collect();
         keys.sort();
         (keys, memo.bytes)
+    }
+}
+
+/// The depth-map method's focus statistics of frames at a quarter of their size, as the previews measure them
+/// (`stack.threshold`, `stack.preview` with the depth map, and the depth maps of `adjust` and `retouch.mapFocus`),
+/// kept in the session between jobs so that a new threshold, or the same frames' depth for another command, measures
+/// no frame again (roadmap 3.3). Keyed by what they are measured from ([`StackPlan::focus_key`]); the
+/// [`SharedFocus::KEPT`] measured last are kept (12 to 16 bytes a pixel of the quarter-size canvas: 20 MB for 20 MP
+/// frames), and dropped with the project. Workers take the lock, only for a lookup or an insertion.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SharedFocus(Arc<std::sync::Mutex<KeptFocus>>);
+
+/// The focus statistics kept, each with its key, most recently used first.
+type KeptFocus = Vec<(String, Arc<FocusStats>)>;
+
+impl SharedFocus {
+    /// How many measurements are kept: the project's framing and an output's, for one stack or two.
+    const KEPT: usize = 4;
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, KeptFocus> {
+        // An entry is inserted whole or not at all, so a poisoned lock holds nothing half done.
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The statistics kept under `key`, which become the most recently used.
+    fn get(&self, key: &str) -> Option<Arc<FocusStats>> {
+        let mut kept = self.lock();
+        let i = kept.iter().position(|(k, _)| k == key)?;
+        let entry = kept.remove(i);
+        let stats = Arc::clone(&entry.1);
+        kept.insert(0, entry);
+        Some(stats)
+    }
+
+    /// Keeps `stats` under `key`, dropping the least recently used beyond [`SharedFocus::KEPT`].
+    fn keep(&self, key: String, stats: Arc<FocusStats>) {
+        let mut kept = self.lock();
+        kept.retain(|(k, _)| *k != key);
+        kept.insert(0, (key, stats));
+        kept.truncate(SharedFocus::KEPT);
+    }
+
+    /// The keys kept, most recently used first.
+    #[cfg(test)]
+    fn keys(&self) -> Vec<String> {
+        self.lock().iter().map(|(k, _)| k.clone()).collect()
     }
 }
 
@@ -1287,6 +1339,7 @@ impl StackPlan {
             tiling: session.tiling(),
             reduced: session.reduced.clone(),
             reduced_keys,
+            focus: session.reduced_focus.clone(),
         })
     }
 
@@ -1367,12 +1420,74 @@ impl StackPlan {
         self.reader.load_mask()?;
         let n = self.frames.len();
         let mut units = Units::new(n);
+        // A preview's depth map starts from the session's focus statistics, or measures and keeps them.
+        let focus = match (&self.settings, reduced) {
+            (Chosen::DepthMap(depth), true) => {
+                ctx.stage(0);
+                let depth = depth.clone();
+                Some(self.reduced_focus(&depth, ctx, &mut units)?.0)
+            }
+            _ => None,
+        };
         let (compute, tiling) = (self.compute, self.tiling.clone());
         let mut feed = Warping { plan: self, range: 0..n, reduced };
-        stack_feed(&mut feed, &settings, &tiling, &compute, ctx, ctx, &mut units, |stage, units| {
+        stack_feed(&mut feed, &settings, focus, &tiling, &compute, ctx, ctx, &mut units, |stage, units| {
             ctx.stage(stage);
             *units = Units::new(n);
         })
+    }
+
+    /// The key of the focus measured from the plan's frames with `depth`'s radius: everything it depends on, hashed.
+    fn focus_key(&self, depth: &DepthSettings) -> Result<String, CommandError> {
+        use std::fmt::Write as _;
+        let c = &self.canvas;
+        let mut text = format!(
+            "focus, FloraStack {}
+radius {}
+canvas {} {} {:?}
+",
+            env!("CARGO_PKG_VERSION"),
+            depth.radius,
+            c.width,
+            c.height,
+            c.to_master.m
+        );
+        for f in &self.frames {
+            writeln!(text, "{} {:?} {} {:?}", self.reader.frame_key(f.index)?, f.transform.m, f.gain, f.white_balance)
+                .map_err(|_| self.internal())?;
+        }
+        Ok(format!("focus {}", florastack_project::ContentHash::of(text.as_bytes())))
+    }
+
+    /// The depth-map method's focus statistics of the plan's frames at a quarter of their size, measured with
+    /// `depth` (full-size settings) reduced, on the CPU: the session's ([`SharedFocus`]) when it has them, or measured
+    /// now, each frame's progress one of `units`, and kept. Whether they were measured now.
+    pub(super) fn reduced_focus(
+        &mut self,
+        depth: &DepthSettings,
+        ctx: &dyn Monitor,
+        units: &mut Units,
+    ) -> Result<(Arc<FocusStats>, bool), CommandError> {
+        let key = self.focus_key(depth)?;
+        if let Some(stats) = self.focus.get(&key) {
+            units.done = units.total;
+            return Ok((stats, false));
+        }
+        self.reader.load_mask()?;
+        let n = self.frames.len();
+        let mut estimator = depth.reduced(PREVIEW_FACTOR as f64).estimator(&self.tiling)?;
+        let mut feed = Warping { plan: self, range: 0..n, reduced: true };
+        each(&mut feed, ctx, units, |loaded, progress, first| {
+            loaded.source(|source| {
+                if first {
+                    estimator.begin(StackShape::of(source))?;
+                }
+                Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
+            })
+        })?;
+        let stats = Arc::new(estimator.finish(ctx)?);
+        self.focus.keep(key, Arc::clone(&stats));
+        Ok((stats, true))
     }
 
     pub(super) fn ids(&self) -> Vec<FrameId> {
@@ -1544,11 +1659,14 @@ where
 /// method's focus, then the composite, with the depth map made between them; the wavelet method's choices, then the
 /// composite. `stage(i, units)` comes before pass `i` and, with `i` the number of passes,
 /// before the end, whose progress goes to `finishing`. On the GPU when `compute` resolves to one; when the GPU fails
-/// part way, the stack starts again on the CPU. The stack and, for the depth-map method, its depth map.
+/// part way, the stack starts again on the CPU. For the depth-map method, `focus` is the first pass's statistics when
+/// they are known already, measured from the same frames with the same radius: the frames are then read once. The
+/// stack and, for the depth-map method, its depth map.
 #[allow(clippy::too_many_arguments)] // The stack's inputs and the three ways its progress is reported.
 pub(super) fn stack_feed(
     feed: &mut dyn Feed,
     settings: &Chosen,
+    focus: Option<Arc<FocusStats>>,
     tiling: &Tiling,
     compute: &Compute,
     ctx: &dyn Monitor,
@@ -1562,7 +1680,7 @@ pub(super) fn stack_feed(
         } else {
             let gpu_tiling = GpuTiling { host_budget: tiling.budget, spill_dir: tiling.spill_dir.clone(), ..gpu_tiling };
             let start = units.done;
-            match stack_gpu(feed, settings, &gpu, &gpu_tiling, ctx, finishing, units, &mut stage) {
+            match stack_gpu(feed, settings, focus.clone(), &gpu, &gpu_tiling, ctx, finishing, units, &mut stage) {
                 Ok(done) => return Ok(done),
                 Err(Failed::Command(e)) => return Err(e),
                 Err(Failed::Gpu(e)) if e.is_cancelled() => return Err(CommandError::Cancelled),
@@ -1573,7 +1691,7 @@ pub(super) fn stack_feed(
             }
         }
     }
-    stack_cpu(feed, settings, tiling, ctx, finishing, units, stage)
+    stack_cpu(feed, settings, focus, tiling, ctx, finishing, units, stage)
 }
 
 /// Why `settings` stack on the CPU even with a GPU: the settings the GPU's kernels don't have.
@@ -1586,9 +1704,11 @@ fn cpu_only(settings: &Chosen) -> Option<&'static str> {
 }
 
 /// [`stack_feed`] on the CPU.
+#[allow(clippy::too_many_arguments)] // As stack_feed's.
 fn stack_cpu(
     feed: &mut dyn Feed,
     settings: &Chosen,
+    focus: Option<Arc<FocusStats>>,
     tiling: &Tiling,
     ctx: &dyn Monitor,
     finishing: &dyn Monitor,
@@ -1600,17 +1720,20 @@ fn stack_cpu(
         Chosen::Average(s) => s.stacker(tiling)?,
         Chosen::Pyramid(s) => s.stacker(tiling)?,
         Chosen::DepthMap(depth) => {
-            let mut estimator = depth.estimator(tiling)?;
-            each(feed, ctx, units, |loaded, progress, first| {
-                loaded.source(|source| {
-                    if first {
-                        estimator.begin(StackShape::of(source))?;
-                    }
-                    Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
-                })
-            })?;
-            let stats = estimator.finish(finishing)?;
-            drop(estimator);
+            let stats = if let Some(stats) = focus {
+                stats
+            } else {
+                let mut estimator = depth.estimator(tiling)?;
+                each(feed, ctx, units, |loaded, progress, first| {
+                    loaded.source(|source| {
+                        if first {
+                            estimator.begin(StackShape::of(source))?;
+                        }
+                        Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
+                    })
+                })?;
+                Arc::new(estimator.finish(finishing)?)
+            };
             ctx.checkpoint()?;
             let map = stats.resolve(depth.contrast_threshold(), depth.smoothing, None)?;
             drop(stats);
@@ -1728,6 +1851,7 @@ fn gpu_pass(stacker: &mut DeviceStacker, feed: &mut dyn Feed, ctx: &dyn Monitor,
 fn stack_gpu(
     feed: &mut dyn Feed,
     settings: &Chosen,
+    focus: Option<Arc<FocusStats>>,
     gpu: &GpuDevice,
     tiling: &GpuTiling,
     ctx: &dyn Monitor,
@@ -1744,15 +1868,18 @@ fn stack_gpu(
             GpuMethod::Pyramid { levels: s.levels, blend, channel_decisions: s.decisions == Decisions::Channels, range_limit }
         }
         Chosen::DepthMap(depth) => {
-            let mut estimator = DeviceStacker::new(gpu, GpuMethod::Focus { radius: depth.radius }, tiling.clone())?;
-            gpu_pass(&mut estimator, feed, ctx, units)?;
-            let stats = focus_stats(estimator.finish(finishing)?, depth.radius)?;
-            drop(estimator);
+            let stats = if let Some(stats) = focus {
+                stats
+            } else {
+                let mut estimator = DeviceStacker::new(gpu, GpuMethod::Focus { radius: depth.radius }, tiling.clone())?;
+                gpu_pass(&mut estimator, feed, ctx, units)?;
+                Arc::new(focus_stats(estimator.finish(finishing)?, depth.radius)?)
+            };
             ctx.checkpoint().map_err(CommandError::from)?;
             let map = stats.resolve(depth.contrast_threshold(), depth.smoothing, None)?;
             drop(stats);
             stage(1, units);
-            let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&map.depth), frames: map.frames };
+            let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&map.depth), blend: map.blend.clone(), frames: map.frames };
             let mut compositor = DeviceStacker::new(gpu, method, tiling.clone())?;
             gpu_pass(&mut compositor, feed, ctx, units)?;
             stage(2, units);
@@ -1892,10 +2019,17 @@ pub(super) fn store(
             maps.insert(confidence_map().ok_or_else(internal)?, stored);
             // The compositor is finished: normally this is the only owner, so retaining scientific precision needs
             // no extra whole-canvas allocation while the TIFF is encoded.
-            let depth = std::sync::Arc::try_unwrap(map.depth).unwrap_or_else(|shared| (*shared).clone());
+            let DepthMap { depth, blend, level, filled, .. } = map;
+            let depth = std::sync::Arc::try_unwrap(depth).unwrap_or_else(|shared| (*shared).clone());
             let stored = write_image(cache, &format!("{stem}-depth-frames"), &AnyImage::F32(depth), None)?;
             maps.insert(crate::retouch::map_name("depth-frames")?, stored);
-            Some(DepthSummary { level: map.level, filled: map.filled })
+            // Where the depth was filled, the frames blended around it, which the contribution maps take again.
+            if let Some(blend) = blend {
+                let blend = std::sync::Arc::try_unwrap(blend).unwrap_or_else(|shared| (*shared).clone());
+                let stored = write_image(cache, &format!("{stem}-depth-blend"), &AnyImage::F32(blend), None)?;
+                maps.insert(crate::retouch::map_name("depth-blend")?, stored);
+            }
+            Some(DepthSummary { level, filled })
         }
         None => None,
     };
@@ -2064,6 +2198,25 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_focus_measured_last_is_kept_and_the_least_recently_used_goes() {
+        let memo = SharedFocus::default();
+        let plane = || Image::<f32>::new(2, 2, 1, florastack_core::ColorSpace::LINEAR).unwrap();
+        let stats =
+            || Arc::new(FocusStats { frames: 2, depth: plane(), confidence: plane(), guide: plane(), covered: None, uncovered: 0, radius: 2.0 });
+        for key in ["a", "b", "c", "d"] {
+            memo.keep(key.into(), stats());
+        }
+        assert_eq!(memo.keys(), ["d", "c", "b", "a"]);
+        assert!(memo.get("a").is_some(), "a kept key is found");
+        assert_eq!(memo.keys(), ["a", "d", "c", "b"], "and becomes the most recently used");
+        memo.keep("e".into(), stats());
+        assert_eq!(memo.keys(), ["e", "a", "d", "c"], "the least recently used goes beyond the four kept");
+        memo.keep("c".into(), stats());
+        assert_eq!(memo.keys(), ["c", "e", "a", "d"], "a key kept again replaces its entry");
+        assert!(memo.get("b").is_none());
+    }
 
     #[test]
     fn reduced_frames_keep_what_fits_and_drop_unwanted_copies_first() {

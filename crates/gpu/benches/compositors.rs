@@ -169,7 +169,7 @@ fn run(method: &str, gpu: &Gpu, frame: &Image<f32>, n: usize, canvas: &Canvas) -
             let stats = to_stats(&focus, s.radius);
             let gpu_map = stats.resolve(s.contrast_threshold(), s.smoothing, None).unwrap();
             drop(stats);
-            let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&gpu_map.depth), frames: gpu_map.frames };
+            let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&gpu_map.depth), blend: gpu_map.blend.clone(), frames: gpu_map.frames };
             let got = gpu_pass(&mut GpuStacker::new(gpu, method, tiling).unwrap(), frame, n, canvas);
             (cpu_s, t.elapsed().as_secs_f64(), mean_difference(&got.image, &cpu.image))
         }

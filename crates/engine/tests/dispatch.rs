@@ -196,7 +196,8 @@ fn every_command_dispatches_from_json() {
     assert_eq!(calls.run("output.list", "{}")["outputs"][1]["method"], "pyramid");
     let depth = calls.run("stack.depthMap", r#"{ "threshold": "percentile", "percentile": 40 }"#);
     assert_eq!((depth["frames"].as_array().unwrap().len(), &depth["settings"]["percentile"]), (6, &json!(40.0)), "{depth}");
-    assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth", "depth-frames"]));
+    // The blend width where the depth was filled, which the contribution maps take again.
+    assert_eq!(calls.run("output.list", "{}")["outputs"][2]["maps"], json!(["confidence", "depth", "depth-blend", "depth-frames"]));
     let preview = calls.run("parallax.preview", &json!({"output":depth["output"],"settings":{"confidence":0.0,"maxSide":64}}).to_string());
     assert!(Path::new(preview["path"].as_str().unwrap()).is_file());
     for (command, extra) in [

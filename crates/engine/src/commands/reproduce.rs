@@ -403,6 +403,7 @@ fn rebuild(session: &Session, output: &florastack_project::Output, ctx: &crate::
         super::stack::stack_feed(
             &mut feed,
             &settings,
+            None,
             &session.tiling(),
             &session.compute(),
             ctx,

@@ -2,9 +2,11 @@
 //! depth ([`CompositeKernel`], a [`TileKernel`] that [`super::DepthMap::compositor`] runs tile by tile). See the
 //! module documentation of [`super`].
 //!
-//! Frame `i` weighs `max(0, 1 - |i - depth|)` at a pixel, times its coverage there: the two frames on either side of a
-//! depth between frames, in proportion to how close it lies to each, and the frame itself at a whole depth. Each
-//! output pixel is the weighted mean of those frames' pixels, so its color and contrast are theirs. A tile keeps the
+//! Frame `i` weighs `max(0, 1 - |i - depth| / width)` at a pixel, times its coverage there, with the pixel's blend width
+//! from the depth map (1 where its depth was measured, up to [`super::FILL_BLEND`] where it was filled): at a width of
+//! 1, the two frames on either side of a depth between frames, in proportion to how close it lies to each, and the
+//! frame itself at a whole depth; wider, the frames around it, tapering. Each output pixel is the weighted mean of those
+//! frames' pixels, so its color and contrast are theirs. A tile keeps the
 //! weighted sum and the sum of the weights, and, for wide framing, where neither frame covers the pixel, the pixel of
 //! the covering frame nearest the depth and its distance: `8 C + 8` bytes a pixel (32 for RGB).
 
@@ -29,6 +31,8 @@ pub struct CompositeKernel {
     frames: usize,
     /// The frames added to the stack in progress.
     added: usize,
+    /// Each pixel's blend width, in frames (the depth map's `blend`); 1 everywhere when `None`.
+    blend: Option<Arc<Image<f32>>>,
 }
 
 impl CompositeKernel {
@@ -50,12 +54,48 @@ impl CompositeKernel {
                 expected_height: depth.height(),
             });
         }
-        Ok(CompositeKernel { depth, frames, added: 0 })
+        Ok(CompositeKernel { depth, frames, added: 0, blend: None })
+    }
+
+    /// The kernel with each pixel's blend width, a plane of the depth's size (`None`: 1 everywhere).
+    pub fn with_blend(mut self, blend: Option<Arc<Image<f32>>>) -> Result<CompositeKernel, StackError> {
+        if let Some(b) = &blend {
+            check_blend(b, &self.depth)?;
+        }
+        self.blend = blend;
+        Ok(self)
     }
 
     pub fn depth(&self) -> &Image<f32> {
         &self.depth
     }
+
+    pub fn blend(&self) -> Option<&Image<f32>> {
+        self.blend.as_deref()
+    }
+}
+
+/// An error unless `blend` is a plane of one channel of `depth`'s size.
+pub(crate) fn check_blend(blend: &Image<f32>, depth: &Image<f32>) -> Result<(), StackError> {
+    if (blend.width(), blend.height(), blend.channels()) == (depth.width(), depth.height(), 1) {
+        return Ok(());
+    }
+    Err(StackError::Plane {
+        what: "blend width",
+        width: blend.width(),
+        height: blend.height(),
+        channels: blend.channels(),
+        expected_width: depth.width(),
+        expected_height: depth.height(),
+    })
+}
+
+/// The weight of a frame `distance` frames from a pixel's depth, with the pixel's blend `width` and coverage `k`. A
+/// width of 1 (or less, or not a number) divides nothing, so that it is `max(0, 1 - distance)` exactly.
+#[inline]
+pub(crate) fn weight(distance: f32, width: f32, k: f32) -> f32 {
+    let reach = if width > 1.0 { distance / width } else { distance };
+    (1.0 - reach).max(0.0) * k.min(1.0)
 }
 
 /// A tile's four planes: the weighted sum of the frames' pixels (`C` channels), the sum of the weights, the nearest
@@ -108,6 +148,7 @@ impl TileKernel for CompositeKernel {
             let cov = coverage.and_then(|k| k.row(inner.y + j));
             let pixels = pixels.get(inner.x * c..(inner.x + inner.width) * c).unwrap_or(&[]);
             let depth = depth.get(view.inner.x..view.inner.x + view.inner.width).unwrap_or(&[]);
+            let blend = self.blend.as_ref().and_then(|b| b.row(view.inner.y + j)).and_then(|r| r.get(view.inner.x..view.inner.x + view.inner.width));
             let samples = sum.chunks_exact_mut(c).zip(total.iter_mut()).zip(nearest.chunks_exact_mut(c)).zip(nearest_distance.iter_mut());
             for (x, ((((sum, total), nearest), nearest_distance), (pixel, &d))) in samples.zip(pixels.chunks_exact(c).zip(depth)).enumerate() {
                 let k = cov.map_or(1.0, |r| r.get(inner.x + x).copied().unwrap_or(0.0));
@@ -115,7 +156,7 @@ impl TileKernel for CompositeKernel {
                     continue;
                 }
                 let distance = (i - d).abs();
-                let weight = (1.0 - distance).max(0.0) * k.min(1.0);
+                let weight = weight(distance, blend.and_then(|b| b.get(x)).copied().unwrap_or(1.0), k);
                 if weight > 0.0 {
                     for (s, &v) in sum.iter_mut().zip(pixel) {
                         *s += weight * v.clamp(-MAX_SAMPLE, MAX_SAMPLE);

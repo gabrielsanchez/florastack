@@ -127,6 +127,7 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
     let frame_count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
     let cache = session.cache_dir()?;
     let depth_ref = output.maps.get(&crate::retouch::map_name("depth-frames")?).cloned();
+    let blend_ref = output.maps.get(&crate::retouch::map_name("depth-blend")?).cloned();
     let total = planned.len() + 1;
     let job = JobPlan::new(move |ctx| {
         let mut publication = Publication::default();
@@ -138,7 +139,9 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
             let reference = depth_ref.as_ref().ok_or_else(|| scientific::unavailable("missing full-precision depth"))?;
             let depth = scientific::linear(crate::project::read_image(&cache, reference)?)?;
             let size = (depth.width(), depth.height());
-            let mut weights = florastack_stack::depth::Contributions::new(depth, direct.len())?;
+            // An output made before blend widths has none: it was composited from the two frames around each depth.
+            let blend = blend_ref.as_ref().map(|r| scientific::linear(crate::project::read_image(&cache, r)?)).transpose()?;
+            let mut weights = florastack_stack::depth::Contributions::new(depth, direct.len())?.with_blend(blend)?;
             let loader = loader.as_mut().ok_or_else(|| scientific::unavailable("missing input reader"))?;
             for (i, &frame) in direct.iter().enumerate() {
                 ctx.step(i as u64, direct.len() as u64)?;

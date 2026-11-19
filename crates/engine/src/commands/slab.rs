@@ -433,7 +433,7 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
             let (range, settings) = (slabs.get(j).map(|s| s.range.clone()).ok_or_else(|| plan.internal())?, plan.settings.clone());
             let mut feed = Warping { plan: &mut plan, range, reduced: false };
             let (compute, tiling) = (feed.plan.compute, feed.plan.tiling.clone());
-            let (stacked, depth) = stack_feed(&mut feed, &settings, &tiling, &compute, ctx, &quiet, &mut units, |_, _| {})?;
+            let (stacked, depth) = stack_feed(&mut feed, &settings, None, &tiling, &compute, ctx, &quiet, &mut units, |_, _| {})?;
             let stored = store_slab(&plan, j, stacked, depth, &slabs)?;
             *made.get_mut(j).ok_or_else(|| plan.internal())? = Some(stored);
         }
@@ -453,7 +453,7 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
         let mut units = Units::new(passes * sources.len());
         let mut feed = Cached { cache: &plan.cache, sources: &sources, size: (width, height) };
         let quiet = Quiet(ctx);
-        let (stacked, depth) = stack_feed(&mut feed, &final_settings, &plan.tiling, &plan.compute, ctx, &quiet, &mut units, |i, _| {
+        let (stacked, depth) = stack_feed(&mut feed, &final_settings, None, &plan.tiling, &plan.compute, ctx, &quiet, &mut units, |i, _| {
             if i == passes {
                 ctx.stage(2);
             }

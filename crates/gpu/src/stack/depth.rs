@@ -106,19 +106,29 @@ impl TileMethod for Focus {
 
 pub(crate) struct Composite {
     depth: Arc<Image<f32>>,
+    blend: Option<Arc<Image<f32>>>,
     frames: usize,
     added: usize,
 }
 
 impl Composite {
-    pub(crate) fn new(depth: Arc<Image<f32>>, frames: usize) -> Result<Composite, GpuError> {
+    pub(crate) fn new(depth: Arc<Image<f32>>, blend: Option<Arc<Image<f32>>>, frames: usize) -> Result<Composite, GpuError> {
         if frames == 0 || frames > MAX_FRAMES {
             return Err(GpuError::shape("the frames of a depth map", frames, format!("from 1 to {MAX_FRAMES}")));
         }
         if depth.channels() != 1 {
             return Err(GpuError::shape("a depth map", format!("{} channels", depth.channels()), "1 channel"));
         }
-        Ok(Composite { depth, frames, added: 0 })
+        if let Some(b) = &blend
+            && (b.width(), b.height(), b.channels()) != (depth.width(), depth.height(), 1)
+        {
+            return Err(GpuError::shape(
+                "a depth map's blend width",
+                format!("{}x{} with {} channels", b.width(), b.height(), b.channels()),
+                format!("the depth's {}x{} with 1 channel", depth.width(), depth.height()),
+            ));
+        }
+        Ok(Composite { depth, blend, frames, added: 0 })
     }
 }
 
@@ -144,18 +154,25 @@ impl TileMethod for Composite {
         let (w, h, c) = (view.inner.width, view.inner.height, shape.channels);
         let distance = gpu.plane("the nearest frame's distance", w, h, 1)?;
         fill(batch, &distance, 3.0e38)?;
-        let depth = gpu.upload_rect(&self.depth, Rect::new(view.inner.x, view.inner.y, w, h))?;
-        Ok(vec![
+        let rect = Rect::new(view.inner.x, view.inner.y, w, h);
+        let depth = gpu.upload_rect(&self.depth, rect)?;
+        let mut planes = vec![
             gpu.plane("the weighted sum", w, h, c)?,
             gpu.plane("the sum of weights", w, h, 1)?,
             gpu.plane("the nearest frame's pixels", w, h, c)?,
             distance,
             depth,
-        ])
+        ];
+        if let Some(blend) = &self.blend {
+            planes.push(gpu.upload_rect(blend, rect)?);
+        }
+        Ok(planes)
     }
 
     fn fold(&self, batch: &mut Batch<'_>, state: &[Plane], patch: &Patch, view: &View, shape: Shape) -> Result<(), GpuError> {
-        let [sum, total, nearest, distance, depth] = state else { return Err(GpuError::shape("the composite's state", state.len(), "5 planes")) };
+        let [sum, total, nearest, distance, depth, blend @ ..] = state else {
+            return Err(GpuError::shape("the composite's state", state.len(), "5 or 6 planes"));
+        };
         if view.frame >= self.frames {
             return Err(GpuError::shape("the frames composited", view.frame + 1, format!("the depth map's {}", self.frames)));
         }
@@ -163,8 +180,19 @@ impl TileMethod for Composite {
         let given = patch.coverage.as_ref().map_or(Bind::Buffer(gpu.dummy()), Bind::Plane);
         let (ox, oy) = view.offset();
         let (iw, ih) = (view.inner.width, view.inner.height);
-        let params = Params::new().u(iw).u(ih).u(shape.channels).u(view.region.width).u(ox).u(oy).flag(patch.coverage.is_some()).f(index(view.frame));
-        let binds = [(&patch.image).into(), given, depth.into(), sum.into(), total.into(), nearest.into(), distance.into()];
+        let blend = blend.first();
+        let params = Params::new()
+            .u(iw)
+            .u(ih)
+            .u(shape.channels)
+            .u(view.region.width)
+            .u(ox)
+            .u(oy)
+            .flag(patch.coverage.is_some())
+            .f(index(view.frame))
+            .flag(blend.is_some());
+        let widths = blend.map_or(Bind::Buffer(gpu.dummy()), Bind::Plane);
+        let binds = [(&patch.image).into(), given, depth.into(), sum.into(), total.into(), nearest.into(), distance.into(), widths];
         batch.run(Kernel::Composite, &params, &binds, Groups::Plane { width: iw, height: ih })
     }
 
@@ -181,7 +209,9 @@ impl TileMethod for Composite {
     }
 
     fn result(&self, batch: &mut Batch<'_>, state: &[Plane], view: &View, shape: Shape) -> Result<(Plane, Plane), GpuError> {
-        let [sum, total, nearest, distance, _] = state else { return Err(GpuError::shape("the composite's state", state.len(), "5 planes")) };
+        let [sum, total, nearest, distance, _, ..] = state else {
+            return Err(GpuError::shape("the composite's state", state.len(), "5 or 6 planes"));
+        };
         let gpu = batch.gpu();
         let (w, h) = (view.inner.width, view.inner.height);
         let out = gpu.plane("the composited tile", w, h, shape.channels)?;

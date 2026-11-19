@@ -264,6 +264,7 @@ fn the_depth_map_agrees_with_the_cpu() {
     let (w, h) = (150, 110);
     let frames = frames(w, h, 8, 9);
     let (align, canvas) = alignment(w, h, frames.len());
+    let mut widened = false;
     for settings in [DepthSettings::default(), DepthSettings { radius: 5.0, ..DepthSettings::default() }] {
         // Pass 1: the statistics.
         let mut estimator = settings.estimator(&Tiling::default()).unwrap();
@@ -295,12 +296,14 @@ fn the_depth_map_agrees_with_the_cpu() {
             let (max, mean, over) = apart(&plane(2), &want.guide, 1e-4);
             assert!(over < 5e-3 && mean < 1e-4, "{settings:?} tiles {tile}: guide max {max}, mean {mean}, over {over}");
         }
-        // Pass 2 from the CPU's depth map, so that only the composite is compared.
+        // Pass 2 from the CPU's depth map, so that only the composite is compared, with its blend width where the
+        // depth was filled.
         let map = want.resolve(Threshold::Auto, settings.smoothing, None).unwrap();
+        widened |= map.blend.is_some();
         let mut compositor = map.compositor(&Tiling::default()).unwrap();
         let composite = stack(&mut compositor, &sources, &Unmonitored).unwrap();
         for tile in [1536, 64] {
-            let method = Method::Composite { depth: Arc::clone(&map.depth), frames: map.frames };
+            let method = Method::Composite { depth: Arc::clone(&map.depth), blend: map.blend.clone(), frames: map.frames };
             let mut stacker = GpuStacker::new(gpu, method, tiling(tile, 1 << 30)).unwrap();
             let got = gpu_warped(&mut stacker, &frames, &align, &canvas);
             same_coverage(&got, &composite);
@@ -309,6 +312,7 @@ fn the_depth_map_agrees_with_the_cpu() {
             assert!(mean < 1e-6 && over < 2e-3, "{settings:?} tiles {tile}: composite max {max}, mean {mean}, over {over}");
         }
     }
+    assert!(widened, "some depth was filled, so that the blend width is compared too");
 }
 
 #[test]
@@ -320,7 +324,9 @@ fn hostile_settings_and_frames_are_errors() {
     assert!(GpuStacker::new(gpu, Method::Pyramid { levels: 11, blend: None, channel_decisions: false, range_limit: 1.0 }, tiling.clone()).is_err());
     assert!(GpuStacker::new(gpu, Method::Focus { radius: f64::INFINITY }, tiling.clone()).is_err());
     let depth = Arc::new(Image::new(10, 10, 1, ColorSpace::LINEAR).unwrap());
-    assert!(GpuStacker::new(gpu, Method::Composite { depth: Arc::clone(&depth), frames: 0 }, tiling.clone()).is_err());
+    assert!(GpuStacker::new(gpu, Method::Composite { depth: Arc::clone(&depth), blend: None, frames: 0 }, tiling.clone()).is_err());
+    let narrow = Arc::new(Image::new(9, 10, 1, ColorSpace::LINEAR).unwrap());
+    assert!(GpuStacker::new(gpu, Method::Composite { depth: Arc::clone(&depth), blend: Some(narrow), frames: 2 }, tiling.clone()).is_err());
     let mut stacker = GpuStacker::new(gpu, Method::Average { radius: 1.0, smoothing: 1.0, power: 2.0 }, tiling.clone()).unwrap();
     let frame = Image::new(20, 10, 3, ColorSpace::LINEAR).unwrap();
     assert!(stacker.add_frame(&Frame::Canvas { image: &frame, coverage: None }, &Unmonitored).is_err(), "no stack begun");
@@ -339,6 +345,6 @@ fn hostile_settings_and_frames_are_errors() {
     assert!(stacker.add_frame(&Frame::Warp { image: &frame, geometry: broken }, &Unmonitored).is_err());
     assert!(stacker.finish(&Unmonitored).is_err(), "refused frames are never added: a stack of none");
     // A composite of another canvas's depth map.
-    let mut composite = GpuStacker::new(gpu, Method::Composite { depth, frames: 2 }, tiling).unwrap();
+    let mut composite = GpuStacker::new(gpu, Method::Composite { depth, blend: None, frames: 2 }, tiling).unwrap();
     assert!(composite.begin(20, 10, 3).is_err());
 }

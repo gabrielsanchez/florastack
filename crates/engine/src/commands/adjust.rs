@@ -8,11 +8,11 @@ use florastack_core::{AnyImage, Image, Monitor};
 use florastack_edit::{Adjustments, Component, Mask, Op, Renderer, Request, Shape, Size, Stroke};
 use florastack_project::{Area, CacheDir, CacheRef, Edit, Output, OutputId};
 use florastack_raw::Quality;
-use florastack_stack::{DepthSettings, PREVIEW_FACTOR, StackShape};
+use florastack_stack::{DepthSettings, PREVIEW_FACTOR};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::stack::{Chosen, StackPlan, Units, Warping, each};
+use super::stack::{Chosen, StackPlan, Units};
 use crate::adjust::{AdjustChanges, AdjustSession, FOCUS_DEPTH, adjustments, renderer};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobPlan, Lane, commit};
@@ -492,22 +492,10 @@ impl DepthSource {
                         reason: "the frames, as aligned now, don't make this output's canvas, so its depth can't be measured: they were aligned or framed again since it was stacked".to_owned(),
                     });
                 }
-                plan.reader.load_mask()?;
-                let n = plan.frames.len();
-                let mut units = Units::new(n);
+                let mut units = Units::new(plan.frames.len());
                 #[allow(clippy::cast_precision_loss)] // A small constant.
                 let reduced = depth.reduced(PREVIEW_FACTOR as f64);
-                let mut estimator = reduced.estimator(&plan.tiling)?;
-                let mut feed = Warping { plan: &mut plan, range: 0..n, reduced: true };
-                each(&mut feed, ctx, &mut units, |loaded, progress, first| {
-                    loaded.source(|source| {
-                        if first {
-                            estimator.begin(StackShape::of(source))?;
-                        }
-                        Ok::<_, CommandError>(estimator.add_frame(source, progress)?)
-                    })
-                })?;
-                let stats = estimator.finish(ctx)?;
+                let (stats, _) = plan.reduced_focus(&depth, ctx, &mut units)?;
                 let map = stats.resolve(reduced.contrast_threshold(), reduced.smoothing, None)?.depth_u16()?;
                 let name = format!("{FOCUS_DEPTH}-{}", output.get());
                 let written = crate::project::write_image_in(&plan.cache, Area::Cache, &name, &AnyImage::U16(map.clone()), None)?;
