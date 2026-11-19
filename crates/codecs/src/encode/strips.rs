@@ -3,13 +3,14 @@
 //!
 //! - Horizontal differencing (TIFF 6.0, section 14, predictor 2) for integer samples: each sample minus the same
 //!   channel of the pixel before it, row by row, wrapping.
-//! - The floating-point predictor (Adobe Photoshop TIFF Technical Note 3, predictor 3) for floats: each row's
-//!   samples split into byte planes, most significant byte first, then horizontal differencing of those bytes with
-//!   the pixel's sample count as the distance.
+//! - The floating-point predictor (Adobe Photoshop TIFF Technical Note 3, predictor 3) for floats, 32-bit or 16-bit
+//!   ([`half_strips`]): each row's samples split into byte planes, most significant byte first, then horizontal
+//!   differencing of those bytes with the pixel's sample count as the distance.
 //! - Deflate as zlib streams (compression 8, "Adobe Deflate") with `miniz_oxide`; LZW with TIFF's code-size switch one
 //!   code early (compression 5) with weezl.
 
 use florastack_core::{Image, Sample};
+use half::f16;
 use rayon::prelude::*;
 
 use crate::error::{BackendError, CodecError};
@@ -23,7 +24,7 @@ const STRIP_BYTES: usize = 256 << 10;
 const DEFLATE_LEVEL: u8 = 6;
 
 /// A sample type as the TIFF writer stores it.
-pub(crate) trait TiffSample: Sample {
+pub(crate) trait TiffSample: Copy + Send + Sync {
     const FLOAT: bool;
     fn put_le(self, out: &mut Vec<u8>);
     fn put_be(self, out: &mut Vec<u8>);
@@ -66,6 +67,19 @@ impl TiffSample for f32 {
         out.extend_from_slice(&self.to_be_bytes());
     }
     fn minus(self, _prev: f32) -> f32 {
+        self
+    }
+}
+
+impl TiffSample for f16 {
+    const FLOAT: bool = true;
+    fn put_le(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
+    fn put_be(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_be_bytes());
+    }
+    fn minus(self, _prev: f16) -> f16 {
         self
     }
 }
@@ -131,19 +145,45 @@ fn row_bytes<T: TiffSample>(row: &[T], channels: usize, predictor: u16, out: &mu
 }
 
 /// The image's rows as compressed strips of `rows` rows each.
-pub(crate) fn strips<T: TiffSample>(image: &Image<T>, rows: usize, compression: TiffCompression, format: Format) -> Result<Vec<Vec<u8>>, CodecError> {
+pub(crate) fn strips<T: TiffSample + Sample>(
+    image: &Image<T>,
+    rows: usize,
+    compression: TiffCompression,
+    format: Format,
+) -> Result<Vec<Vec<u8>>, CodecError> {
+    strips_of(image, rows, compression, format, row_bytes::<T>, (size_of::<T>(), predictor::<T>(compression)))
+}
+
+/// The image's rows as compressed strips of `rows` rows each, its samples stored as 16-bit floats: rounded to the
+/// nearest, values beyond 65504 becoming infinities.
+pub(crate) fn half_strips(image: &Image<f32>, rows: usize, compression: TiffCompression, format: Format) -> Result<Vec<Vec<u8>>, CodecError> {
+    let to_half = |row: &[f32], channels: usize, predictor: u16, raw: &mut Vec<u8>| {
+        let half: Vec<f16> = row.iter().map(|&v| f16::from_f32(v)).collect();
+        row_bytes(&half, channels, predictor, raw);
+    };
+    strips_of(image, rows, compression, format, to_half, (size_of::<f16>(), predictor::<f16>(compression)))
+}
+
+/// The strips of `image`'s rows, each row stored by `put` as samples of `size` bytes through `predictor`.
+fn strips_of<T: Sample>(
+    image: &Image<T>,
+    rows: usize,
+    compression: TiffCompression,
+    format: Format,
+    put: impl Fn(&[T], usize, u16, &mut Vec<u8>) + Sync,
+    (size, predictor): (usize, u16),
+) -> Result<Vec<Vec<u8>>, CodecError> {
     let channels = image.channels();
-    let predictor = predictor::<T>(compression);
     let height = image.height();
     let rows = rows.max(1);
     (0..height.div_ceil(rows))
         .into_par_iter()
         .map(|s| {
             let first = s * rows;
-            let mut raw = Vec::with_capacity(rows * image.width() * channels * std::mem::size_of::<T>());
+            let mut raw = Vec::with_capacity(rows * image.width() * channels * size);
             for y in first..(first + rows).min(height) {
                 if let Some(row) = image.row(y) {
-                    row_bytes(row, channels, predictor, &mut raw);
+                    put(row, channels, predictor, &mut raw);
                 }
             }
             compress(&raw, compression).ok_or_else(|| CodecError::encode(format, BackendError::message("the LZW encoder failed")))

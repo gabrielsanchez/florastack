@@ -3,7 +3,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use florastack_codecs::{BitDepth, OutputMetadata, OutputProfile, OutputSpec};
+use florastack_codecs::{OutputMetadata, OutputProfile, OutputSpec};
 use florastack_core::{AnyImage, Monitor};
 use florastack_project::{Edit, FrameId, Input, LayerId, MapName, OutputId, ProjectError, Value};
 use schemars::JsonSchema;
@@ -454,9 +454,9 @@ impl Pixels {
                     )
                 })?
             }
-            (None, Some(extended)) if spec.extended_range && spec.depth == BitDepth::F32 => extended,
+            (None, Some(extended)) if spec.extended_range && spec.depth.is_float() => extended,
             (None, Some(_)) if spec.extended_range => {
-                notes.push("extended range is kept in 32-bit float files only: this file holds the output brought into [0, 1]".to_owned());
+                notes.push("extended range is kept in float files only: this file holds the output brought into [0, 1]".to_owned());
                 output.image.clone()
             }
             (None, _) => output.image.clone(),

@@ -12,7 +12,7 @@ use crate::i18n::{tr, tr_args};
 
 /// The formats, as the settings name them, with their labels and the bit depths each holds (the first its default).
 const FORMATS: [(&str, &str, &[&str]); 5] = [
-    ("tiff", "TIFF", &["u16", "u8", "f32"]),
+    ("tiff", "TIFF", &["u16", "u8", "f32", "f16"]),
     ("png", "PNG", &["u16", "u8"]),
     ("jpeg", "JPEG", &["u8"]),
     ("dng", "DNG", &["u16", "f32"]),
@@ -20,7 +20,8 @@ const FORMATS: [(&str, &str, &[&str]); 5] = [
 ];
 
 /// The bit depths, as the settings name them, with their labels' keys.
-const DEPTHS: [(&str, &str); 3] = [("u8", "export-depth-8"), ("u16", "export-depth-16"), ("f32", "export-depth-32")];
+const DEPTHS: [(&str, &str); 4] =
+    [("u8", "export-depth-8"), ("u16", "export-depth-16"), ("f32", "export-depth-32"), ("f16", "export-depth-16-float")];
 
 /// The color profiles offered, as the settings name them, with their labels' and tooltips' keys.
 fn profiles() -> [(Value, &'static str, &'static str); 4] {
@@ -213,7 +214,7 @@ fn format(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         }
         _ => {}
     }
-    toggle(app, ui, "extended_range", "export-extended-range", "tip-extended-range", depth == "f32");
+    toggle(app, ui, "extended_range", "export-extended-range", "tip-extended-range", depth == "f32" || depth == "f16");
 }
 
 /// The color profile.

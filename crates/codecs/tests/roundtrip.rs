@@ -35,18 +35,31 @@ fn png_keeps_every_sample_at_8_and_16_bits() {
 
 #[test]
 fn tiff_keeps_every_sample_at_every_depth_and_compression() {
+    let half = |image: &Image<f32>| {
+        let samples = image.as_raw().iter().map(|&v| half::f16::from_f32(v).to_f32()).collect();
+        Image::from_vec(image.width(), image.height(), image.channels(), image.color_space().clone(), samples).unwrap()
+    };
     for compression in [TiffCompression::None, TiffCompression::Lzw, TiffCompression::Deflate] {
         for channels in 1..=4 {
             let images = [
                 (AnyImage::U8(pattern_u8(37, 23, channels)), BitDepth::U8),
                 (AnyImage::U16(pattern_u16(37, 23, channels)), BitDepth::U16),
                 (AnyImage::F32(pattern_f32(37, 23, channels)), BitDepth::F32),
+                (AnyImage::F32(pattern_f32(37, 23, channels)), BitDepth::F16),
             ];
             for (image, depth) in images {
                 let encoded = write(&image, &spec(OutputFormat::Tiff { compression }, depth), &OutputMetadata::default()).unwrap();
                 let back = read(&encoded.bytes, &ReadOptions::default()).unwrap();
-                assert_eq!(back.image, image, "{compression:?}, {channels} channels, {depth}");
-                assert_eq!(back.info.float, depth == BitDepth::F32);
+                // Half floats keep each sample to the nearest half float.
+                let kept = if depth == BitDepth::F16 { AnyImage::F32(half(image.as_image::<f32>().unwrap())) } else { image };
+                assert_eq!(back.image, kept, "{compression:?}, {channels} channels, {depth}");
+                assert_eq!(back.info.float, depth.is_float());
+                let bits = match depth {
+                    BitDepth::U8 => 8,
+                    BitDepth::F32 => 32,
+                    _ => 16,
+                };
+                assert_eq!(back.info.bits_per_sample, bits);
                 // The tiff crate reads the file too, on its own.
                 let mut d = tiff::decoder::Decoder::new(Cursor::new(&encoded.bytes)).unwrap();
                 assert_eq!(d.dimensions().unwrap(), (37, 23));
@@ -67,6 +80,13 @@ fn float_files_keep_extended_range_and_special_values_bit_for_bit() {
         let back = round_trip(&image, spec(format, BitDepth::F32));
         assert_eq!(bits(&back.image), bits(&image), "{format:?}");
     }
+    // 16-bit floats keep the range and the special values, each rounded to the nearest half float: beyond 65504 an
+    // infinity, and the smallest values subnormal or 0.
+    let back = round_trip(&image, spec(OutputFormat::Tiff { compression: TiffCompression::Deflate }, BitDepth::F16));
+    let halves =
+        |img: &AnyImage| img.as_image::<f32>().unwrap().as_raw().iter().map(|&v| half::f16::from_f32(v).to_f32().to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&back.image), halves(&image));
+    assert_eq!(back.image.as_image::<f32>().unwrap().as_raw()[3], f32::INFINITY, "1.5e6 is beyond the half floats");
     // Without "retain extended range", float output is clipped to [0, 1].
     let clipped =
         round_trip(&image, OutputSpec { extended_range: false, ..spec(OutputFormat::Tiff { compression: TiffCompression::None }, BitDepth::F32) });
@@ -292,6 +312,7 @@ fn files_written_in_bands_are_the_files_written_whole() {
         (OutputFormat::Tiff { compression: TiffCompression::None }, BitDepth::U16, OutputProfile::Srgb),
         // A conversion of primaries and to linear float, band by band.
         (OutputFormat::Tiff { compression: TiffCompression::Lzw }, BitDepth::F32, OutputProfile::Wide(florastack_codecs::WideSpace::ProPhoto)),
+        (OutputFormat::Tiff { compression: TiffCompression::Deflate }, BitDepth::F16, OutputProfile::Input),
         (
             OutputFormat::Dng { compression: DngCompression::LosslessJpeg, look: DngLook::Rendered, preview: true },
             BitDepth::U16,
@@ -350,8 +371,11 @@ fn every_writable_format_rejects_depths_it_cannot_store() {
     for (format, depth) in [
         (OutputFormat::Jpeg { quality: 90, subsampling: ChromaSubsampling::S444 }, BitDepth::U16),
         (OutputFormat::Png, BitDepth::F32),
+        (OutputFormat::Png, BitDepth::F16),
+        (OutputFormat::OpenExr { compression: ExrCompression::Zip, half: true }, BitDepth::F16),
         (OutputFormat::OpenExr { compression: ExrCompression::Zip, half: false }, BitDepth::U16),
         (OutputFormat::Dng { compression: DngCompression::Uncompressed, look: DngLook::Raw, preview: true }, BitDepth::U8),
+        (OutputFormat::Dng { compression: DngCompression::Deflate, look: DngLook::Raw, preview: true }, BitDepth::F16),
     ] {
         assert!(matches!(write(&image, &spec(format, depth), &OutputMetadata::default()), Err(CodecError::Depth { .. })), "{format:?} {depth}");
     }

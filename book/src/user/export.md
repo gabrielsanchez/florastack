@@ -11,7 +11,7 @@ folder. The settings are the project's, saved with it, and a [preset](#presets) 
 | Setting | Choices |
 |---|---|
 | **Format** | **TIFF** for editing; **PNG** for the web without loss; **JPEG** for sharing; **DNG** to develop the stack as a RAW file in a raw converter; **OpenEXR** for compositing, in 32-bit float |
-| **Bit depth** | 16 bits keep smooth gradients through later editing; 8 bits are enough for a final picture; 32-bit float keeps every value and the extended range. Each format offers what it can hold |
+| **Bit depth** | 16 bits keep smooth gradients through later editing; 8 bits are enough for a final picture; 32-bit float keeps every value and the extended range; 16-bit float (TIFF) keeps the extended range too, to about three significant digits, in a file about 2.5 times smaller than 32-bit float. Each format offers what it can hold |
 | **Compression** | TIFF: Deflate or LZW (smaller, lossless) or none (opens everywhere). OpenEXR: ZIP, PIZ (noisy images) and others, all lossless, and half floats. DNG: lossless JPEG for 16-bit files and Deflate for 32-bit float ones, or none, and **Embed a preview** (on by default), a small picture at the front of the file that file browsers show without developing it. JPEG: quality (90 to 95 to keep, 75 to 85 for the web) and color detail |
 | **Color profile** | **Keep the frames' profile** (the default: what they were shot or exported in), **sRGB** (the safest for sharing), or a wide gamut (**ProPhoto RGB** or **Rec. 2020**) that keeps saturated colors for editing |
 | **Copy metadata from frame** | The camera, lens, exposure, date, place and keywords of that frame (counted from 1 in the frame list), in the file |
@@ -20,7 +20,7 @@ folder. The settings are the project's, saved with it, and a [preset](#presets) 
 
 A 32-bit float DNG holds white at 1 and needs a raw converter that reads DNG 1.4 or later. TIFF and DNG files are written a part at a time, so exporting takes little memory beyond the output itself; one whose samples could pass 4 GB is written as BigTIFF, which most current software reads but older software may not.
 
-**Retain extended range** (32-bit float only) keeps the values the pyramid pushed beyond black and white, before they
+**Retain extended range** (float files only) keeps the values the pyramid pushed beyond black and white, before they
 were brought back into range. The tab shows the size the export will take, and the name of the main file; an export
 that would replace a file stops and says which, unless **Replace files that exist** is on.
 

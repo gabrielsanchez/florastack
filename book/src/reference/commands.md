@@ -1239,7 +1239,7 @@ Parameters:
 | `stepMicrometers` | number, from -1000000 to 1000000 | Signed physical spacing in micrometers for rail mode; zero for lens mode. Default: `0.0`. |
 | `trigger` | `"camera"` \| `"controller"` \| `"external"` | **Required.** camera downloads, controller triggers the DIY shutter, external waits for a tethered image. |
 | `watch` | object | **Required.** Watch-folder ingest, preview, preset and final output settings. idleSeconds applies only after shooting ends. |
-| `watch.idleSeconds` | number, from 0.1 to 86400 | Seconds without a new or changed frame before finalization; waits at least settleMs too. Default: `5.0`. |
+| `watch.idleSeconds` | number, from 0.1 to 86400 | Seconds without a new or changed frame before finalization, counted from the latest frame's preview; waits at least settleMs too. Default: `5.0`. |
 | `watch.input` | string | **Required.** Folder populated by a tethered camera or its capture application. |
 | `watch.method` | `"pyramid"` \| `"depth-map"` \| `"average"` \| `"wavelet"` | Method used for the running preview and the final output. Default: `"pyramid"`. |
 | `watch.output` | string | **Required.** Folder for the saved project, TIFF and summary.csv, outside input. |
@@ -1690,7 +1690,7 @@ Parameters:
 | `settings.calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
 | `settings.confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `settings.contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
-| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
+| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` \| `"f16"` | `u8`, `u16`, `f32` or `f16`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16, 32-bit float or 16-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
 | `settings.depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
 | `settings.dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
@@ -1826,7 +1826,7 @@ Parameters:
 | `settings.calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
 | `settings.confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `settings.contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
-| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
+| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` \| `"f16"` | `u8`, `u16`, `f32` or `f16`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16, 32-bit float or 16-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
 | `settings.depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
 | `settings.dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
@@ -1882,7 +1882,7 @@ Parameters:
 | `calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
 | `confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
-| `depth` | `"u8"` \| `"u16"` \| `"f32"` | `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
+| `depth` | `"u8"` \| `"u16"` \| `"f32"` \| `"f16"` | `u8`, `u16`, `f32` or `f16`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16, 32-bit float or 16-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
 | `depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
 | `dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
 | `dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
@@ -2155,7 +2155,7 @@ Parameters:
 | `overwrite` | boolean | Replace the file if it exists. Default: `false`. |
 | `path` | string | **Required.** The file to write. |
 | `spec` | object | **Required.** The format, its options, the bit depth and the color profile. |
-| `spec.depth` | `"u8"` \| `"u16"` \| `"f32"` | **Required.** The sample type of an output file. |
+| `spec.depth` | `"u8"` \| `"u16"` \| `"f32"` \| `"f16"` | **Required.** The sample type of an output file. |
 | `spec.extended_range` | boolean | Keep float values outside `[0, 1]` (the "retain extended range" option, for people who tone-map themselves). Integer files always clip. Default: `false`. |
 | `spec.format` | object | **Required.** An output format with its options. |
 | `spec.profile` | `"input"` \| `"srgb"` \| object \| `"untagged"` | The color profile of an output file. Default: `"input"`. |
@@ -3763,7 +3763,7 @@ Examples:
 
 **Watch capture folder.** Ingests settled frames, aligns arrivals and updates a preview until capture goes quiet.
 
-Watches files directly inside input, including existing images, using native events plus polling. A frame must have unchanged size and modification time for settleMs and decode successfully, with unchanged metadata before and after the read. Truncated or locked files are retried until the quiet timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend the neighbor alignment chain; job events expose the latest preview path and frame count. After idleSeconds without a new or changed frame, runs final alignment and exports one stack and its project plus summary.csv. Waits for the first frame indefinitely. Output must be outside input. Template tokens are the same as batch.run; preset depth-map thresholds need no interaction.
+Watches files directly inside input, including existing images, using native events plus polling. A frame must have unchanged size and modification time for settleMs and decode successfully, with unchanged metadata before and after the read. Truncated or locked files are retried until the quiet timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend the neighbor alignment chain; job events expose the latest preview path and frame count. After idleSeconds without a new or changed frame, counted from the latest frame's preview, runs final alignment and exports one stack and its project plus summary.csv. Waits for the first frame indefinitely. Output must be outside input. Template tokens are the same as batch.run; preset depth-map thresholds need no interaction.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3773,7 +3773,7 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
-| `idleSeconds` | number, from 0.1 to 86400 | Seconds without a new or changed frame before finalization; waits at least settleMs too. Default: `5.0`. |
+| `idleSeconds` | number, from 0.1 to 86400 | Seconds without a new or changed frame before finalization, counted from the latest frame's preview; waits at least settleMs too. Default: `5.0`. |
 | `input` | string | **Required.** Folder populated by a tethered camera or its capture application. |
 | `method` | `"pyramid"` \| `"depth-map"` \| `"average"` \| `"wavelet"` | Method used for the running preview and the final output. Default: `"pyramid"`. |
 | `output` | string | **Required.** Folder for the saved project, TIFF and summary.csv, outside input. |

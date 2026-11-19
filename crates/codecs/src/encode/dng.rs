@@ -192,7 +192,7 @@ impl ImageEncoder for DngEncoder {
         let float = match depth {
             BitDepth::U16 => false,
             BitDepth::F32 => true,
-            BitDepth::U8 => return Err(CodecError::Depth { format: F, depth }),
+            BitDepth::U8 | BitDepth::F16 => return Err(CodecError::Depth { format: F, depth }),
         };
         if !compression.stores(depth) {
             return Err(CodecError::Depth { format: F, depth });
@@ -247,7 +247,7 @@ impl ImageEncoder for DngEncoder {
                 }
             }
             let data = match (packing, &band) {
-                (Some(packing), band) => band_strips(band, strip_rows, packing, F)?,
+                (Some(packing), band) => band_strips(band, strip_rows, packing, false, F)?,
                 (None, AnyImage::U16(i)) => ljpeg_tiles(i),
                 (None, _) => return Err(CodecError::Depth { format: F, depth }),
             };

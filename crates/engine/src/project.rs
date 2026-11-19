@@ -28,7 +28,7 @@ use florastack_align::{
 };
 use florastack_codecs::{
     BitDepth, ChromaSubsampling, CodecError, ExifSummary, OrientationPolicy, OutputFormat, OutputMetadata, OutputProfile, OutputSpec, ReadOptions,
-    TiffCompression,
+    RowSource, TiffCompression,
 };
 use florastack_core::ops::{OpError, resize};
 use florastack_core::{Affine, AnyImage, Image, SampleFormat};
@@ -174,10 +174,37 @@ pub fn write_image_in(
     image: &AnyImage,
     key: Option<String>,
 ) -> Result<CacheRef, ProjectDataError> {
+    write_spec(folder, area, stem, &mut florastack_codecs::ImageRows(image), lossless(image.format()), key)
+}
+
+/// [`write_image`] for a linear float image that `rows` hands out a band at a time, as 32-bit floats or, with `half`,
+/// as 16-bit ones, for images that need no more (a slab of a slabbed stack, which the final stack reads): about 2.5
+/// times smaller than 32-bit floats, each value kept to about three decimal digits (within 1/4096 of itself) and the
+/// range beyond white kept.
+pub fn write_float_rows(
+    folder: &impl AsRef<CacheDir>,
+    stem: &str,
+    rows: &mut dyn RowSource,
+    half: bool,
+    key: Option<String>,
+) -> Result<CacheRef, ProjectDataError> {
+    let spec = OutputSpec { depth: if half { BitDepth::F16 } else { BitDepth::F32 }, ..lossless(SampleFormat::F32) };
+    write_spec(folder, Area::Cache, stem, rows, spec, key)
+}
+
+/// Writes the image `rows` hands out with `spec` into `area`.
+fn write_spec(
+    folder: &impl AsRef<CacheDir>,
+    area: Area,
+    stem: &str,
+    rows: &mut dyn RowSource,
+    spec: OutputSpec,
+    key: Option<String>,
+) -> Result<CacheRef, ProjectDataError> {
     // Streamed into the file a band of rows at a time, so that the file's bytes are never whole in memory beside the
     // image (240 MB for a 20 MP stack in f32).
     let mut writer = folder.as_ref().writer(area, stem, "tiff")?;
-    florastack_codecs::write_to(&mut writer, &mut florastack_codecs::ImageRows(image), &lossless(image.format()), &OutputMetadata::default())?;
+    florastack_codecs::write_to(&mut writer, rows, &spec, &OutputMetadata::default())?;
     Ok(writer.commit(key)?)
 }
 

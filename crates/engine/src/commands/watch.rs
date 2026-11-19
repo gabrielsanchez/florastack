@@ -26,7 +26,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                    unchanged metadata before and after the read. Truncated or locked files are retried until the quiet \
                    timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend \
                    the neighbor alignment chain; job events expose the latest preview path and frame count. After \
-                   idleSeconds without a new or changed frame, runs final alignment and exports one stack and its \
+                   idleSeconds without a new or changed frame, counted from the latest frame's preview, runs final alignment and exports one stack and its \
                    project plus summary.csv. Waits for the first frame indefinitely. Output must be outside input. \
                    Template tokens are the same as batch.run; preset depth-map thresholds need no interaction.",
             )
@@ -63,7 +63,8 @@ pub(super) struct WatchParams {
     /// A portable image filename; accepts batch.run's template tokens, its extension following the preset's format.
     #[serde(default = "batch::default_template")]
     pub(super) template: String,
-    /// Seconds without a new or changed frame before finalization; waits at least settleMs too.
+    /// Seconds without a new or changed frame before finalization, counted from the latest frame's preview; waits at
+    /// least settleMs too.
     #[serde(default = "idle")]
     #[schemars(range(min = 0.1, max = 86400))]
     idle_seconds: f64,
@@ -221,6 +222,7 @@ fn notifications(input: &Path) -> (Option<notify::RecommendedWatcher>, std::sync
     (watcher, rx)
 }
 
+#[allow(clippy::too_many_lines)] // The watch's loop, in the order it runs: scan, ingest, preview, and the quiet end.
 pub(super) fn ingest(
     ctx: &JobContext,
     p: WatchParams,
@@ -295,6 +297,10 @@ pub(super) fn ingest(
                     let _ = managed.accepted.send(capture.frames.len());
                 }
                 ctx.step(capture.frames.len() as u64, 0)?;
+                // The quiet time counts from here, when the watch is ready for the next frame: counted from the last
+                // file change, a preview slower than idleSeconds (a busy machine, a deep stack) ended the watch before
+                // the camera could send another frame.
+                capture.activity = Instant::now();
                 // Always rescan after processing before deciding that capture is quiet.
                 continue;
             }

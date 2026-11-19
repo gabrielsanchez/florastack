@@ -119,8 +119,8 @@ impl FileFormat {
 pub struct OutputSettings {
     /// `tiff`, `png`, `jpeg`, `dng` or `open-exr`.
     pub format: FileFormat,
-    /// `u8`, `u16` or `f32`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16 or 32-bit float, DNG 16 or
-    /// 32-bit float, OpenEXR 32-bit float.
+    /// `u8`, `u16`, `f32` or `f16`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16, 32-bit float or 16-bit
+    /// float, DNG 16 or 32-bit float, OpenEXR 32-bit float.
     pub depth: BitDepth,
     /// TIFF's compression: `none`, `lzw` or `deflate`.
     pub tiff_compression: TiffCompression,
@@ -423,7 +423,7 @@ fn output_shape(session: &Session, id: OutputId) -> Result<(u64, u64, u64), Comm
 fn file_bytes(pixels: u64, channels: u64, spec: OutputSpec) -> (u64, bool) {
     let sample = match spec.depth {
         BitDepth::U8 => 1.0,
-        BitDepth::U16 => 2.0,
+        BitDepth::U16 | BitDepth::F16 => 2.0,
         BitDepth::F32 => 4.0,
     };
     #[allow(clippy::cast_precision_loss)] // A size, estimated.

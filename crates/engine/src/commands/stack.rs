@@ -71,8 +71,8 @@ use crate::compute::{Backend, Compute, GpuDevice};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::project::{
-    Stale, align_settings, confidence_map, depth_map, develop_record, extended_map, stack_settings, stale_alignment, stored_alignment, write_image,
-    write_image_in, write_preview,
+    Stale, align_settings, confidence_map, depth_map, develop_record, extended_map, stack_settings, stale_alignment, stored_alignment,
+    write_float_rows, write_image, write_image_in, write_preview,
 };
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
@@ -1125,7 +1125,7 @@ pub(super) struct StackPlan {
     pub(super) canvas: Canvas,
     pub(super) framing: Framing,
     /// The frames' size, which the transforms are in.
-    size: (usize, usize),
+    pub(super) size: (usize, usize),
     pub(super) settings: Chosen,
     pub(super) cache: CacheDir,
     /// Which device stacks, resolved on the worker when the stack starts (`crate::compute`).
@@ -1896,11 +1896,16 @@ fn stack_gpu(
 /// `image` with `alpha`, if there is one: an extra channel for gray and color images, the alpha channel they have
 /// multiplied by it otherwise.
 pub(super) fn with_alpha(image: &Image<f32>, alpha: Option<&Image<f32>>) -> Result<Image<f32>, CommandError> {
+    Ok(add_alpha(image, alpha).map_err(StackError::from)?)
+}
+
+/// [`with_alpha`], with the image's own error.
+fn add_alpha(image: &Image<f32>, alpha: Option<&Image<f32>>) -> Result<Image<f32>, florastack_core::ImageError> {
     let Some(alpha) = alpha else { return Ok(image.clone()) };
     let c = image.channels();
     let extra = usize::from(c == 1 || c == 3);
     let out_c = c + extra;
-    let mut out = Image::new(image.width(), image.height(), out_c, image.color_space().clone()).map_err(StackError::from)?;
+    let mut out = Image::new(image.width(), image.height(), out_c, image.color_space().clone())?;
     for ((dst, src), a) in out.rows_mut().zip(image.rows()).zip(alpha.rows()) {
         for ((d, s), &a) in dst.chunks_exact_mut(out_c).zip(src.chunks_exact(c)).zip(a) {
             d[..c].copy_from_slice(s);
@@ -1912,6 +1917,28 @@ pub(super) fn with_alpha(image: &Image<f32>, alpha: Option<&Image<f32>>) -> Resu
         }
     }
     Ok(out)
+}
+
+/// A stack's image [`with_alpha`], a band of rows at a time, as its file is written: no copy of the whole image.
+struct AlphaRows<'a> {
+    image: &'a Image<f32>,
+    alpha: Option<&'a Image<f32>>,
+}
+
+impl florastack_codecs::RowSource for AlphaRows<'_> {
+    fn width(&self) -> usize {
+        self.image.width()
+    }
+
+    fn height(&self) -> usize {
+        self.image.height()
+    }
+
+    fn rows(&mut self, y: usize, rows: usize) -> Result<AnyImage, florastack_codecs::CodecError> {
+        let band = Rect::new(0, y, self.image.width(), rows);
+        let alpha = self.alpha.map(|a| a.crop(band)).transpose()?;
+        Ok(AnyImage::F32(add_alpha(&self.image.crop(band)?, alpha.as_ref())?))
+    }
 }
 
 /// How a stack was brought into range.
@@ -1994,10 +2021,20 @@ pub(super) fn unclipped<'a>(image: &'a CacheRef, maps: &'a Maps) -> &'a CacheRef
     extended_map().and_then(|name| maps.get(&name)).unwrap_or(image)
 }
 
-/// Stores a stack in the cache under `stem`, with `key` on its image: the image, linear `f32`, with an alpha channel
-/// when some pixels are covered by no frame; a small JPEG preview for lists; the depth-map method's depth and
-/// confidence maps, 16-bit; and, when `tone` (a pyramid's or a wavelet stack's: `None` for the methods whose blends
-/// never leave their frames' range) changes any pixel, the result before it as the `extended` map.
+/// What a stack is stored as.
+pub(super) enum Storage {
+    /// An output: its image in 32-bit floats.
+    Output,
+    /// A slab of a slabbed stack, with its key if it has one: its image and `extended` map in half floats, which are 2.5 times
+    /// smaller on disk and faster to write and read again, and hold what the final stack needs of them (a slab's values
+    /// to within 1/4096 of themselves, against the 8-bit step of 1/255 and the noise of any photograph).
+    Slab(Option<String>),
+}
+
+/// Stores a stack in the cache under `stem`, as `storage` says: the image, linear float, with an alpha channel when
+/// some pixels are covered by no frame; a small JPEG preview for lists; the depth-map method's depth and confidence
+/// maps, 16-bit; and, when `tone` (a pyramid's or a wavelet stack's: `None` for the methods whose blends never leave
+/// their frames' range) changes any pixel, the result before it as the `extended` map.
 pub(super) fn store(
     cache: &CacheDir,
     command: &str,
@@ -2005,8 +2042,14 @@ pub(super) fn store(
     stacked: Stacked,
     depth: Option<DepthMap>,
     tone: Option<Tone>,
-    key: Option<String>,
+    storage: Storage,
 ) -> Result<Stored, CommandError> {
+    let (key, half) = match storage {
+        Storage::Output => (None, false),
+        Storage::Slab(key) => (key, true),
+    };
+    let write =
+        |stem: &str, image: &Image<f32>, alpha: Option<&Image<f32>>, key| write_float_rows(cache, stem, &mut AlphaRows { image, alpha }, half, key);
     let Stacked { mut image, alpha, uncovered, .. } = stacked;
     let internal = || CommandError::Internal { command: command.to_owned() };
     let (width, height) = (image.width(), image.height());
@@ -2037,7 +2080,7 @@ pub(super) fn store(
         Some(tone) => {
             let mut summary = RangeSummary { out_of_range: 0, extended: false };
             if tone != Tone::Keep && out_of_range(&image) > 0 {
-                let extended = write_image(cache, &format!("{stem}-extended"), &AnyImage::F32(with_alpha(&image, alpha.as_ref())?), None)?;
+                let extended = write(&format!("{stem}-extended"), &image, alpha.as_ref(), None)?;
                 maps.insert(extended_map().ok_or_else(internal)?, extended);
                 summary.extended = true;
                 summary.out_of_range = compress_range(&mut image, tone)?;
@@ -2046,7 +2089,7 @@ pub(super) fn store(
         }
         None => None,
     };
-    let reference = write_image(cache, stem, &AnyImage::F32(with_alpha(&image, alpha.as_ref())?), key)?;
+    let reference = write(stem, &image, alpha.as_ref(), key)?;
     let preview = write_preview(cache, stem, &image, None)?;
     Ok(Stored { image: reference, preview, maps, width, height, uncovered, range, depth })
 }
@@ -2082,7 +2125,7 @@ fn stack_job(session: &Session, command: &'static str, settings: Chosen, name: S
         ctx.checkpoint()?;
         let method = plan.settings.name();
         let Stored { image, preview, maps, width, height, uncovered, range, depth } =
-            store(&plan.cache, command, method, stacked, depth, plan.settings.ranged(), None)?;
+            store(&plan.cache, command, method, stacked, depth, plan.settings.ranged(), Storage::Output)?;
         let develop = match plan.reader.resolved_develop() {
             Some((frame, develop)) => Some(develop_record(frame, develop)?),
             None => None,
