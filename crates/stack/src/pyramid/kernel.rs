@@ -335,6 +335,34 @@ impl Pyramid {
         out
     }
 
+    /// Adds the level-`k` coefficients that `coefficients` and `weights` hold, as [`Pyramid::coefficients`] gives them,
+    /// into `into`, a plane of the same samples.
+    fn add_coefficients(&self, k: usize, coefficients: &Image<f32>, weights: &Image<f32>, into: &mut Image<f32>) -> Result<(), StackError> {
+        let c = coefficients.channels();
+        let d = weights.channels().max(1);
+        let same = |a: &Image<f32>| (a.width(), a.height()) == (into.width(), into.height());
+        if !same(coefficients) || !same(weights) || into.channels() != c {
+            return Err(StackError::Shape { width: into.width(), height: into.height(), channels: c });
+        }
+        let blend = k == 0 && self.power.is_some();
+        into.par_rows_mut().zip(coefficients.par_rows().zip(weights.par_rows())).for_each(|(out, (coef, w))| {
+            for ((o, v), w) in out.chunks_exact_mut(c).zip(coef.chunks_exact(c)).zip(w.chunks_exact(d)) {
+                for (ch, (o, &v)) in o.iter_mut().zip(v).enumerate() {
+                    let wt = w.get(if d == 1 { 0 } else { ch }).copied().unwrap_or(0.0);
+                    // The same sum as the coefficient plus the coarser level, bit for bit: addition is commutative.
+                    *o += if blend {
+                        if wt > 0.0 { v / wt } else { 0.0 }
+                    } else if wt >= 0.0 {
+                        v
+                    } else {
+                        0.0
+                    };
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Folds a frame's Gaussian level `tiled`, assembled from the tiles' shares, into the whole-canvas part.
     fn fold_coarse(&mut self, canvas: Canvas, level: Image<f32>, coverage: Image<f32>, focus: Option<Image<f32>>) -> Result<(), StackError> {
         let k0 = canvas.tiled;
@@ -668,21 +696,30 @@ impl TileKernel for Pyramid {
         let Some(weights) = state.get(1).and_then(StatePlane::as_f32) else {
             return Err(StackError::Shape { width: 0, height: 0, channels: state.len() });
         };
-        let d = weights.channels();
+        let d = weights.channels().max(1);
         let blend = self.power.is_some();
-        Ok(Image::from_fn(weights.width(), weights.height(), 1, ColorSpace::LINEAR, |x, y, _| {
-            let covered = weights.pixel(x, y).is_some_and(|w| w.iter().take(d).any(|&w| if blend { w > 0.0 } else { w >= 0.0 }));
-            if covered { 1.0 } else { 0.0 }
-        })?)
+        let mut covered = Image::new(weights.width(), weights.height(), 1, ColorSpace::LINEAR)?;
+        covered.par_rows_mut().zip(weights.par_rows()).for_each(|(out, w)| {
+            for (o, w) in out.iter_mut().zip(w.chunks_exact(d)) {
+                let any = w.iter().any(|&w| if blend { w > 0.0 } else { w >= 0.0 });
+                *o = if any { 1.0 } else { 0.0 };
+            }
+        });
+        Ok(covered)
     }
 
     fn result(&self, state: &[StatePlane], inner: Rect, channels: usize) -> Result<Image<f32>, StackError> {
         let canvas = self.canvas()?;
         let Some(fused) = self.fused.as_ref() else { return Err(StackError::NotStarted) };
         let bad = || StackError::Shape { width: 0, height: 0, channels: state.len() };
-        // Collapse from the fused level `tiled` down through the tile's own levels.
-        let mut g = fused.clone();
-        let mut g_span = canvas.level(canvas.tiled);
+        // Collapse from the fused level `tiled` down through the tile's own levels, starting from only the samples of the
+        // fused level that the first EXPAND reads.
+        let whole = canvas.level(canvas.tiled);
+        let mut g_span = match canvas.tiled.checked_sub(1) {
+            Some(k) => expand_source(whole, level_span(canvas.level(k), inner, k, margin(k))),
+            None => whole,
+        };
+        let mut g = if g_span == whole { fused.clone() } else { crop(fused, whole, g_span)? };
         for k in (0..canvas.tiled).rev() {
             let at = level_span(canvas.level(k), inner, k, margin(k));
             let (Some(coefficients), Some(weights)) =
@@ -690,15 +727,20 @@ impl TileKernel for Pyramid {
             else {
                 return Err(bad());
             };
-            let up = expand(&g, g_span, at)?;
-            let mut next = self.coefficients(k, coefficients, weights);
-            next.par_rows_mut().zip(up.par_rows()).for_each(|(o, r)| o.iter_mut().zip(r).for_each(|(v, &s)| *v += s));
-            g = next;
+            // The level's coefficients added into the coarser level expanded, in place: a tile's result allocates
+            // only the EXPANDs' planes.
+            let mut up = expand(&g, g_span, at)?;
+            self.add_coefficients(k, coefficients, weights, &mut up)?;
+            g = up;
             g_span = at;
         }
-        // The range limit, and nothing where no frame covers.
+        // The range limit, and nothing where no frame covers (level 0's weights, as `covered` reads them).
         let c = channels.max(1);
-        let covered = self.covered(state)?;
+        let Some(weights) = state.get(1).and_then(StatePlane::as_f32) else { return Err(bad()) };
+        if (weights.width(), weights.height()) != (g.width(), g.height()) {
+            return Err(bad());
+        }
+        let (d, blend) = (weights.channels().max(1), self.power.is_some());
         let bounds = if self.limit > 0.0 {
             let base = 2 * canvas.tiled;
             match (state.get(base).and_then(StatePlane::as_u16), state.get(base + 1).and_then(StatePlane::as_u16)) {
@@ -709,9 +751,9 @@ impl TileKernel for Pyramid {
             None
         };
         let limit = self.limit;
-        g.par_rows_mut().enumerate().for_each(|(y, row)| {
-            for (x, pixel) in row.chunks_exact_mut(c).enumerate() {
-                if covered.get(x, y, 0).is_none_or(|k| k <= 0.0) {
+        g.par_rows_mut().zip(weights.par_rows()).enumerate().for_each(|(y, (row, w))| {
+            for (x, (pixel, w)) in row.chunks_exact_mut(c).zip(w.chunks_exact(d)).enumerate() {
+                if !w.iter().any(|&w| if blend { w > 0.0 } else { w >= 0.0 }) {
                     pixel.fill(0.0);
                     continue;
                 }
@@ -726,6 +768,15 @@ impl TileKernel for Pyramid {
         });
         Ok(g)
     }
+}
+
+/// The samples of `level` that an EXPAND to `out`, a span of the next finer level, reads: output sample `x` takes the
+/// samples from `(x - 2) / 2` to `(x + 2) / 2`, and at the level's edges their mirror images, which lie within that
+/// range too; two samples more on each side keep it safe. Tested against the EXPAND from the whole level.
+pub(crate) fn expand_source(level: Span, out: Span) -> Span {
+    let (x0, y0) = (signed(out.x), signed(out.y));
+    let (x1, y1) = (x0 + signed(out.width), y0 + signed(out.height));
+    level.of_level((x0 - 2).div_euclid(2) - 2, (y0 - 2).div_euclid(2) - 2, (x1 + 1).div_euclid(2) + 3, (y1 + 1).div_euclid(2) + 3)
 }
 
 /// Copies `block` into `into` at the samples of `at`.
@@ -758,5 +809,25 @@ mod tests {
         assert_eq!(k.read_region(Rect::new(13, 21, 50, 40), 100, 61), Rect::new(8, 16, 55, 45));
         assert_eq!(pick_weight(0.5), 0.0625);
         assert_eq!(pick_weight(0.0), 0.0);
+    }
+
+    #[test]
+    fn expanding_from_the_source_span_alone_gives_the_same_samples() {
+        // Every output span of a few small levels, at the edges and inside: an EXPAND from only the samples
+        // `expand_source` names is the EXPAND from the whole level, bit for bit (the mirrored taps included).
+        for (w, h) in [(1, 1), (2, 3), (5, 4), (13, 9)] {
+            let whole = Span::whole(w, h);
+            let level = Image::from_fn(w, h, 2, ColorSpace::LINEAR, |x, y, c| ((x * 7 + y * 13 + c * 3) % 11) as f32 - 4.5).unwrap();
+            let finer = Span::whole(2 * w, 2 * h);
+            for (x0, x1) in [(0, 1), (0, 2 * w), (1, 3), (2 * w - 1, 2 * w), (w, 2 * w)] {
+                for (y0, y1) in [(0, 1), (0, 2 * h), (2 * h - 1, 2 * h), (h, h + 1)] {
+                    let out = finer.of_level(signed(x0), signed(y0), signed(x1), signed(y1));
+                    let source = expand_source(whole, out);
+                    let from_whole = expand(&level, whole, out).unwrap();
+                    let from_source = expand(&crop(&level, whole, source).unwrap(), source, out).unwrap();
+                    assert_eq!(from_whole, from_source, "{w}x{h}, x {x0}..{x1}, y {y0}..{y1}");
+                }
+            }
+        }
     }
 }

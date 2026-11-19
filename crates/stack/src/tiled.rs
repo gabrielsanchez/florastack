@@ -43,9 +43,12 @@
 //! Each frame's tiles are folded in parallel, a batch of as many as rayon has threads at a time. A tile's fold reads
 //! only that tile's state and patch, every per-pixel sum runs over the frames in the order they were added, and shares
 //! of a whole-canvas part are absorbed in tile order, so the result is the same bit for bit whatever the number of
-//! threads. After each batch the stacker reports its progress (tiles done in the frame) to the [`Monitor`] and stops if
+//! threads. The end of a stack works out the tiles' results and coverage in batches the same way, each tile on its
+//! own, and stitches them in tile order. After each batch the stacker reports its progress (tiles done in the frame) to the [`Monitor`] and stops if
 //! it was cancelled; the stack in progress is then dropped (see [`Stacker`]).
 
+use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use florastack_core::{
@@ -399,17 +402,28 @@ impl<K: TileKernel> Tiled<K> {
         // Count the pixels that no frame covered, in the tiles' cores, which partition the canvas: from the tile the last
         // frame ended with, so that with spilled accumulators the count reads back only the tiles beyond the budget.
         // The stitch then reads them in tile order.
+        // Each pass works out a batch of tiles in parallel, as many as rayon has threads, as the frames' folds do.
+        let batch = rayon::current_num_threads().max(1);
+        let grid = stack.grid.clone();
+        let kernel = &self.kernel;
         let last_backward = !stack.frames.saturating_sub(1).is_multiple_of(2);
         let order: Vec<usize> = if last_backward { (0..n).collect() } else { (0..n).rev().collect() };
         let mut uncovered = 0;
-        for index in order {
+        for chunk in order.chunks(batch) {
             monitor.checkpoint()?;
-            let state = stack.take(index)?;
-            let covered = self.kernel.covered(&state)?;
-            if let Some(tile) = stack.grid.tile(index) {
-                uncovered += count_uncovered(&covered, tile, inner(&stack.grid, tile));
+            let states = chunk.iter().map(|&index| Ok((index, stack.take(index)?))).collect::<Result<Vec<_>, StackError>>()?;
+            let counted = states
+                .into_par_iter()
+                .map(|(index, state)| {
+                    let covered = kernel.covered(&state)?;
+                    let count = grid.tile(index).map_or(0, |tile| count_uncovered(&covered, tile, inner(&grid, tile)));
+                    Ok((index, state, count))
+                })
+                .collect::<Result<Vec<_>, StackError>>()?;
+            for (index, state, count) in counted {
+                uncovered += count;
+                stack.put(index, state)?;
             }
-            stack.put(index, state)?;
         }
         let alpha_too = uncovered > 0;
         let passes = if alpha_too { 3 } else { 2 };
@@ -417,24 +431,40 @@ impl<K: TileKernel> Tiled<K> {
         let step = |done: usize| monitor.step(done as u64, total);
         step(n)?;
         let mut done = n;
-        let grid = stack.grid.clone();
-        let mut image = grid.stitch_with(|index| {
-            let state = stack.take(index)?;
-            let at = grid.tile(index).map_or(Rect::new(0, 0, grid.width(), grid.height()), |t| inner(&grid, t));
-            let result = outer_sized(&grid, index, self.kernel.result(&state, at, c)?)?;
-            if alpha_too {
-                stack.put(index, state)?;
+        let whole = Rect::new(0, 0, grid.width(), grid.height());
+        let mut image = stitch_batched(&grid, batch, |tiles| {
+            monitor.checkpoint()?;
+            let states = tiles.clone().map(|i| Ok((i, stack.take(i)?))).collect::<Result<Vec<_>, StackError>>()?;
+            let results = states
+                .into_par_iter()
+                .map(|(i, state)| {
+                    let at = grid.tile(i).map_or(whole, |t| inner(&grid, t));
+                    let result = outer_sized(&grid, i, kernel.result(&state, at, c)?)?;
+                    Ok((i, result, alpha_too.then_some(state)))
+                })
+                .collect::<Result<Vec<_>, StackError>>()?;
+            let mut images = Vec::with_capacity(results.len());
+            for (i, result, state) in results {
+                if let Some(state) = state {
+                    stack.put(i, state)?;
+                }
+                images.push(result);
             }
-            done += 1;
+            done += tiles.len();
             step(done)?;
-            Ok::<_, StackError>(result)
+            Ok(images)
         })?;
         let alpha = if alpha_too {
-            Some(grid.stitch_with(|index| {
-                let covered = outer_sized(&grid, index, self.kernel.covered(&stack.take(index)?)?)?;
-                done += 1;
+            Some(stitch_batched(&grid, batch, |tiles| {
+                monitor.checkpoint()?;
+                let states = tiles.clone().map(|i| Ok((i, stack.take(i)?))).collect::<Result<Vec<_>, StackError>>()?;
+                let covered = states
+                    .into_par_iter()
+                    .map(|(i, state)| outer_sized(&grid, i, kernel.covered(&state)?))
+                    .collect::<Result<Vec<_>, StackError>>()?;
+                done += tiles.len();
                 step(done)?;
-                Ok::<_, StackError>(covered)
+                Ok(covered)
             })?)
         } else {
             None
@@ -442,6 +472,30 @@ impl<K: TileKernel> Tiled<K> {
         image.set_color_space(stack.color.take().unwrap_or(ColorSpace::LINEAR));
         Ok(Stacked { image, alpha, frames: stack.frames, uncovered })
     }
+}
+
+/// Stitches `grid`'s tiles, which `work` makes a run of consecutive tiles at a time (at most `batch`): the stitch
+/// fetches each tile once in tile order, so each fetch that finds no tile ready asks `work` for the run that starts
+/// with it, and the tiles it made wait in order for their fetch.
+fn stitch_batched(
+    grid: &TileGrid,
+    batch: usize,
+    mut work: impl FnMut(Range<usize>) -> Result<Vec<Image<f32>>, StackError>,
+) -> Result<Image<f32>, StackError> {
+    let n = grid.len();
+    let mut ready: VecDeque<(usize, Image<f32>)> = VecDeque::new();
+    grid.stitch_with(|index| {
+        if ready.front().is_none_or(|(i, _)| *i != index) {
+            ready.clear();
+            let tiles = index..index.saturating_add(batch.max(1)).min(n).max(index + 1);
+            let images = work(tiles.clone())?;
+            if images.len() != tiles.len() {
+                return Err(StackError::Shape { width: 0, height: 0, channels: images.len() });
+            }
+            ready.extend(tiles.zip(images));
+        }
+        ready.pop_front().map(|(_, image)| image).ok_or(StackError::Shape { width: 0, height: 0, channels: 0 })
+    })
 }
 
 /// A tile's inner region: its core grown by half the grid's overlap, clipped to the canvas. The stitch takes the tile's
