@@ -29,7 +29,9 @@
 //! - **The preview** (`stack.preview`) reduces each frame to a quarter of its size as soon as it is read
 //!   (florastack-align's `thumbnail`, which the filmstrip uses too: block averages, then Lanczos3) and warps the small
 //!   copy onto the quarter-size canvas as the full stack warps the frame (tile by tile, bicubic, with its feathered
-//!   coverage), with the settings scaled to match (`Method::reduced`); RAW frames get the fast demosaic. It runs in the
+//!   coverage), with the settings scaled to match (`Method::reduced`); RAW frames get the fast demosaic. The session
+//!   keeps the small copies ([`ReducedFrames`]), so that the next preview, after a change of a setting, reads no file
+//!   and only stacks; `stack.threshold` and the depth maps the adjust and retouch commands measure share them. It runs in the
 //!   preview lane, beside a full stack, and a newer call cancels an older one still running, so that a preview follows
 //!   every change of a setting. Its result stays in the session, the latest only, for a viewer to read
 //!   (`Engine::stack_preview`); with `keepFile` it is also a lossless TIFF in `previews/`, which nothing in the project refers to:
@@ -39,6 +41,7 @@
 
 use std::borrow::Cow;
 use std::ops::Range;
+use std::sync::Arc;
 
 use florastack_align::{AlignError, Canvas, DEFAULT_FEATHER, Framing, Status, thumbnail, warp_to_canvas};
 use florastack_core::{Affine, AnyImage, Image, Monitor, Rect};
@@ -193,7 +196,9 @@ fn stacking() -> Vec<CommandSpec> {
                     "The weighted average of `stack.average`, or with `method` \"pyramid\", \"depth-map\" or \
                      \"wavelet\" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames \
                      reduced to a quarter of their size on each side with the settings scaled to match, so that it \
-                     shows in seconds what the full stack will look like. Takes the same settings as that method's command. The engine \
+                     shows in seconds what the full stack will look like. Takes the same settings as that method's command. The \
+                     first preview reads every frame; the engine keeps the reduced frames in memory, so that later \
+                     previews of the same frames read no file and take a fraction of the time. The engine \
                      keeps the latest preview in memory for its viewer, until the project is closed: no output, no undo \
                      step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's \
                      `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one still \
@@ -1123,6 +1128,66 @@ pub(super) struct StackPlan {
     pub(super) compute: Compute,
     /// How the stack keeps its working data: the memory budget and the tile folder (`compute.set`).
     pub(super) tiling: Tiling,
+    /// The frames' quarter-size copies kept between jobs, shared with the session, and each frame's key there, in
+    /// the order of `frames`.
+    reduced: SharedReduced,
+    reduced_keys: Vec<String>,
+}
+
+/// The frames' quarter-size copies, developed, inpainted and reduced as the previews read them (`stack.preview`,
+/// `stack.threshold`, and the depth maps of `adjust` and `retouch.mapFocus`), kept in the session between jobs so that
+/// a preview after a change of a setting reads no file (roadmap 3.1). Keyed by what a copy is made from: the frame's
+/// file, its development and the defect mask (`Plan::frame_key`), and the demosaic. Workers take the lock, only for a
+/// lookup or an insertion; the engine's thread never does, and drops the whole with the project. They take at most
+/// half the stacks' memory budget (`compute.set`); beyond it, the copies of frames the job doesn't stack go first, and
+/// a copy that still doesn't fit isn't kept.
+#[derive(Debug, Default)]
+pub(crate) struct ReducedFrames {
+    copies: std::collections::HashMap<String, Arc<Image<f32>>>,
+    bytes: usize,
+}
+
+/// [`ReducedFrames`] as the session and its jobs share them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SharedReduced(Arc<std::sync::Mutex<ReducedFrames>>);
+
+impl SharedReduced {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ReducedFrames> {
+        // A copy is inserted whole or not at all, so a poisoned lock holds nothing half done.
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The copy kept under `key`.
+    pub(crate) fn get(&self, key: &str) -> Option<Arc<Image<f32>>> {
+        self.lock().copies.get(key).cloned()
+    }
+
+    /// Keeps `copy` under `key` if it fits in `budget` bytes, dropping first the copies whose keys aren't in `wanted`.
+    pub(crate) fn keep(&self, key: String, copy: Arc<Image<f32>>, wanted: &[String], budget: usize) {
+        let bytes = |c: &Arc<Image<f32>>| size_of_val(c.as_raw());
+        let size = bytes(&copy);
+        let mut memo = self.lock();
+        if let Some(old) = memo.copies.remove(&key) {
+            memo.bytes = memo.bytes.saturating_sub(bytes(&old));
+        }
+        if memo.bytes.saturating_add(size) > budget {
+            memo.copies.retain(|k, _| wanted.contains(k));
+            memo.bytes = memo.copies.values().map(bytes).sum();
+        }
+        if memo.bytes.saturating_add(size) <= budget {
+            memo.copies.insert(key, copy);
+            memo.bytes = memo.bytes.saturating_add(size);
+        }
+    }
+
+    /// The keys of the copies kept, sorted, and their bytes.
+    #[cfg(test)]
+    fn kept(&self) -> (Vec<String>, usize) {
+        let memo = self.lock();
+        let mut keys: Vec<String> = memo.copies.keys().cloned().collect();
+        keys.sort();
+        (keys, memo.bytes)
+    }
 }
 
 /// The gain as the frames' samples take it.
@@ -1202,6 +1267,11 @@ impl StackPlan {
         if frames.is_empty() {
             return Err(session.unavailable("every enabled frame's alignment was rejected, so there is nothing to stack: see `align.info`"));
         }
+        // Taken now, before the job reads a frame and may resolve the development, so that every job keys a frame alike.
+        let reduced_keys = frames
+            .iter()
+            .map(|f| Ok(format!("{} demosaic {quality:?} reduced {PREVIEW_FACTOR}", reader.frame_key(f.index)?)))
+            .collect::<Result<Vec<_>, CommandError>>()?;
         Ok(StackPlan {
             command,
             reader,
@@ -1215,6 +1285,8 @@ impl StackPlan {
             cache: session.cache_dir()?,
             compute: session.compute(),
             tiling: session.tiling(),
+            reduced: session.reduced.clone(),
+            reduced_keys,
         })
     }
 
@@ -1245,17 +1317,17 @@ impl StackPlan {
     /// Reads the `k`-th frame to stack, at full size or, `reduced`, at a quarter of it, with what puts it on the
     /// canvas: its alignment, gain and coverage's feather.
     pub(super) fn load(&mut self, k: usize, reduced: bool) -> Result<Loaded, CommandError> {
-        let image = self.read(k)?;
-        let Some(frame) = self.frames.get(k) else { return Err(self.internal()) };
         if reduced {
+            let small = self.reduced_frame(k)?;
+            let Some(frame) = self.frames.get(k) else { return Err(self.internal()) };
             let (w, h) = self.size;
-            let small = thumbnail(&image, w.max(h).div_ceil(PREVIEW_FACTOR))?;
-            drop(image);
             let (canvas, transform, feather) = reduced_geometry(&self.canvas, &frame.transform, (w, h), (small.width(), small.height()));
             Ok(Loaded::Warp { image: small, transform, canvas, feather, gain: frame.gain, white_balance: frame.white_balance })
         } else {
+            let image = self.read(k)?;
+            let Some(frame) = self.frames.get(k) else { return Err(self.internal()) };
             Ok(Loaded::Warp {
-                image,
+                image: Arc::new(image),
                 transform: frame.transform,
                 canvas: self.canvas,
                 feather: DEFAULT_FEATHER,
@@ -1263,6 +1335,21 @@ impl StackPlan {
                 white_balance: frame.white_balance,
             })
         }
+    }
+
+    /// The `k`-th frame to stack at a quarter of its size, from the session's [`ReducedFrames`] when they hold it, or
+    /// read, reduced (florastack-align's `thumbnail`) and handed to them.
+    fn reduced_frame(&mut self, k: usize) -> Result<Arc<Image<f32>>, CommandError> {
+        let key = self.reduced_keys.get(k).ok_or_else(|| self.internal())?.clone();
+        if let Some(small) = self.reduced.get(&key) {
+            return Ok(small);
+        }
+        let image = self.read(k)?;
+        let (w, h) = self.size;
+        let small = Arc::new(thumbnail(&image, w.max(h).div_ceil(PREVIEW_FACTOR))?);
+        drop(image);
+        self.reduced.keep(key, Arc::clone(&small), &self.reduced_keys, self.tiling.budget / 2);
+        Ok(small)
     }
 
     /// Stacks every frame with the plan's method, at full size or, `reduced`, at a quarter of it, each frame read,
@@ -1310,7 +1397,8 @@ impl Units {
 pub(super) enum Loaded {
     /// A decoded frame, warped onto the canvas as it is stacked: by florastack-align's `warp_to_canvas` a rectangle
     /// at a time on the CPU ([`Warped`]), by florastack-gpu's warp kernel a tile at a time on the GPU.
-    Warp { image: Image<f32>, transform: Affine, canvas: Canvas, feather: f64, gain: f32, white_balance: [f32; 3] },
+    /// The image is shared with the session's [`ReducedFrames`] when it is a frame's quarter-size copy.
+    Warp { image: Arc<Image<f32>>, transform: Affine, canvas: Canvas, feather: f64, gain: f32, white_balance: [f32; 3] },
     /// A frame already on the canvas (a slab's output), with its coverage where it has one.
     Canvas { image: Image<f32>, coverage: Option<Image<f32>> },
 }
@@ -1971,4 +2059,30 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
         }))
     });
     Ok(job.stages(stages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reduced_frames_keep_what_fits_and_drop_unwanted_copies_first() {
+        let memo = SharedReduced::default();
+        // Copies of 4 x 4 x 1 samples: 64 bytes each.
+        let copy = || Arc::new(Image::<f32>::new(4, 4, 1, florastack_core::ColorSpace::LINEAR).unwrap());
+        let keys = |names: &[&str]| names.iter().map(|&n| n.to_owned()).collect::<Vec<_>>();
+        let wanted = keys(&["a", "b"]);
+        memo.keep("a".into(), copy(), &wanted, 128);
+        memo.keep("b".into(), copy(), &wanted, 128);
+        assert_eq!(memo.kept(), (keys(&["a", "b"]), 128));
+        memo.keep("a".into(), copy(), &wanted, 128);
+        assert_eq!(memo.kept(), (keys(&["a", "b"]), 128), "a key kept again replaces its copy");
+        memo.keep("c".into(), copy(), &wanted, 128);
+        assert_eq!(memo.kept(), (keys(&["a", "b"]), 128), "a copy that doesn't fit isn't kept when every copy is wanted");
+        memo.keep("c".into(), copy(), &keys(&["b", "c"]), 128);
+        assert_eq!(memo.kept(), (keys(&["b", "c"]), 128), "a copy no longer wanted makes room");
+        assert!(memo.get("b").is_some() && memo.get("a").is_none());
+        memo.keep("d".into(), copy(), &keys(&["d"]), 32);
+        assert_eq!(memo.kept(), (keys(&[]), 0), "larger than the budget: nothing unwanted stays, and it isn't kept");
+    }
 }

@@ -28,7 +28,8 @@ look; untick a frame to leave it out, and align again.
 ## 3. Stack
 
 The Stack tab's method is **Pyramid** by default, the best all-rounder. As soon as the frames are aligned, a
-quarter-size preview shows in the viewer: it takes a few seconds, and is made again whenever you change a setting.
+quarter-size preview shows in the viewer: the first takes a few seconds, while the frames are read, and it is made
+again, in under a second, whenever you change a setting.
 
 Press **Stack frames** for the full-size result. It runs in the background, with its progress and the time left in the
 top bar; you can keep changing settings and previewing meanwhile. The result appears in the **Outputs** list, under the

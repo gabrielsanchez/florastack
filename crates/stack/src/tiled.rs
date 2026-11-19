@@ -32,7 +32,9 @@
 //! overlap, the pixels the stitch reads: the kernel computes on the whole outer region for context, and keeps its inner
 //! part. They live in a [`TileCache`] with a memory budget ([`Tiling::budget`]): beyond it, the least recently used tiles
 //! spill to temporary files ([`TempFileStore`]) and are read back when their turn comes, so that a canvas larger than
-//! memory can still be stacked, at the cost of reading and writing the spilled tiles once per frame. Besides the
+//! memory can still be stacked, at the cost of reading and writing the spilled tiles once per frame. The frames take
+//! the tiles in alternate orders, forward then backward, so that each frame starts with the tiles the one before ended
+//! with, still in memory, and reads back only those beyond the budget. Besides the
 //! accumulators, a stacker holds the tiles it is working on (as many as rayon has threads) and their scratch planes;
 //! the frame itself is the caller's, who reads and drops one at a time.
 //!
@@ -46,7 +48,9 @@
 
 use std::path::PathBuf;
 
-use florastack_core::{ColorSpace, Image, MemoryStore, Monitor, Rect, StoreError, TempFileStore, Tile, TileCache, TileGrid, TileKey, TileStore};
+use florastack_core::{
+    CacheStats, ColorSpace, Image, MemoryStore, Monitor, Rect, StoreError, TempFileStore, Tile, TileCache, TileGrid, TileKey, TileStore,
+};
 use rayon::prelude::*;
 
 use crate::error::StackError;
@@ -321,6 +325,12 @@ impl<K: TileKernel> Tiled<K> {
         self.stack.as_ref().map(|s| &s.grid)
     }
 
+    /// What the accumulators' cache did so far in the stack in progress: the tiles found in memory, read back from
+    /// their files and written to them.
+    pub fn cache_stats(&self) -> Option<CacheStats> {
+        self.stack.as_ref().map(|s| s.cache.stats())
+    }
+
     /// The grid a stack of `shape` is cut into: tiles of the tiling's size, at least four times the overlap, which is
     /// twice the kernel's context, so that a tile computes on at most four times its core's pixels and keeps at most
     /// about one and a half times them.
@@ -332,7 +342,13 @@ impl<K: TileKernel> Tiled<K> {
 
     /// Folds `frame` into every tile, and returns the tiles' shares of the frame's whole-canvas part, in tile order.
     fn fold_frame(&self, stack: &mut InProgress, frame: &dyn FrameSource, monitor: &dyn Monitor) -> Result<Vec<(Tile, Share)>, StackError> {
-        let tiles: Vec<Tile> = stack.grid.tiles().collect();
+        // Alternate the order from frame to frame, so that the tiles a frame ends with, the most recently used, are the
+        // first the next one needs: with spilled accumulators, each frame then reads back only the tiles beyond the
+        // budget, rather than every tile (in the same order, the least recently used tile is always the next one).
+        let mut tiles: Vec<Tile> = stack.grid.tiles().collect();
+        if !stack.frames.is_multiple_of(2) {
+            tiles.reverse();
+        }
         let total = tiles.len() as u64;
         let batch = rayon::current_num_threads().max(1);
         let grid = &stack.grid.clone();
@@ -344,7 +360,9 @@ impl<K: TileKernel> Tiled<K> {
             monitor.checkpoint()?;
             let mut work = Vec::with_capacity(chunk.len());
             for tile in chunk {
-                work.push((*tile, stack.take(tile.index)?));
+                // The first frame starts each tile's state, which the cache holds from then on.
+                let state = if index == 0 { self.kernel.state(inner(grid, *tile), stack.shape.channels)? } else { stack.take(tile.index)? };
+                work.push((*tile, state));
             }
             let kernel = &self.kernel;
             let folded: Vec<Folded> = work
@@ -370,15 +388,21 @@ impl<K: TileKernel> Tiled<K> {
             monitor.step(done, total)?;
         }
         stack.frames += 1;
+        // The kernel absorbs the shares in tile order, whatever order they were folded in.
+        shares.sort_by_key(|(tile, _)| tile.index);
         Ok(shares)
     }
 
     fn finish_stack(&self, mut stack: InProgress, monitor: &dyn Monitor) -> Result<Stacked, StackError> {
         let c = stack.shape.channels;
         let n = stack.grid.len();
-        // Count the pixels that no frame covered, in the tiles' cores, which partition the canvas.
+        // Count the pixels that no frame covered, in the tiles' cores, which partition the canvas: from the tile the last
+        // frame ended with, so that with spilled accumulators the count reads back only the tiles beyond the budget.
+        // The stitch then reads them in tile order.
+        let last_backward = !stack.frames.saturating_sub(1).is_multiple_of(2);
+        let order: Vec<usize> = if last_backward { (0..n).collect() } else { (0..n).rev().collect() };
         let mut uncovered = 0;
-        for index in 0..n {
+        for index in order {
             monitor.checkpoint()?;
             let state = stack.take(index)?;
             let covered = self.kernel.covered(&state)?;
@@ -497,19 +521,15 @@ impl<K: TileKernel> Stacker for Tiled<K> {
         } else {
             Spill::Memory(MemoryStore::new())
         };
-        let mut stack = InProgress {
+        // The first frame makes each tile's state, rather than writing empty ones beyond the budget to files now.
+        self.stack = Some(InProgress {
             shape,
-            grid: grid.clone(),
+            grid,
             cache: TileCache::new(store, self.tiling.budget),
             kinds: kinds.unwrap_or_default(),
             frames: 0,
             color: None,
-        };
-        // Each tile's state is made and handed to the cache, which spills the oldest beyond the budget.
-        for tile in grid.tiles() {
-            stack.put(tile.index, self.kernel.state(inner(&grid, tile), shape.channels)?)?;
-        }
-        self.stack = Some(stack);
+        });
         Ok(())
     }
 

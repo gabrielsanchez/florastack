@@ -61,6 +61,8 @@ pub struct Session {
     /// The latest stack preview (`stack.preview`), linear with the frames' color space and an alpha channel where
     /// frames leave pixels uncovered, for a viewer to read; dropped with the project.
     pub(crate) stack_preview: Option<std::sync::Arc<florastack_core::Image<f32>>>,
+    /// The frames' quarter-size copies the previews read, kept between them; dropped with the project.
+    pub(crate) reduced: crate::commands::stack::SharedReduced,
     /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
     pub(crate) retouch: Option<crate::retouch::RetouchSession>,
     pub(crate) retouch_closed: bool,
@@ -108,6 +110,7 @@ impl Session {
             events: Vec::new(),
             focus: None,
             stack_preview: None,
+            reduced: crate::commands::stack::SharedReduced::default(),
             retouch: None,
             retouch_closed: false,
             adjust: None,
@@ -350,6 +353,7 @@ impl Session {
         let path = folder.path().display().to_string();
         self.focus = None;
         self.stack_preview = None;
+        self.reduced = crate::commands::stack::SharedReduced::default();
         self.close_retouch();
         self.open = Some(Open { folder, project, history: History::new() });
         self.events.push(Event::Project { state: ProjectEvent::Opened, path });
@@ -410,6 +414,7 @@ impl Session {
         let Some(open) = self.open.take() else { return Ok(None) };
         self.focus = None;
         self.stack_preview = None;
+        self.reduced = crate::commands::stack::SharedReduced::default();
         let cleaned = if open.folder.is_read_only() {
             0
         } else {
