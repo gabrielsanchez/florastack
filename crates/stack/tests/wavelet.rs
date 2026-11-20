@@ -258,11 +258,55 @@ fn the_noise_floor_lowers_noise_and_keeps_the_detail() {
         assert!(with.noise < without.noise, "noise {} against {} without the floor", with.noise, without.noise);
         assert!(with.ssim > without.ssim - 0.002, "SSIM {} against {} without the floor", with.ssim, without.ssim);
     }
-    // With grit 0 the finest level picks, and the floor changes nothing.
-    let synthetic = layered(160, 120, 1.0, Backdrop::Textured, 6, true, 2);
-    let picking = WaveletSettings { grit: 0.0, ..WaveletSettings::default() };
-    let unfloored = WaveletSettings { noise_floor: 0.0, ..picking.clone() };
-    assert_eq!(wavelet(&picking, &synthetic.frames).as_raw(), wavelet(&unfloored, &synthetic.frames).as_raw());
+}
+
+/// The fine noise inside a radius of `r` around `image`'s center: the deviation of its difference from its blur.
+fn fine_noise_at_center(image: &Image<f32>, r: f64) -> f64 {
+    let blurred = gaussian_blur(image, 1.5).unwrap();
+    let (cx, cy) = (image.width() as f64 / 2.0, image.height() as f64 / 2.0);
+    let (mut sum, mut n) = (0.0, 0.0);
+    for y in 0..image.height() {
+        for x in 0..image.width() {
+            if (x as f64 - cx).hypot(y as f64 - cy) < r {
+                let d = f64::from(image.get(x, y, 0).unwrap() - blurred.get(x, y, 0).unwrap());
+                sum += d * d;
+                n += 1.0;
+            }
+        }
+    }
+    (sum / n).sqrt()
+}
+
+#[test]
+fn a_dark_place_the_sharp_frame_shows_takes_no_other_frames_noise() {
+    // A dark disc that blurs, frame by frame, into the light around it, each frame with noise of 1% of white in
+    // gamma-encoded values, as a camera's: in linear light it is larger where a frame is lighter. Compared in absolute
+    // terms, the out-of-focus frames' noise won the disc's choices, and on real stacks it showed as colored speckle;
+    // relative to each frame's noise, the noise floor's, it doesn't.
+    let size = 256;
+    let disc =
+        Image::from_fn(size, size, 1, ColorSpace::LINEAR, |x, y, _| if (x as f64 - 128.0).hypot(y as f64 - 128.0) < 24.0 { 0.004 } else { 0.5 })
+            .unwrap();
+    let mut frames = vec![disc.clone()];
+    frames.extend([6.0, 10.0, 14.0, 18.0, 22.0].map(|sigma| gaussian_blur(&disc, sigma).unwrap()));
+    let frames: Vec<Image<f32>> = frames
+        .iter()
+        .enumerate()
+        .map(|(i, frame)| {
+            let n = noise_image(size, size, 1, 100 + i as u64);
+            Image::from_fn(size, size, 1, ColorSpace::LINEAR, |x, y, _| {
+                let l = frame.get(x, y, 0).unwrap();
+                (l + 2.2 * l.powf(0.545) * 0.01 * (n.get(x, y, 0).unwrap() - 0.5) * 12f32.sqrt()).max(0.0)
+            })
+            .unwrap()
+        })
+        .collect();
+    let at = |noise_floor| fine_noise_at_center(&wavelet(&WaveletSettings { noise_floor, ..WaveletSettings::default() }, &frames), 12.0);
+    let (absolute, relative, sharp) = (at(0.0), at(1.0), fine_noise_at_center(&frames[0], 12.0));
+    println!("fine noise in the disc: the sharp frame {sharp:.6}, compared in absolute terms {absolute:.6}, relative {relative:.6}");
+    // Measured: 0.00249 in absolute terms, 0.00124 relative, and the sharp frame 0.00100.
+    assert!(relative < 0.6 * absolute, "relative {relative} against absolute {absolute}");
+    assert!(relative < 1.5 * sharp, "relative {relative} against the sharp frame's {sharp}");
 }
 
 #[test]

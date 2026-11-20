@@ -8,7 +8,7 @@ a depth-map output from the same frames, to compare them, or to [retouch](retouc
 |---|---|---|---|---|
 | How | The sharpest detail at every scale, from fine to coarse | Each pixel from the frame where it is sharpest | Every frame blended, each weighted by its sharpness | Like the pyramid, on detail that doesn't shift with the image |
 | Best for | Hair, bristles, antennae: near and far detail that overlap | Smooth subjects and backgrounds; exact colors and tones | Quick results; simple subjects without fine overlapping detail | The pyramid's subjects, for the last bit of fine detail |
-| Weak spots | Can raise contrast and noise a little | Halos and smears where near and far detail meet | Softer; veils around out-of-focus edges | Slow; fine colored speckle in dark areas |
+| Weak spots | Can raise contrast and noise a little | Halos and smears where near and far detail meet | Softer; veils around out-of-focus edges | Slow; a little fine colored speckle in dark areas |
 | Settings | Grit, range limit, tone, levels, decisions | Radius, smoothing, contrast threshold | Radius, smoothing, power | Grit, noise floor, range limit, tone, levels, window, coarse tones, filter, consistency |
 | Speed | Slowest on the CPU, fast on a GPU | Reads the frames twice | Fastest | Several times the pyramid's time, on the CPU only, and reads the frames twice |
 
@@ -79,8 +79,8 @@ structures in front of other fine structures come out right.
 
 Its settings, under **Advanced**:
 
-- **Grit** decides whether the finest detail comes from the single sharpest frame (higher: crisper texture) or a blend
-  of the sharpest ones (lower: less speckled noise in smooth areas).
+- **Grit** decides whether the finest detail comes from the single sharpest frame (lower: crisper texture) or a blend
+  of the sharpest ones (higher: less speckled noise in smooth areas).
 - **Range limit** holds each pixel within the brightness the frames have there, which stops halos and overshoot
   around edges. Leave it at 1 unless you want local contrast to rise.
 - **Tone** says what happens to the few values the method pushes beyond white or black: compressed back smoothly (the
@@ -117,12 +117,13 @@ doesn't change as the image shifts by a pixel, and it decides once for the layer
 detail together. It reads the frames twice: once to decide which frame each place takes at each layer, with isolated
 choices replaced by the choice around them, and once to build the result.
 
-Picking the frame with the most fine detail also picks the noisiest frame where there is no detail, so where a
-frame's finest detail is no stronger than its noise (the **Noise floor**), the frames are blended evenly there instead.
-On four real stacks of camera JPEGs it kept 2 to 4.5% more fine detail on the subjects than the pyramid, and its flat
-areas ranged from 14% less noisy to 7% noisier. It stacks on the CPU only, even when FloraStack uses the GPU, and took
-3.9 to 5.2 times as long as the pyramid on the CPU, with about twice its memory (3.7 GB rather than 1.8 GB for
-20-megapixel frames). Its quarter-size previews are quick enough to follow a setting.
+Picking the frame with the most fine detail also picks the noisiest frame where there is no detail, so the method
+compares each frame's detail with its noise (the **Noise floor**) at the frame's brightness: in a dark place that only
+the sharp frame shows dark, the lighter frames' noise doesn't win. Where a frame's finest detail is no stronger than
+its noise, the frames are blended evenly there instead. On four real stacks of camera JPEGs it kept 2 to 4.5% more fine
+detail on the subjects than the pyramid, and its flat areas ranged from 14% less noisy to 7% noisier. It stacks on the
+CPU only, even when FloraStack uses the GPU, and took 3.1 to 3.5 times as long as the pyramid on the CPU, with about
+twice its memory (3.5 GB for 20-megapixel frames). Its quarter-size previews are quick enough to follow a setting.
 
 Its settings, under **Advanced**: **Grit**, **Range limit**, **Tone** and **Levels** work as the pyramid's;
 **Noise floor**, **Window**, **Coarse tones**, **Filter** and **Consistency** are its own, and [the Stack tab](stack-tab.md#noise-floor)

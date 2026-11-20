@@ -70,10 +70,12 @@ the same way.
   stack; choose it with `develop.set` (as shot, automatic, or a temperature and tint).
 - **Decisions by channel.** The pyramid's **Decisions: By channel** picks detail for each color on its own, which can
   shift colors. Use **By luminance**, the default.
-- **Colored speckle in dark, smooth areas** of a wavelet stack. The wavelet method keeps more of the finest detail than
-  the pyramid, and in dark areas some of it is noise, which shows as fine colored speckle where the pyramid is clean.
-  Raise **Noise floor** (under **Advanced**), which reduces it but may not remove it; or stack by the pyramid, or
-  retouch those areas from a pyramid output.
+- **Colored speckle in dark, smooth areas** of a wavelet stack. Where only noise is left, as in a dark spot that one
+  frame shows sharp, the wavelet method's choices can change from frame to frame between neighboring pixels, and the
+  frames' color noise shows as fine speckle where the pyramid is clean. The method compares each frame's detail with
+  its noise, which keeps most of it away, and **Noise floor** (under **Advanced**) sets that noise: raise it for noisy
+  frames. What is left shows only when the image is brightened; stack by the pyramid, or retouch those areas from a
+  pyramid output, if it matters.
 - **Colored fringes along edges** (lateral chromatic aberration). For RAW frames the develop step measures and
   corrects them by default (`"chromatic_aberration": "auto"`), and finds nothing to correct on a frame with too few
   strong edges: set the correction by hand with `develop.set` then. For other files, correct them in the raw

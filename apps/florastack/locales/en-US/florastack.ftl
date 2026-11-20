@@ -248,7 +248,7 @@ tip-framing-common = Crops to what every frame covers once aligned.
 
 advanced = Advanced
 setting-grit = Grit
-tip-grit = How much the finest detail favors the single sharpest frame over a blend. Raise it for crisper fine texture; lower it to reduce speckled noise.
+tip-grit = How much the finest detail is blended from the sharpest frames rather than taken from the single sharpest one. Raise it to reduce speckled noise in smooth areas; lower it for crisper fine texture.
 setting-range-limit = Range limit
 tip-range-limit = Keeps each pixel within the brightness the frames have there, which stops the halos and overshoot the pyramid method can make. Lower it only to let contrast rise.
 setting-levels = Levels

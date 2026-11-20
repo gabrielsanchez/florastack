@@ -252,7 +252,7 @@ fn a_built_in_preset_is_named_by_its_id() {
         .get_output()
         .clone();
     let result = json_output(&output);
-    assert_eq!(result["outputs"][0]["stack"]["settings"]["grit"], 0.25, "the product shot's grit: {result}");
+    assert_eq!(result["outputs"][0]["stack"]["settings"]["grit"], 0.75, "the product shot's grit: {result}");
     cli(dir.path()).arg("stack").arg(files[0].parent().unwrap()).args(["--preset", "builtin:underwater", "--out", "other.tif"]).assert().failure();
 }
 
