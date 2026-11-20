@@ -1,4 +1,4 @@
-//! TIFF, built from lightcraft-tiff's IFDs: 8, 16 or 32-bit float samples, gray, gray and alpha (with
+//! TIFF, built from lightcraft-tiff's IFDs: 8 or 16-bit integer or 16 or 32-bit float samples, gray, gray and alpha (with
 //! `ExtraSamples` 2, unassociated), RGB or RGBA, in strips that are uncompressed or LZW or Deflate compressed with a
 //! predictor ([`super::strips`]). IFD0 carries the source frame's descriptive EXIF tags with FloraStack's software
 //! tag, the ICC profile (34675), the XMP packet (700) and the IPTC stream (33723), and points to the Exif and GPS
@@ -72,11 +72,18 @@ pub(crate) fn worst_case(raw: u64, compression: TiffCompression) -> u64 {
     }
 }
 
-/// The band's rows as compressed strips of `rows` rows each.
-pub(crate) fn band_strips(band: &AnyImage, rows: usize, compression: TiffCompression, format: Format) -> Result<Vec<Vec<u8>>, CodecError> {
+/// The band's rows as compressed strips of `rows` rows each, its floats stored as 16-bit ones with `half`.
+pub(crate) fn band_strips(
+    band: &AnyImage,
+    rows: usize,
+    compression: TiffCompression,
+    half: bool,
+    format: Format,
+) -> Result<Vec<Vec<u8>>, CodecError> {
     match band {
         AnyImage::U8(i) => strips::strips(i, rows, compression, format),
         AnyImage::U16(i) => strips::strips(i, rows, compression, format),
+        AnyImage::F32(i) if half => strips::half_strips(i, rows, compression, format),
         AnyImage::F32(i) => strips::strips(i, rows, compression, format),
     }
 }
@@ -107,11 +114,16 @@ impl ImageEncoder for TiffEncoder {
         let OutputFormat::Tiff { compression } = spec.format else {
             return Err(CodecError::encode(F, BackendError::message("not TIFF options")));
         };
-        let (w, h, c, depth) = (bands.width(), bands.height(), bands.channels(), bands.depth());
+        // The spec's depth: an image in memory, which the in-memory `encode` writes, holds 16-bit floats as 32-bit ones.
+        let (w, h, c, depth) = (bands.width(), bands.height(), bands.channels(), spec.depth);
+        if bands.depth().in_memory() != depth.in_memory() {
+            return Err(CodecError::encode(F, BackendError::message("the image doesn't have the file's sample type")));
+        }
         let (bits, float, size) = match depth {
             BitDepth::U8 => (8, false, 1),
             BitDepth::U16 => (16, false, 2),
             BitDepth::F32 => (32, true, 4),
+            BitDepth::F16 => (16, true, 2),
         };
         let row_bytes = w
             .checked_mul(c)
@@ -127,7 +139,7 @@ impl ImageEncoder for TiffEncoder {
             let n = band_rows.min(h - y);
             let band = bands.rows(y, n)?;
             stream::check_band(&band, w, n, c, depth, F)?;
-            for strip in band_strips(&band, rows, compression, F)? {
+            for strip in band_strips(&band, rows, compression, depth == BitDepth::F16, F)? {
                 container.chunk(&strip, &mut chunks)?;
             }
             y += n;

@@ -1717,6 +1717,7 @@ dependencies = [
  "florastack-core",
  "florastack-metrics",
  "florastack-testkit",
+ "half",
  "image",
  "image-webp",
  "lightcraft-codecs",

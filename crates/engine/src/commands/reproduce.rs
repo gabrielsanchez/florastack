@@ -371,6 +371,9 @@ fn rebuild(session: &Session, output: &florastack_project::Output, ctx: &crate::
     let settings = params.chosen(method, &crate::project::stack_settings(session.project()?)?);
     settings.validate()?;
     let cache = session.cache_dir()?;
+    // A slab is made again as `stack.slabbed` made it, its coverage ramped and its files in half floats, so that the
+    // final stack reads the same samples.
+    let slab = output.parameters.get("slab").is_some();
     let (stacked, depth) = if output.inputs.iter().all(|i| matches!(i, Input::Frame(_))) {
         let frames: Vec<FrameId> = output.inputs.iter().filter_map(|i| if let Input::Frame(f) = i { Some(*f) } else { None }).collect();
         let mut plan = StackPlan::of_frames(
@@ -381,7 +384,12 @@ fn rebuild(session: &Session, output: &florastack_project::Output, ctx: &crate::
             &frames,
             crate::retouch::output_framing(output),
         )?;
-        plan.stack_any(ctx, false)?
+        let coverages = slab.then(|| super::slab::coverages(&plan, 0..plan.frames.len()));
+        let (mut stacked, depth) = plan.stack_any(ctx, false)?;
+        if let (Some(coverages), Some(alpha)) = (&coverages, stacked.alpha.as_mut()) {
+            super::slab::ramp(alpha, coverages);
+        }
+        (stacked, depth)
     } else {
         let sources = output
             .inputs
@@ -420,5 +428,6 @@ fn rebuild(session: &Session, output: &florastack_project::Output, ctx: &crate::
             .and_then(|p| p.get("tone"))
             .and_then(|v| serde_json::from_value(v.clone()).ok())
     });
-    super::stack::store(&cache, "export.reproduce", "reproduced", stacked, depth, tone, None)
+    let storage = if slab { super::stack::Storage::Slab(None) } else { super::stack::Storage::Output };
+    super::stack::store(&cache, "export.reproduce", "reproduced", stacked, depth, tone, storage)
 }

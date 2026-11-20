@@ -541,12 +541,15 @@ fn a_pyramid_brought_into_range_keeps_its_extended_result_for_float_files() {
     assert!(kept > 1.2, "retain extended range: {kept}");
     let exr = json!({ "format": { "format": "open-exr", "compression": "zip", "half": false }, "depth": "f32", "extended_range": true });
     assert!(save(&mut engine, "extended.exr", exr).1 > 1.2);
+    // Half floats keep the extended range too.
+    let half = json!({ "format": { "format": "tiff", "compression": "deflate" }, "depth": "f16", "extended_range": true });
+    assert!((save(&mut engine, "extended-half.tif", half).1 - kept).abs() < kept / 1024.0, "half floats keep {kept} to three digits");
     let in_range = json!({ "format": { "format": "tiff", "compression": "deflate" }, "depth": "f32" });
     assert!(save(&mut engine, "in-range.tif", in_range).1 <= 1.0);
     let integer = json!({ "format": { "format": "tiff", "compression": "deflate" }, "depth": "u16", "extended_range": true });
     let (written, max) = save(&mut engine, "integer.tif", integer);
     assert!(max <= 1.0);
-    assert!(written["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("32-bit float")), "{written}");
+    assert!(written["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("float files only")), "{written}");
 
     // Keeping the range instead leaves the output itself extended, with no map.
     let kept = run(&mut engine, "stack.pyramid", r#"{ "tone": "keep" }"#);

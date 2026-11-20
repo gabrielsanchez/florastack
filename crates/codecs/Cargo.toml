@@ -30,6 +30,7 @@ image-webp.workspace = true
 image.workspace = true
 exr.workspace = true
 miniz_oxide.workspace = true
+half.workspace = true
 weezl.workspace = true
 moxcms.workspace = true
 

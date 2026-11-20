@@ -371,7 +371,7 @@ impl ColorEngine for LightCraftColor {
         Ok(match depth {
             BitDepth::U8 => AnyImage::U8(encode_with_tables::<u8>(image, &curves, 255, cs)?),
             BitDepth::U16 => AnyImage::U16(encode_with_tables::<u16>(image, &curves, 65535, cs)?),
-            BitDepth::F32 => {
+            BitDepth::F32 | BitDepth::F16 => {
                 let mut out = image.clone();
                 out.set_color_space(cs);
                 let channels = out.channels();
@@ -787,7 +787,7 @@ pub(crate) fn prepare(
             }
         },
     };
-    let float = depth == BitDepth::F32 || linear;
+    let float = depth.is_float() || linear;
     // The target profile, and whether to embed it.
     let target: Option<Profile> = match (output, gray, float) {
         (OutputProfile::Input, _, false) => source.clone(),
@@ -871,7 +871,7 @@ fn to_depth(image: &AnyImage, depth: BitDepth, encoding: Encoding) -> Result<Any
         Ok(match depth {
             BitDepth::U8 => AnyImage::U8(image.to_encoding::<u8>(encoding)?),
             BitDepth::U16 => AnyImage::U16(image.to_encoding::<u16>(encoding)?),
-            BitDepth::F32 => AnyImage::F32(image.to_encoding::<f32>(encoding)?),
+            BitDepth::F32 | BitDepth::F16 => AnyImage::F32(image.to_encoding::<f32>(encoding)?),
         })
     }
     match image {

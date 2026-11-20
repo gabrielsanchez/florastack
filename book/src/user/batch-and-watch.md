@@ -59,7 +59,8 @@ How it decides that a photo has arrived:
 - The watcher wakes on the system's file events and also checks the folder regularly, so network shares and folders
   without events work too. It watches the folder's own files, not subfolders, and includes the photos already there.
 - Capture waits for its first photo, then finishes once no new or changed photo has arrived for the **idle** time
-  (`--idle`, 5 seconds by default): set it longer than the time between photos, exposure and transfer included. A
+  (`--idle`, 5 seconds by default), counted from the moment the latest photo's preview is ready, however long it took:
+  set it longer than the time between photos, exposure and transfer included. A
   photo replaced after it was read stops the capture with an error.
 
 When it finishes, the frames are aligned again as a whole, and the project, the stacked TIFF, a preview and

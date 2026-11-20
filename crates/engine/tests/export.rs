@@ -83,6 +83,7 @@ fn exported_files_reopen_with_their_depth_profile_and_metadata() {
         (json!({ "format": "tiff", "depth": "u8", "profile": "srgb" }), 8, false, Some(NamedSpace::Srgb)),
         (json!({ "format": "tiff", "depth": "u16", "profile": "input", "metadata_frame": 3 }), 16, false, Some(NamedSpace::ProPhoto)),
         (json!({ "format": "tiff", "depth": "f32", "profile": { "wide": "rec2020" }, "metadata_frame": 5 }), 32, true, Some(NamedSpace::Rec2020)),
+        (json!({ "format": "tiff", "depth": "f16", "extended_range": true, "metadata_frame": 2 }), 16, true, None),
         (json!({ "format": "png", "depth": "u16", "profile": { "wide": "pro-photo" }, "metadata_frame": 2 }), 16, false, Some(NamedSpace::ProPhoto)),
         (json!({ "format": "png", "depth": "u8", "profile": "srgb", "metadata_frame": 9 }), 8, false, Some(NamedSpace::Srgb)),
         (json!({ "format": "jpeg", "depth": "u8", "profile": "input", "jpeg_quality": 90 }), 8, false, Some(NamedSpace::ProPhoto)),

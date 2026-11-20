@@ -254,6 +254,7 @@ impl fmt::Display for BitDepth {
             BitDepth::U8 => "8-bit",
             BitDepth::U16 => "16-bit",
             BitDepth::F32 => "32-bit float",
+            BitDepth::F16 => "16-bit float",
         })
     }
 }

@@ -77,7 +77,8 @@ pub trait Bands {
     /// The channels of every band.
     fn channels(&self) -> usize;
 
-    /// The sample type of every band.
+    /// The output's depth, which is every band's sample type ([`BitDepth::in_memory`]: 16-bit floats are written from
+    /// 32-bit ones).
     fn depth(&self) -> BitDepth;
 
     /// The rows `y..y + rows`. Encoders ask for consecutive bands from row 0 down.
@@ -128,7 +129,7 @@ pub(crate) fn band_rows(row_bytes: usize, unit: usize) -> usize {
 
 /// Checks that a band is what was asked for: a source that hands out something else would make a damaged file.
 pub(crate) fn check_band(band: &AnyImage, width: usize, rows: usize, channels: usize, depth: BitDepth, format: Format) -> Result<(), CodecError> {
-    if band.width() == width && band.height() == rows && band.channels() == channels && depth_of(band) == depth {
+    if band.width() == width && band.height() == rows && band.channels() == channels && depth_of(band) == depth.in_memory() {
         Ok(())
     } else {
         Err(CodecError::encode(format, BackendError::message("a band of rows doesn't have the image's shape")))

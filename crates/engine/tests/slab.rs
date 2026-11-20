@@ -240,6 +240,13 @@ fn slabs_carry_their_frames_coverage_into_the_final_stack() {
     let covers: Vec<u64> = slabs(&slabbed).iter().map(|s| transparent(&output_image(&engine, s["output"].as_u64().unwrap()))).collect();
     println!("slabs' uncovered pixels: {covers:?}, the stack's {uncovered}");
     assert!(covers.iter().all(|&c| c >= uncovered) && covers.iter().any(|&c| c > uncovered), "{covers:?}");
+    // A slab's coverage ramps inside its frames' edges, as theirs does, rather than stepping from 0 to 1.
+    for slab in slabs(&slabbed) {
+        let image = output_image(&engine, slab["output"].as_u64().unwrap());
+        let alpha = (0..image.height()).flat_map(|y| (0..image.width()).map(move |x| (x, y))).filter_map(|(x, y)| image.get(x, y, 3));
+        let ramp = alpha.filter(|a| *a > 0.0 && *a < 0.99).count();
+        assert!(ramp > 0, "slab {slab}: no pixel between 0 and 1");
+    }
 }
 
 #[test]

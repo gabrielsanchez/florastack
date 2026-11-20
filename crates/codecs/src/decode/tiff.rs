@@ -100,9 +100,7 @@ fn samples(result: DecodingResult, bits: u8, width: usize, height: usize, per_pi
         DecodingResult::I16(v) => Samples::U16(v.into_iter().map(|x| (x.max(0) as u16) << 1).collect()),
         DecodingResult::I32(v) => Samples::U16(v.into_iter().map(|x| (x.max(0) >> 15) as u16).collect()),
         DecodingResult::I64(v) => Samples::U16(v.into_iter().map(|x| (x.max(0) >> 47) as u16).collect()),
-        // The `half` crate's `f16`, which this crate doesn't name: a closure rather than a method path.
-        #[allow(clippy::redundant_closure_for_method_calls)]
-        DecodingResult::F16(v) => Samples::F32(v.into_iter().map(|x| x.to_f32()).collect()),
+        DecodingResult::F16(v) => Samples::F32(v.into_iter().map(half::f16::to_f32).collect()),
         DecodingResult::F32(v) => Samples::F32(v),
         DecodingResult::F64(v) => Samples::F32(v.into_iter().map(|x| x as f32).collect()),
     })

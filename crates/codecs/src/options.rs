@@ -68,6 +68,26 @@ pub enum BitDepth {
     U16,
     /// 32-bit floats (or 16-bit floats, for OpenEXR with `half`). In a DNG file, white is 1.
     F32,
+    /// 16-bit (half) floats, for TIFF: half the size of 32-bit floats before compression, and about 2.5 times smaller
+    /// after it, since the low bits of 32-bit floats are noise that doesn't compress, with about three decimal digits
+    /// (a step of 1/2048 just below white, finer towards black) and the range beyond white kept, up to 65504.
+    F16,
+}
+
+impl BitDepth {
+    /// Whether the samples are floats.
+    pub fn is_float(self) -> bool {
+        matches!(self, BitDepth::F32 | BitDepth::F16)
+    }
+
+    /// The sample type images of this depth have in memory: 32-bit floats for 16-bit ones, which only the file has.
+    #[must_use]
+    pub fn in_memory(self) -> BitDepth {
+        match self {
+            BitDepth::F16 => BitDepth::F32,
+            other => other,
+        }
+    }
 }
 
 /// The color profile of an output file.
@@ -234,7 +254,7 @@ impl OutputFormat {
         match self {
             OutputFormat::Jpeg { .. } => &[BitDepth::U8],
             OutputFormat::Png => &[BitDepth::U8, BitDepth::U16],
-            OutputFormat::Tiff { .. } => &[BitDepth::U8, BitDepth::U16, BitDepth::F32],
+            OutputFormat::Tiff { .. } => &[BitDepth::U8, BitDepth::U16, BitDepth::F32, BitDepth::F16],
             OutputFormat::OpenExr { .. } => &[BitDepth::F32],
             OutputFormat::Dng { .. } => &[BitDepth::U16, BitDepth::F32],
         }

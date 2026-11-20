@@ -13,15 +13,22 @@
 //!   before the one before it ends so that neighbors share at least `overlap` frames; spaced evenly, from the first
 //!   frame to the last. By default a slab holds the square root of the number of frames, rounded up, which balances
 //!   the two stages (about as many slabs as frames in a slab), and neighbors share a fifth of a slab, at least a frame.
-//! - **The slab stage** stacks one slab at a time, as a stack of its frames is stacked, and stores it as soon as it is
-//!   finished: memory holds one stack's accumulators, whatever the number of slabs, and the frames neighbors share
-//!   are read once for each. Keeping two slabs open instead, to read those frames once, halved each one's memory
-//!   budget: at 20 MP, the pyramid's accumulators spilled to disk at every frame, and the wasp's 23 frames took 476 s
-//!   instead of 51 (roadmap 3.4).
+//! - **The slab stage** stacks one slab at a time, as a stack of its frames is stacked, and stores each slab while the
+//!   next one is stacked: memory holds one stack's accumulators and one finished slab, whatever the number of slabs,
+//!   and the frames neighbors share are read once for each. Keeping two slabs open instead, to read those frames once,
+//!   halved each one's memory budget: at 20 MP, the pyramid's accumulators spilled to disk at every frame, and the
+//!   wasp's 23 frames took 476 s instead of 51 (roadmap 3.4). Storing each slab beside the next one's stacking took the
+//!   wasp's first run from 104 s to 85 s.
+//! - **Half floats**: a slab's image and its `extended` map are stored as 16-bit float TIFF files (`Storage::Slab`),
+//!   about 2.5 times smaller than 32-bit ones (the low bits of 32-bit floats are noise that doesn't compress), and
+//!   faster to write and read again: the wasp's six slabs took 0.8 GB instead of 1.7, and its first run 104 s
+//!   instead of 124. Half floats keep each value to within 1/4096 of itself, and the pyramid's values beyond white.
 //! - **Slab outputs**: every slab becomes a project output, made by the slab method from its frames, with its place in
 //!   the stack in its parameters (`"slab": {"index": 0, "of": 18}`, from 0), so that retouching can take pixels from a
 //!   slab, near in focus to the point it repairs, instead of from one of hundreds of frames. A slab covers what its
-//!   frames cover together: in wide framing, the pixels none of them covers are transparent.
+//!   frames cover together: in wide framing, the pixels none of them covers are transparent, and its coverage ramps
+//!   inside its frames' edges as theirs does ([`ramp`]), so that the final stack blends across a slab's edge as a
+//!   stack of the frames blends across a frame's.
 //! - **Reuse**: a slab's image is keyed by everything it is made from (the method and its settings, each frame's file,
 //!   development, defect mask, alignment and gain, the canvas, FloraStack's version). With `reuse`, the default, a slab
 //!   whose key an output of the project has already is not stacked again: the final stage reads that output. Trying
@@ -36,17 +43,18 @@
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use florastack_align::Framing;
+use florastack_align::{Coverage, DEFAULT_FEATHER, Framing};
 use florastack_core::{AnyImage, Image, Monitor};
 use florastack_project::{CacheDir, CacheRef, ContentHash, Edit, FrameId, Input, NewOutput, OutputId, Project};
 use florastack_raw::Quality;
-use florastack_stack::{StackError, Stacked};
+use florastack_stack::{StackError, Stacked, Tone};
+use rayon::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::stack::{
-    DepthSummary, Feed, Loaded, MethodName, MethodParams, RangeSummary, StackPlan, Stored, Units, UsedSettings, Warping, locks, stack_feed, store,
-    unclipped,
+    DepthSummary, Feed, Loaded, MethodName, MethodParams, RangeSummary, StackPlan, Storage, Stored, Units, UsedSettings, Warping, locks, stack_feed,
+    store, unclipped,
 };
 use super::{MAX_ITEMS, Quiet, check_name};
 use crate::error::{CommandError, Invalid};
@@ -290,7 +298,7 @@ impl Feed for Cached<'_> {
     fn load(&mut self, i: usize) -> Result<Loaded, CommandError> {
         let internal = || CommandError::Internal { command: COMMAND.to_owned() };
         let reference = self.sources.get(i).ok_or_else(internal)?;
-        // Slabs are stored as linear f32, which reads back as such.
+        // Slabs are stored as linear floats, 16-bit ones (32-bit in projects slabbed before them), which read back as f32.
         let AnyImage::F32(image) = read_image(self.cache, reference)? else { return Err(internal()) };
         if (image.width(), image.height()) != self.size {
             return Err(CommandError::Unavailable {
@@ -315,16 +323,49 @@ impl Feed for Cached<'_> {
     }
 }
 
-/// Stores slab `j`'s stack, keyed.
-fn store_slab(
-    plan: &StackPlan,
-    j: usize,
-    stacked: Stacked,
-    depth: Option<florastack_stack::DepthMap>,
-    slabs: &[Slab],
-) -> Result<Stored, CommandError> {
-    let key = slabs.get(j).map(|s| s.key.clone()).ok_or_else(|| plan.internal())?;
-    store(&plan.cache, COMMAND, &format!("slab-{}-{}", j + 1, plan.settings.name()), stacked, depth, plan.settings.ranged(), Some(key))
+/// Ramps a slab's coverage, `alpha` (the stacker's: 1 where a frame covers, 0 where none does), as its frames' own
+/// coverage ramps inside their edges ([`Coverage`], over [`DEFAULT_FEATHER`] pixels): each covered pixel becomes the
+/// most that any of the slab's frames, by its `coverages`, covers it. The final stack weighs the slab by it, so that
+/// where the slabs that cover change, at a slab's edge in wide framing, the blend changes smoothly, as it does where the
+/// frames that cover change in a stack of the frames, rather than in a step.
+pub(super) fn ramp(alpha: &mut Image<f32>, coverages: &[Coverage]) {
+    alpha.par_rows_mut().enumerate().for_each(|(y, row)| {
+        #[allow(clippy::cast_precision_loss)] // Pixel coordinates, far below 2^52.
+        let y = y as f64;
+        for (x, a) in row.iter_mut().enumerate() {
+            if *a > 0.0 {
+                #[allow(clippy::cast_precision_loss)]
+                let most = coverages.iter().map(|c| c.weight(x as f64, y)).fold(0.0, f32::max);
+                // A pixel the stacker found covered stays covered, by the least weight there is.
+                *a = most.max(f32::MIN_POSITIVE);
+            }
+        }
+    });
+}
+
+/// The coverage of each of `plan`'s frames in `range`, which [`ramp`] takes.
+pub(super) fn coverages(plan: &StackPlan, range: Range<usize>) -> Vec<Coverage> {
+    let (w, h) = plan.size;
+    plan.frames.get(range).unwrap_or_default().iter().map(|f| Coverage::new(&plan.canvas, &f.transform, w, h, DEFAULT_FEATHER)).collect()
+}
+
+/// A slab's stack, and its depth map when the slab method makes one.
+type SlabStack = (Stacked, Option<florastack_stack::DepthMap>);
+
+/// What storing a slab takes of the plan, so that a slab is stored while the next one is stacked.
+struct SlabStore<'a> {
+    cache: &'a CacheDir,
+    method: &'static str,
+    tone: Option<Tone>,
+    slabs: &'a [Slab],
+}
+
+impl SlabStore<'_> {
+    /// Stores slab `j`'s stack, keyed.
+    fn store(&self, j: usize, (stacked, depth): SlabStack) -> Result<Stored, CommandError> {
+        let key = self.slabs.get(j).map(|s| s.key.clone()).ok_or_else(|| CommandError::Internal { command: COMMAND.to_owned() })?;
+        store(self.cache, COMMAND, &format!("slab-{}-{}", j + 1, self.method), stacked, depth, self.tone, Storage::Slab(Some(key)))
+    }
 }
 
 /// A slab of a slabbed stack.
@@ -429,13 +470,34 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
         let todo: Vec<usize> = slabs.iter().enumerate().filter(|(_, s)| s.reused.is_none()).map(|(j, _)| j).collect();
         let passes = plan.settings.passes();
         let mut units = Units::new(todo.iter().filter_map(|&j| slabs.get(j)).map(|s| passes * s.range.len()).sum());
+        // Each slab is stored while the next one is stacked: its files take a few seconds to write at 20 MP, all but
+        // the last slab's beside the stacking, which holds one more slab's image in memory meanwhile.
+        let cache = plan.cache.clone();
+        let keeper = SlabStore { cache: &cache, method: plan.settings.name(), tone: plan.settings.ranged(), slabs: &slabs };
+        let mut pending: Option<(usize, SlabStack)> = None;
         for j in todo {
             let (range, settings) = (slabs.get(j).map(|s| s.range.clone()).ok_or_else(|| plan.internal())?, plan.settings.clone());
+            let coverages = coverages(&plan, range.clone());
             let mut feed = Warping { plan: &mut plan, range, reduced: false };
             let (compute, tiling) = (feed.plan.compute, feed.plan.tiling.clone());
-            let (stacked, depth) = stack_feed(&mut feed, &settings, None, &tiling, &compute, ctx, &quiet, &mut units, |_, _| {})?;
-            let stored = store_slab(&plan, j, stacked, depth, &slabs)?;
-            *made.get_mut(j).ok_or_else(|| plan.internal())? = Some(stored);
+            let previous = pending.take();
+            let (stacked, stored) = rayon::join(
+                || {
+                    let (mut stacked, depth) = stack_feed(&mut feed, &settings, None, &tiling, &compute, ctx, &quiet, &mut units, |_, _| {})?;
+                    if let Some(alpha) = stacked.alpha.as_mut() {
+                        ramp(alpha, &coverages);
+                    }
+                    Ok::<_, CommandError>((stacked, depth))
+                },
+                || previous.map(|(k, stack)| keeper.store(k, stack).map(|stored| (k, stored))).transpose(),
+            );
+            if let Some((k, stored)) = stored? {
+                *made.get_mut(k).ok_or_else(|| plan.internal())? = Some(stored);
+            }
+            pending = Some((j, stacked?));
+        }
+        if let Some((k, stack)) = pending {
+            *made.get_mut(k).ok_or_else(|| plan.internal())? = Some(keeper.store(k, stack)?);
         }
 
         // The final stage, over the slabs' outputs.
@@ -461,7 +523,8 @@ fn slabbed(session: &Session, p: SlabbedParams) -> Result<JobPlan<SlabbedSummary
         ctx.checkpoint()?;
         let tone = final_settings.ranged().or(plan.settings.ranged());
         let stem = format!("slabbed-{}", final_settings.name());
-        let Stored { image, preview, maps, width, height, uncovered, range, depth } = store(&plan.cache, COMMAND, &stem, stacked, depth, tone, None)?;
+        let Stored { image, preview, maps, width, height, uncovered, range, depth } =
+            store(&plan.cache, COMMAND, &stem, stacked, depth, tone, Storage::Output)?;
 
         // What the commit adds.
         let develop = match plan.reader.resolved_develop() {
@@ -613,6 +676,27 @@ mod tests {
             assert!(size >= MIN_SLAB && size < n && overlap < size, "{n}");
             assert!(layout(n, size, overlap).len() >= 2, "{n}");
         }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Weights of 0 and 1 are exact.
+    fn a_slabs_coverage_ramps_as_its_frames_do() {
+        // A 20x9 canvas of the master, and two 12x9 frames: one on its left, the other shifted 8 pixels right. Row 4, in
+        // the middle, is far from their top and bottom edges.
+        let canvas = florastack_align::Canvas::master(20, 9);
+        let left = Coverage::new(&canvas, &florastack_core::Affine::IDENTITY, 12, 9, DEFAULT_FEATHER);
+        let right = Coverage::new(&canvas, &florastack_core::Affine::translation(-8.0, 0.0), 12, 9, DEFAULT_FEATHER);
+        // The stacker's alpha, with the last column left uncovered.
+        let mut alpha = Image::from_fn(20, 9, 1, florastack_core::ColorSpace::LINEAR, |x, _, _| if x < 19 { 1.0 } else { 0.0 }).unwrap();
+        ramp(&mut alpha, &[left, right]);
+        let a: Vec<f32> = (0..20).map(|x| alpha.get(x, 4, 0).unwrap()).collect();
+        let most = |x: usize| left.weight(x as f64, 4.0).max(right.weight(x as f64, 4.0));
+        // Inside the frames it is 1; at their outer edges it ramps as theirs do; where they overlap, the more of the two.
+        assert_eq!((a[5], a[10], a[15]), (1.0, 1.0, 1.0));
+        assert!(a[0] > 0.0 && a[0] < 1.0 && a[0] == most(0), "{a:?}");
+        assert!((1..19).all(|x| a[x] == most(x).max(f32::MIN_POSITIVE)), "{a:?}");
+        // What the stacker left uncovered stays uncovered.
+        assert_eq!(a[19], 0.0);
     }
 
     #[test]

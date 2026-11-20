@@ -24,6 +24,11 @@ of the number of frames, rounded up, and neighbors share a fifth of a slab: 200 
 3. Each slab is stacked by the **slab method** and the slabs by the **final method**, the pyramid for both by default,
 each with the project's stacking settings unless you give others.
 
+Slabs are kept as 16-bit float files, which hold what the final stage needs of them (each value to about three
+significant digits, and the values beyond white) in about 2.5 times less space than 32-bit float files: the 22 slabs
+of a 300-frame stack of 24-megapixel frames take 2 to 3 GB. Where the frames don't all cover the picture (wide framing),
+each slab fades out at its edge as its frames do, so the final stage blends across it without a seam.
+
 The pyramid makes the cleanest final stage. A depth map of slabs can fill smooth areas from blurred slabs behind them
 and leave dark specks along edges, so prefer the pyramid as the final method, or retouch those places from a slab.
 
