@@ -51,7 +51,7 @@ pub use image::{AnyImage, ColorSpace, Encoding, Image, ImageError, Sample, Sampl
 pub use lock::{LockFile, LockState};
 pub use orientation::Orientation;
 pub use progress::{Cancelled, Monitor, Unmonitored};
-pub use store::{CacheStats, MemoryStore, StoreError, TempFileStore, TileCache, TileKey, TileStore};
+pub use store::{CacheStats, MemoryStore, SpillTraffic, StoreError, TempFileStore, TileCache, TileKey, TileStore};
 pub use tile::{Tile, TileError, TileGrid};
 
 /// Starts the browser build's storage worker, which holds the origin-private files that spilled tiles go to (see

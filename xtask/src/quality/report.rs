@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 
-use super::gate::{Baseline, Check, Comparison, Host, MEASURES, Outcome, State};
+use super::gate::{Baseline, Check, Comparison, Host, MEASURES, Outcome, Same, State};
 
 /// What the page says about the run as a whole.
 pub struct Info<'a> {
@@ -90,9 +90,10 @@ fn facts(s: &mut String, info: &Info<'_>, comparison: Option<&Comparison>) {
         fact("Settings", format!("stack.set {settings} before every stack"));
     }
     if let Some(baseline) = info.baseline {
-        let runtime = match comparison {
-            Some(c) if c.runtime_compared => "runtimes compared",
-            _ => "runtimes not compared: another machine or build profile",
+        let runtime = match comparison.map(|c| c.same) {
+            Some(Same::Machine) => "runtimes compared",
+            Some(Same::Profile) => "runtimes in calibration workloads compared; in seconds not: another machine",
+            _ => "runtimes not compared: another build profile",
         };
         fact("Baseline", format!("{} runs, {} profile, on {}; {runtime}", baseline.runs.len(), baseline.profile, baseline.host.describe()));
     }
@@ -309,7 +310,7 @@ const SCRIPT: &str = r"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quality::gate::{Region, RunResult, StackResult, compare, updated};
+    use crate::quality::gate::{Region, RunResult, Same, StackResult, compare, updated};
 
     fn result() -> StackResult {
         let run = |run: &str, title: &str, ssim: f64| RunResult {
@@ -318,6 +319,8 @@ mod tests {
             title: title.into(),
             runtime_s: 0.5,
             peak_mib: 10.0,
+            spill_mib: 0.0,
+            runtime_rel: 0.0,
             metrics: [("ssim".to_owned(), ssim)].into(),
             uncovered: Some(0),
             slabs: (run == "slabbed").then_some(4),
@@ -333,6 +336,7 @@ mod tests {
             width: 480,
             height: 360,
             threads: 1,
+            calibration_s: 1.0,
             truth: true,
             runs: vec![run("pyramid", "Pyramid", 0.93), run("slabbed", "Pyramid slabs, then pyramid", 0.931)],
             regions: vec![Region {
@@ -357,7 +361,7 @@ mod tests {
         worse.runs[0].metrics.insert("ssim".into(), 0.9);
         let degraded =
             [Outcome { id: "synthetic/a".into(), result: Ok(worse) }, Outcome { id: "local/wasp".into(), result: Err("no frames".into()) }];
-        let comparison = compare(&baseline, &degraded, &|_| true, false);
+        let comparison = compare(&baseline, &degraded, &|_| true, Same::Anywhere);
         let info = Info {
             product: "FloraStack",
             command: "cargo xtask quality --gate".into(),

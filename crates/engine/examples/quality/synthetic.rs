@@ -8,6 +8,7 @@
 
 use florastack_core::testutil::{Backdrop, GroundTruth, StackParams, generate, generate_layered, scene};
 use florastack_core::{Image, Rect};
+use florastack_engine::Tiling;
 
 /// The margin, in pixels, frames are generated with on every side and cropped of.
 pub const MARGIN: usize = 8;
@@ -20,6 +21,18 @@ pub const STACKS: &[(&str, &str)] = &[
     ("textured-moved", "A textured scene, 480x360, 12 frames that breathe, shift, rotate and change in brightness, with noise and dust"),
     ("layered-deep", "A deep stack: 48 frames of a layered scene, 360x270, each sharp over a few frames, lightly noisy"),
 ];
+
+/// The frames the default tile budget is weighed against: a 20 MP camera's, whose pyramid takes 860 MB of its 1 GiB.
+const CAMERA_PIXELS: usize = 20_000_000;
+
+/// How a synthetic stack of frames of `pixels` pixels is tiled: the default tile budget scaled to them, as a 20 MP
+/// camera's frames have it, so that the stacks spill when a camera's would (with the same tile size: a method's tiles
+/// are at least four times its overlap, which leaves one or two tiles across these frames however small it is set).
+/// The spill measure then catches what the heap doesn't show, such as 3.4's first slabbing, which split the budget
+/// between two slabs and spilled the pyramid's accumulators at every frame.
+pub fn tiling(pixels: usize) -> Tiling {
+    Tiling { budget: Tiling::DEFAULT_BUDGET.saturating_mul(pixels) / CAMERA_PIXELS, ..Tiling::default() }
+}
 
 /// A synthetic stack: its frames, cropped by `MARGIN`, and its truth, in the coordinates of the uncropped scene.
 pub struct Synthetic {

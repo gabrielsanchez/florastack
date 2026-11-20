@@ -8,22 +8,27 @@
 //!   reference image when it has one of the output's size.
 //! - **Runs.** Alignment (scored by its transforms' error on synthetic stacks), then the weighted average, the pyramid,
 //!   the depth map and the wavelet method, then slabs by each method stacked by each method (`stack.slabbed`), all at
-//!   the defaults or at the settings the plan gives (`stack.set`). One slab method's four final stacks run in a row:
-//!   the first stacks the slabs, the other three reuse them, as exploring the final stack's settings does.
+//!   the defaults or at the settings the plan gives (`stack.set`). Each slab method's runs start with its slabs
+//!   (`slabbed-<method>-slabs`: the slabs and a weighted average of them, measured but not scored), then its four
+//!   final stacks reuse them, as exploring the final stack's settings does, so that their times compare.
 //! - **Measures.** The runtime is the command's wall time, from its dispatch to the end of its job. The peak memory is
 //!   the most heap the command held at once beyond what was allocated when it started, counted by `peak_alloc`'s
 //!   global allocator (every allocation, on every thread). On one thread, as the synthetic stacks run, it is the same on
 //!   every platform and run, as florastack-stack's memory test measures it; on several, it varies a little with the
-//!   order the threads happen to run in.
+//!   order the threads happen to run in. The runtime is also given in calibration workloads (`calibration.rs`), timed
+//!   when the stack starts, which compares across machines; and the spill is the MiB the tile stores wrote to disk and
+//!   read back (`SpillTraffic`), with the synthetic stacks tiled as a camera's frames are (`synthetic::tiling`).
 //! - **Crops.** The regions (`regions.rs`) are chosen on the four methods' outputs, which are then cut there; every
 //!   later output is cut as soon as it is scored. An output's files are deleted once it is cut (a slab's once its slab
 //!   method's final stacks are done), so that the disk holds one slab method's outputs at a time: with three methods, a
-//!   20 MP stack's 30 outputs took 7 GB.
+//!   20 MP stack's 30 outputs took 7 GB. A crop shows its output as the viewer does, in sRGB's primaries, with the
+//!   stack's highlights compressed when its first output goes beyond white (`white`, `shoulder`).
 //!
 //! `quality list` prints the synthetic stacks as JSON; `quality PLAN.json` runs the plan xtask wrote and writes the
 //! result to `<out>/results/<stack>.json` and the crops to `<out>/crops/<stack>/`, both named by the stack's id with `/`
 //! written `--`.
 
+mod calibration;
 mod regions;
 mod synthetic;
 
@@ -36,9 +41,9 @@ use std::time::Instant;
 
 use florastack_core::ops::{Border, Interpolation, warp_into};
 use florastack_core::testutil::{GroundTruth, transform_error};
-use florastack_core::{Affine, AnyImage, ColorSpace, Encoding, Image, Rect};
+use florastack_core::{Affine, AnyImage, ColorSpace, Encoding, Image, Rect, SpillTraffic};
 use florastack_engine::model::FolderTrash;
-use florastack_engine::{Compute, Dispatched, Engine, EngineConfig, SystemClock, ThreadExecutor, Value, json};
+use florastack_engine::{Compute, Dispatched, Engine, EngineConfig, SystemClock, ThreadExecutor, Tiling, Value, json};
 use florastack_metrics::{HaloParams, NoiseParams, color_shift, halo, noise, psnr, ssim};
 use regions::{Plane, Window};
 use serde::{Deserialize, Serialize};
@@ -93,6 +98,8 @@ struct StackResult {
     height: usize,
     /// The threads the stacking ran on.
     threads: usize,
+    /// The calibration workload's time on those threads, in seconds (`calibration.rs`).
+    calibration_s: f64,
     /// Whether the outputs were scored against a truth.
     truth: bool,
     runs: Vec<RunResult>,
@@ -109,6 +116,10 @@ struct RunResult {
     title: String,
     runtime_s: f64,
     peak_mib: f64,
+    /// The runtime in calibration workloads: what compares across machines.
+    runtime_rel: f64,
+    /// The MiB the tile stores wrote to disk and read back.
+    spill_mib: f64,
     metrics: BTreeMap<String, f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     uncovered: Option<u64>,
@@ -212,6 +223,8 @@ struct Stack {
     /// The truth on each canvas used so far, by framing.
     truths: BTreeMap<String, Image<f32>>,
     regions: Vec<(Window, &'static str)>,
+    /// The value every crop shows as white (`white`), set by the first output cut.
+    white: Option<f32>,
     notes: Vec<String>,
 }
 
@@ -225,22 +238,28 @@ struct First {
     pending: Vec<(usize, u64)>,
 }
 
-/// A run's place in the stack: its name, its title, its command and the command's parameters.
-type Planned = (String, String, &'static str, Value);
+/// A run's place in the stack: its name, its title, its command, the command's parameters, and whether its output is
+/// scored and cropped.
+type Planned = (String, String, &'static str, Value, bool);
 
-/// The runs after alignment, in groups: the four methods, then each slab method's four final stacks.
+/// The runs after alignment, in groups: the four methods, then for each slab method its slabs and its four final
+/// stacks.
 fn groups() -> Vec<Vec<Planned>> {
-    let mut groups = vec![METHODS.iter().map(|&(name, command, title)| (name.to_owned(), title.to_owned(), command, json!({}))).collect()];
+    let mut groups = vec![METHODS.iter().map(|&(name, command, title)| (name.to_owned(), title.to_owned(), command, json!({}), true)).collect()];
     for (slabs, _, slab_title) in METHODS {
-        groups.push(
-            METHODS
-                .iter()
-                .map(|&(last, _, last_title)| {
-                    let params = json!({ "slabs": { "method": slabs }, "final": { "method": last } });
-                    (format!("slabbed-{slabs}-{last}"), format!("{slab_title} slabs, then {}", last_title.to_lowercase()), "stack.slabbed", params)
-                })
-                .collect(),
-        );
+        let params = |last: &str| json!({ "slabs": { "method": slabs }, "final": { "method": last } });
+        // The slabs, stacked by the cheapest final method; its output is the next run's.
+        let first = (format!("slabbed-{slabs}-slabs"), format!("{slab_title} slabs"), "stack.slabbed", params("average"), false);
+        let finals = METHODS.iter().map(|&(last, _, last_title)| {
+            (
+                format!("slabbed-{slabs}-{last}"),
+                format!("{slab_title} slabs, then {}", last_title.to_lowercase()),
+                "stack.slabbed",
+                params(last),
+                true,
+            )
+        });
+        groups.push(std::iter::once(first).chain(finals).collect());
     }
     groups
 }
@@ -252,7 +271,9 @@ impl RunResult {
             run: run.to_owned(),
             title,
             runtime_s: 0.0,
+            runtime_rel: 0.0,
             peak_mib: 0.0,
+            spill_mib: 0.0,
             metrics: BTreeMap::new(),
             uncovered: None,
             slabs: None,
@@ -265,27 +286,33 @@ impl RunResult {
 
 fn run_stack(plan: &Plan, work: &Path) -> Result<StackResult, String> {
     let started = Instant::now();
-    let (files, truth, description) = match &plan.source {
+    let calibration_s = calibration::seconds(&work.join("calibration"))?;
+    eprintln!("{}: the calibration workload took {calibration_s:.3} s", plan.id);
+    let (files, truth, description, tiling) = match &plan.source {
         Source::Synthetic(name) => {
             let made = synthetic::make(name)?;
             let files = write_frames(&work.join("frames"), &made.frames)?;
             let about = synthetic::STACKS.iter().find(|(n, _)| n == name).map(|(_, about)| (*about).to_owned());
-            (files, Some(Truth::Synthetic(made.truth)), about)
+            let pixels = made.frames.first().map_or(0, |f| f.width() * f.height());
+            (files, Some(Truth::Synthetic(made.truth)), about, synthetic::tiling(pixels))
         }
         Source::Files { frames, reference } => {
             let truth = match reference {
                 Some(path) => Some(Truth::Reference(read_f32(path)?)),
                 None => None,
             };
-            (frames.clone(), truth, None)
+            (frames.clone(), truth, None, Tiling::default())
         }
     };
-    let (mut stack, ids) = Stack::open(plan, work, &files, truth)?;
+    let (mut stack, ids) = Stack::open(plan, work, &files, truth, tiling)?;
     let mut runs = vec![stack.align(&plan.id, &ids)?];
     let wanted = |run: &str| plan.runs.is_empty() || plan.runs.iter().any(|w| run.contains(w.as_str()));
     let mut first = First::default();
     for group in groups() {
         stack.run_group(&plan.id, group.into_iter().filter(|(name, ..)| wanted(name)).collect(), &mut runs, &mut first)?;
+    }
+    for run in &mut runs {
+        run.runtime_rel = run.runtime_s / calibration_s;
     }
     let regions = stack.region_results()?;
     eprintln!("{}: done in {:.1} s", plan.id, started.elapsed().as_secs_f64());
@@ -297,6 +324,7 @@ fn run_stack(plan: &Plan, work: &Path) -> Result<StackResult, String> {
         width: stack.size.0,
         height: stack.size.1,
         threads: rayon::current_num_threads(),
+        calibration_s,
         truth: stack.truth.is_some(),
         runs,
         regions,
@@ -306,7 +334,7 @@ fn run_stack(plan: &Plan, work: &Path) -> Result<StackResult, String> {
 
 impl Stack {
     /// A new project in `work` with the frame `files`, at the plan's settings; and the frames' ids.
-    fn open(plan: &Plan, work: &Path, files: &[PathBuf], truth: Option<Truth>) -> Result<(Stack, Vec<u64>), String> {
+    fn open(plan: &Plan, work: &Path, files: &[PathBuf], truth: Option<Truth>, tiling: Tiling) -> Result<(Stack, Vec<u64>), String> {
         let config = EngineConfig {
             temporary_projects: Some(work.join("temp")),
             trash: Arc::new(FolderTrash::new(work.join("trash"))),
@@ -317,7 +345,7 @@ impl Stack {
             max_preview_jobs: 1,
             // The CPU, whatever the machine has: the baseline's measures, peak heap included, are the CPU stackers'.
             compute: Compute::CPU,
-            tiling: florastack_engine::Tiling::default(),
+            tiling,
         };
         let mut engine = Engine::new(config);
         command(&mut engine, "project.new", json!({ "name": "Quality", "folder": work }))?;
@@ -345,6 +373,7 @@ impl Stack {
             framings: Vec::new(),
             truths: BTreeMap::new(),
             regions: Vec::new(),
+            white: None,
             notes,
         };
         Ok((stack, ids))
@@ -353,7 +382,7 @@ impl Stack {
     /// Aligns the frames, whose ids are `ids`, and learns the master and the framings; the run, scored against the
     /// synthetic stack's transforms.
     fn align(&mut self, stack_id: &str, ids: &[u64]) -> Result<RunResult, String> {
-        let (aligned, runtime, peak) = measured(&mut self.engine, "align.run", json!({}))?;
+        let (aligned, measures) = measured(&mut self.engine, "align.run", json!({}))?;
         let info = command(&mut self.engine, "align.info", json!({}))?;
         let run_info = &info["run"];
         let master_id = run_info["master"].as_u64().ok_or("align.info names no master")?;
@@ -372,8 +401,7 @@ impl Stack {
             })
             .unwrap_or_default();
         let mut run = RunResult::new(stack_id, "alignment", "Alignment".to_owned());
-        run.runtime_s = runtime;
-        run.peak_mib = peak;
+        measures.record(&mut run);
         run.metrics.insert("rejected".to_owned(), aligned["rejected"].as_array().map_or(0.0, |r| r.len() as f64));
         if let Some(Truth::Synthetic(truth)) = &self.truth
             && let Some(error) = alignment_error(truth, run_info, ids, self.master)
@@ -387,15 +415,20 @@ impl Stack {
     /// Runs one group's runs into `runs`, then deletes its slabs' files; the first group's outputs choose the regions.
     fn run_group(&mut self, stack_id: &str, group: Vec<Planned>, runs: &mut Vec<RunResult>, first: &mut First) -> Result<(), String> {
         let mut slab_outputs: Vec<u64> = Vec::new();
-        for (name, title, command_name, params) in group {
+        for (name, title, command_name, params, score) in group {
             let mut run = RunResult::new(stack_id, &name, title);
-            let done = measured(&mut self.engine, command_name, params).and_then(|(summary, runtime, peak)| {
-                run.runtime_s = runtime;
-                run.peak_mib = peak;
+            let done = measured(&mut self.engine, command_name, params).and_then(|(summary, measures)| {
+                measures.record(&mut run);
                 if let Some(slabs) = summary["slabs"].as_array() {
                     slab_outputs.extend(slabs.iter().filter_map(|s| s["output"].as_u64()));
                 }
-                self.scored(&summary, &mut run, runs.len(), first)
+                counted(&summary, &mut run);
+                if score {
+                    self.scored(&summary, &mut run, runs.len(), first)
+                } else {
+                    let output = summary["output"].as_u64().ok_or_else(|| format!("no output in {summary}"))?;
+                    self.remove_output(output)
+                }
             });
             match done {
                 Ok(()) => report(&run),
@@ -484,11 +517,6 @@ impl Stack {
     /// Scores the output a command's `summary` names into `run` (the `index`th of the stack's runs) and cuts it, or
     /// keeps it in `first` to choose the regions on.
     fn scored(&mut self, summary: &Value, run: &mut RunResult, index: usize, first: &mut First) -> Result<(), String> {
-        run.uncovered = summary["uncovered"].as_u64();
-        if let Some(slabs) = summary["slabs"].as_array() {
-            run.slabs = Some(slabs.len());
-            run.slabs_reused = Some(slabs.iter().filter(|s| s["reused"] == true).count());
-        }
         let output = summary["output"].as_u64().ok_or_else(|| format!("no output in {summary}"))?;
         let framing = summary["framing"].as_str().unwrap_or("narrow");
         let image = self.output_image(output)?;
@@ -536,11 +564,22 @@ impl Stack {
     }
 
     /// Cuts `image` at every region, as PNG files named after `run`; their paths relative to the output folder.
-    fn cut(&self, image: &Image<f32>, run: &str) -> Result<Vec<String>, String> {
+    fn cut(&mut self, image: &Image<f32>, run: &str) -> Result<Vec<String>, String> {
+        let white = if let Some(white) = self.white {
+            white
+        } else {
+            let first = white(image);
+            if first > 1.0 {
+                self.notes.push(format!(
+                    "the crops compress highlights from {KNEE} up: {first:.2}, near the brightest of the first output, shows as white"
+                ));
+            }
+            *self.white.insert(first)
+        };
         let mut paths = Vec::new();
         for (i, (window, _)) in self.regions.iter().enumerate() {
             let path = format!("{}/r{}-{run}.png", self.crops, i + 1);
-            write_crop(image, window, &self.out.join(&path))?;
+            write_crop(image, window, white, &self.out.join(&path))?;
             paths.push(path);
         }
         Ok(paths)
@@ -555,7 +594,7 @@ impl Stack {
                 let crop = match truth {
                     Some(truth) => {
                         let path = format!("{}/r{}-truth.png", self.crops, i + 1);
-                        write_crop(truth, window, &self.out.join(&path))?;
+                        write_crop(truth, window, self.white.unwrap_or(1.0), &self.out.join(&path))?;
                         Some(path)
                     }
                     None => None,
@@ -563,6 +602,15 @@ impl Stack {
                 Ok(RegionResult { window: *window, why: (*why).to_owned(), truth: crop })
             })
             .collect()
+    }
+}
+
+/// What a stacking command's `summary` says of its canvas and slabs, into `run`.
+fn counted(summary: &Value, run: &mut RunResult) {
+    run.uncovered = summary["uncovered"].as_u64();
+    if let Some(slabs) = summary["slabs"].as_array() {
+        run.slabs = Some(slabs.len());
+        run.slabs_reused = Some(slabs.iter().filter(|s| s["reused"] == true).count());
     }
 }
 
@@ -576,22 +624,39 @@ fn command(engine: &mut Engine, name: &str, params: Value) -> Result<Value, Stri
     result.map_err(|e| format!("{name}: {e}"))
 }
 
-/// Runs a command to its end; its result, its runtime in seconds and its peak heap in MiB beyond what was allocated
-/// when it started.
-fn measured(engine: &mut Engine, name: &str, params: Value) -> Result<(Value, f64, f64), String> {
+/// What a command took: its runtime in seconds, its peak heap in MiB beyond what was allocated when it started, and
+/// the MiB its tile stores wrote to disk and read back.
+struct Measures {
+    runtime_s: f64,
+    peak_mib: f64,
+    spill_mib: f64,
+}
+
+impl Measures {
+    fn record(self, run: &mut RunResult) {
+        (run.runtime_s, run.peak_mib, run.spill_mib) = (self.runtime_s, self.peak_mib, self.spill_mib);
+    }
+}
+
+/// Runs a command to its end; its result, and what it took.
+fn measured(engine: &mut Engine, name: &str, params: Value) -> Result<(Value, Measures), String> {
     let before = HEAP.current_usage();
+    let spilled = SpillTraffic::now();
     HEAP.reset_peak_usage();
     let start = Instant::now();
     let result = command(engine, name, params)?;
-    let runtime = start.elapsed().as_secs_f64();
-    let peak = HEAP.peak_usage().saturating_sub(before) as f64 / f64::from(1 << 20);
-    Ok((result, runtime, peak))
+    let runtime_s = start.elapsed().as_secs_f64();
+    let mib = |bytes: u64| bytes as f64 / f64::from(1 << 20);
+    let peak_mib = mib(HEAP.peak_usage().saturating_sub(before) as u64);
+    let spill_mib = mib(SpillTraffic::now().since(spilled).total());
+    Ok((result, Measures { runtime_s, peak_mib, spill_mib }))
 }
 
 /// Prints what a run measured.
 fn report(run: &RunResult) {
     let ssim = run.metrics.get("ssim").map_or(String::new(), |s| format!("  SSIM {s:.4}"));
-    eprintln!("  {:<44} {:>8.2} s {:>9.1} MiB{ssim}", run.id, run.runtime_s, run.peak_mib);
+    let spill = if run.spill_mib > 0.0 { format!("  spilled {:.1} MiB", run.spill_mib) } else { String::new() };
+    eprintln!("  {:<44} {:>8.2} s {:>9.1} MiB{ssim}{spill}", run.id, run.runtime_s, run.peak_mib);
 }
 
 /// A transform from `align.info`'s rows.
@@ -678,12 +743,23 @@ fn write_frames(dir: &Path, frames: &[Image<f32>]) -> Result<Vec<PathBuf>, Strin
     Ok(paths)
 }
 
-/// `window` of `image`, its color in 8-bit sRGB, as a PNG file at `path`.
-fn write_crop(image: &Image<f32>, window: &Window, path: &Path) -> Result<(), String> {
+/// `window` of `image` as a PNG file at `path`, as a viewer shows it: its color in sRGB's primaries, from its
+/// profile's (linear Rec. 2020 for a RAW stack's outputs), in 8-bit sRGB without alpha, and values up to `white`
+/// compressed below 1 ([`shoulder`]).
+fn write_crop(image: &Image<f32>, window: &Window, white: f32, path: &Path) -> Result<(), String> {
     let width = window.width.min(image.width().saturating_sub(window.x));
     let height = window.height.min(image.height().saturating_sub(window.y));
     let crop = image.crop(Rect::new(window.x, window.y, width, height)).map_err(|e| e.to_string())?;
-    let encoded = rgb(&crop)?.to_encoding::<u8>(Encoding::Srgb).map_err(|e| e.to_string())?;
+    let shown = florastack_engine::view::display(&crop, None).map_err(|e| e.to_string())?;
+    let data: Vec<f32> = shown
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|px| px.iter().take(3).map(|&bits| shoulder(half::f16::from_bits(bits).to_f32(), white)))
+        .collect();
+    let color = Image::from_vec(shown.width, shown.height, 3, ColorSpace::LINEAR, data).map_err(|e| e.to_string())?;
+    let encoded = color.to_encoding::<u8>(Encoding::Srgb).map_err(|e| e.to_string())?;
     let spec = florastack_codecs::OutputSpec::new(florastack_codecs::Format::Png).map_err(|e| e.to_string())?;
     let written =
         florastack_codecs::write(&AnyImage::U8(encoded), &spec, &florastack_codecs::OutputMetadata::default()).map_err(|e| e.to_string())?;
@@ -691,4 +767,50 @@ fn write_crop(image: &Image<f32>, window: &Window, path: &Path) -> Result<(), St
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     std::fs::write(path, written.bytes).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Where highlights start to be compressed, when a stack's outputs go beyond white.
+const KNEE: f32 = 0.8;
+
+/// The value an output's crops show as white: 1, or the 99.9th percentile of `image`'s brightest color channel when
+/// that is more (a RAW stack's highlights, which would otherwise clip), at most 16.
+fn white(image: &Image<f32>) -> f32 {
+    const BINS_PER_UNIT: usize = 64;
+    const TOP: usize = 16;
+    let channels = image.channels();
+    let color = if channels >= 3 { 3 } else { 1 };
+    let mut bins = vec![0u64; TOP * BINS_PER_UNIT + 1];
+    let mut count = 0u64;
+    for pixel in image.as_raw().chunks_exact(channels) {
+        let brightest = pixel.iter().take(color).copied().fold(0.0f32, f32::max);
+        if brightest.is_finite() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped to the bins.
+            let bin = (brightest.clamp(0.0, TOP as f32) * BINS_PER_UNIT as f32) as usize;
+            if let Some(b) = bins.get_mut(bin) {
+                *b += 1;
+                count += 1;
+            }
+        }
+    }
+    let mut above = count / 1000;
+    for (bin, &n) in bins.iter().enumerate().rev() {
+        if n > above {
+            return (bin as f32 / BINS_PER_UNIT as f32).max(1.0);
+        }
+        above -= n;
+    }
+    1.0
+}
+
+/// `v` with the values from [`KNEE`] to `white` compressed into [`KNEE`, 1], smoothly: the curve leaves the knee at
+/// the slope it arrives with, and reaches 1 at `white`. Values up to 1 are kept when `white` is 1.
+fn shoulder(v: f32, white: f32) -> f32 {
+    if white <= 1.0 || v <= KNEE {
+        return v;
+    }
+    // y = k + (1 - k) t (1 + a) / (t + a), t = (v - k) / (white - k): slope 1 at the knee, 1 at `white`.
+    let slope = (white - KNEE) / (1.0 - KNEE);
+    let a = 1.0 / (slope - 1.0);
+    let t = (v - KNEE) / (white - KNEE);
+    KNEE + (1.0 - KNEE) * t * (1.0 + a) / (t + a)
 }
