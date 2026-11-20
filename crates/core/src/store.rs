@@ -22,7 +22,6 @@ use std::io::{ErrorKind, Read as _};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -101,6 +100,44 @@ pub enum StoreError {
     },
     #[error(transparent)]
     Image(#[from] ImageError),
+}
+
+/// The bytes the process's [`TempFileStore`]s have written to their files and read back from them, since it started:
+/// the disk traffic of spilled tiles, which the heap doesn't show. A tool measures a piece of work by the difference
+/// of two readings ([`SpillTraffic::since`]), as `cargo xtask quality` does each command's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpillTraffic {
+    pub written: u64,
+    pub read: u64,
+}
+
+static SPILL_WRITTEN: AtomicU64 = AtomicU64::new(0);
+static SPILL_READ: AtomicU64 = AtomicU64::new(0);
+
+impl SpillTraffic {
+    /// The totals so far, of every thread.
+    pub fn now() -> SpillTraffic {
+        SpillTraffic { written: SPILL_WRITTEN.load(Ordering::Relaxed), read: SPILL_READ.load(Ordering::Relaxed) }
+    }
+
+    /// What moved between `earlier` and this reading.
+    #[must_use]
+    pub fn since(self, earlier: SpillTraffic) -> SpillTraffic {
+        SpillTraffic { written: self.written.saturating_sub(earlier.written), read: self.read.saturating_sub(earlier.read) }
+    }
+
+    /// The bytes written and read.
+    pub fn total(self) -> u64 {
+        self.written.saturating_add(self.read)
+    }
+
+    pub(crate) fn add_written(bytes: u64) {
+        SPILL_WRITTEN.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_read(bytes: u64) {
+        SPILL_READ.fetch_add(bytes, Ordering::Relaxed);
+    }
 }
 
 /// Where a [`TileCache`] keeps the tiles it evicts: whole tiles as bytes, by key.
@@ -334,6 +371,7 @@ impl TileStore for TempFileStore {
     fn write(&mut self, key: TileKey, bytes: &[u8]) -> Result<(), StoreError> {
         let path = self.file(key);
         std::fs::write(&path, bytes).map_err(|source| StoreError::Write { key, path, source })?;
+        SpillTraffic::add_written(bytes.len() as u64);
         let size = bytes.len() as u64;
         let old = self.sizes.insert(key, size).unwrap_or(0);
         self.total = self.total - old + size;
@@ -353,6 +391,7 @@ impl TileStore for TempFileStore {
         };
         // At most one byte more than was written: a file that grew since is reported as damaged, not read whole.
         file.take(size.saturating_add(1)).read_to_end(buf).map_err(|source| StoreError::Read { key, path, source })?;
+        SpillTraffic::add_read(buf.len() as u64);
         Ok(true)
     }
 
@@ -909,6 +948,7 @@ mod tests {
     #[test]
     fn temporary_files_hold_the_tiles_and_go_away_with_the_store() {
         let parent = test_parent("store");
+        let before = SpillTraffic::now();
         let mut cache = TileCache::new(TempFileStore::in_dir(&parent).unwrap(), TILE_BYTES);
         let dir = cache.store().path().to_path_buf();
         assert!(dir.starts_with(&parent) && dir.is_dir());
@@ -922,6 +962,10 @@ mod tests {
         assert_eq!(cache.get::<f32>(key(1)).unwrap(), Some(&tile(1)));
         assert_eq!(cache.take::<f32>(key(2)).unwrap(), Some(tile(2)));
         assert_eq!(tile_files(&dir), 3);
+        // Four tiles written and two read back, at least: other tests' stores count too.
+        let moved = SpillTraffic::now().since(before);
+        assert!(moved.written >= 4 * TILE_BYTES as u64 && moved.read >= 2 * TILE_BYTES as u64, "{moved:?}");
+        assert_eq!(moved.total(), moved.written + moved.read);
         drop(cache);
         assert!(!dir.exists(), "dropping the store removes its folder");
         let store = TempFileStore::in_dir(&parent).unwrap();

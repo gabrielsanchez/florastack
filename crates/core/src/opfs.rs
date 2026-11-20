@@ -333,6 +333,7 @@ impl TileStore for TempFileStore {
                     return Err(StoreError::Write { key, path: self.path.clone(), source: self.failed(&e) });
                 }
                 self.slots.insert(key, slot);
+                crate::store::SpillTraffic::add_written(len);
                 old
             }
         };
@@ -364,6 +365,7 @@ impl TileStore for TempFileStore {
                     source: self.failed(&e),
                 })?;
                 *buf = bytes;
+                crate::store::SpillTraffic::add_read(buf.len() as u64);
                 Ok(true)
             }
         }

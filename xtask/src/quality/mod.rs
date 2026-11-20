@@ -31,10 +31,10 @@ usage: cargo xtask quality [--gate | --update-baseline] [--release | --dev] [--s
 Stacks every stack by every method (weighted average, pyramid, depth map, wavelet) and every pair of slab and final
 methods, through the engine's commands (florastack-engine's `quality` example), scores the outputs against their
 truth where there is one (SSIM, PSNR, halo, noise, color shift, out-of-range pixels, alignment error), measures each
-command's runtime and peak heap, and writes target/quality/index.html: every run's measures against the baseline, and
-100% crops of the same regions of every output side by side. It fails when a measure is worse than
-quality/baseline.json by more than its tolerance (runtimes only against a baseline made on this machine with this
-build profile).
+command's runtime (in seconds and in calibration workloads), peak heap and disk spill, and writes
+target/quality/index.html: every run's measures against the baseline, and 100% crops of the same regions of every
+output side by side. It fails when a measure is worse than quality/baseline.json by more than its tolerance (runtimes
+in seconds only against a baseline made on this machine, and every runtime only with the baseline's build profile).
 
   (no mode)          every stack: the synthetic ones, the manifest's downloaded ones and the local ones in corpus/local
                      (release build)
@@ -156,7 +156,7 @@ pub fn run(meta: &Value, args: &[&str]) -> Result<(), String> {
 
     let host = Host::this();
     let selected = |run: &str| options.runs.is_empty() || options.runs.iter().any(|p| run.contains(p));
-    let comparison = baseline.as_ref().map(|b| gate::compare(b, &outcomes, &selected, b.same_machine(profile, &host)));
+    let comparison = baseline.as_ref().map(|b| gate::compare(b, &outcomes, &selected, b.same(profile, &host)));
     let product = crate::branding::load(&root)?.display_name;
     let git = crate::bench::git(&root);
     let created = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -427,6 +427,8 @@ mod tests {
             title: "Pyramid".into(),
             runtime_s: 1.0,
             peak_mib: 10.0,
+            spill_mib: 0.0,
+            runtime_rel: 0.0,
             metrics: [("ssim".to_owned(), ssim)].into(),
             uncovered: None,
             slabs: None,
@@ -444,6 +446,7 @@ mod tests {
                 width: 10,
                 height: 10,
                 threads: 1,
+                calibration_s: 1.0,
                 truth: true,
                 runs: vec![run("synthetic/a/pyramid", a), run("synthetic/a/average", b)],
                 regions: Vec::new(),
@@ -453,7 +456,7 @@ mod tests {
         let host = Host { os: "linux".into(), arch: "x86_64".into(), logical_cpus: 2, cpu: Some("c".into()) };
         let baseline = gate::updated(None, &[outcome(0.9, 0.8)], "dev", &host).unwrap();
         let now = [outcome(0.85, 0.85)];
-        let comparison = gate::compare(&baseline, &now, &|_| true, true);
+        let comparison = gate::compare(&baseline, &now, &|_| true, gate::Same::Machine);
         let text = tables(&now, Some(&comparison));
         assert!(text.contains("synthetic/a (3 frames, 10x10, 1 thread(s))"), "{text}");
         assert!(text.contains("  pyramid    0.8500!"), "{text}");

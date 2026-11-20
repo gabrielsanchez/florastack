@@ -52,8 +52,12 @@ records that the summary lists as a table. CI compiles the benches but doesn't r
 `cargo xtask quality` stacks every stack (the synthetic ones of `crates/engine/examples/quality/synthetic.rs`, the
 manifest's downloaded ones and your local ones) by every method and every pair of slab and final methods, through the
 engine's commands. It scores each output against its truth (the synthetic ground truth, or a real stack's
-`reference`), scores alignment against the synthetic transforms, measures each command's runtime and peak heap, and
-writes `target/quality/index.html`, with 100% crops of the same regions of every output side by side.
+`reference`), scores alignment against the synthetic transforms, measures each command's runtime, peak heap and the
+bytes its tile cache spilled to disk and read back, and writes `target/quality/index.html`, with 100% crops of the same
+regions of every output side by side. The crops show each output as the viewer does: in sRGB's primaries (a RAW
+stack's outputs are linear Rec. 2020), and with highlights compressed when a stack's outputs go beyond white. Each slab
+method's runs start with its slabs (`slabbed-<method>-slabs`), so that its four final stacks, which reuse them, take
+comparable times.
 
 ```sh
 cargo xtask quality                          # the full report, release build
@@ -66,9 +70,14 @@ cargo xtask quality --update-baseline        # write quality/baseline.json
 
 `quality/baseline.json` holds every run of the synthetic stacks and the manifest's downloaded ones (never a local
 stack's) with each measure's tolerance. `--gate` fails when a measure is worse than the baseline by more than its
-tolerance; runtime counts only against a baseline made on the same machine with the same build profile. A change that
-moves a measure on purpose, or changes a synthetic stack or the runner, runs `--update-baseline` and commits the
-baseline with it, so that its diff shows what moved.
+tolerance. The runtime in seconds counts only against a baseline made on the same machine with the same build profile.
+The runtime in calibration workloads (`time rel`: the runtime divided by a fixed workload of blurs, a warp and a TIFF
+file written and read, timed when each stack starts) counts on any machine with the same build profile, so CI fails
+on a run that takes more than four times as long as the baseline's. The synthetic stacks run with a tile budget scaled
+to their size as a 20 MP camera's frames have the default one, so that they spill to disk when a camera's stack would.
+A change that moves a measure on purpose, or changes a synthetic stack or the runner, runs `--update-baseline` and
+commits the baseline with it, so that its diff shows what moved. CI keeps each platform's report with its run
+(`quality-report-<os>`).
 
 ## Comparing with other stackers
 

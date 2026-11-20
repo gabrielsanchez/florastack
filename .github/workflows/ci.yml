@@ -127,10 +127,28 @@ jobs:
 
       # Every stacking method and slab combination on the synthetic stacks, scored against their ground truth and
       # compared with quality/baseline.json: fails when a measure is worse than the baseline by more than its tolerance
-      # (runtimes aren't compared here, the baseline being measured on another machine). It runs the dev-profile build
-      # of florastack-engine's `quality` example, which the tests above have built.
+      # (the runtime in seconds isn't compared here, the baseline being measured on another machine, but the runtime
+      # in calibration workloads is). It runs the dev-profile build of florastack-engine's `quality` example, which the
+      # tests above have built.
       - name: Quality gate
+        id: quality
         run: cargo xtask quality --gate
+
+      # The gate's report (the page, its crops of every output, and the measures as JSON), kept with the run whether
+      # the gate passed or not, so that a pull request's crops can be looked at: download it from the run's summary
+      # and open index.html.
+      - name: Keep the quality report
+        if: ${{ !cancelled() && steps.quality.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-report-${{ runner.os }}
+          path: |
+            target/quality/index.html
+            target/quality/results.json
+            target/quality/results/
+            target/quality/crops/
+          if-no-files-found: ignore
+          retention-days: 14
 
   dependencies:
     name: dependency policy

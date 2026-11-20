@@ -1,14 +1,24 @@
 //! The regression gate: the baseline in `quality/baseline.json`, and the comparison of a run with it.
 //!
 //! The baseline holds every run of the stacks anyone can run (the synthetic stacks, and the manifest's downloaded
-//! stacks), never a local stack's, which are the user's own. Each of its runs has its metrics, its runtime and its peak
-//! memory, and the file has the tolerance of each measure: how far a measure may move the wrong way before the gate
-//! fails, the larger of an absolute amount and a share of the baseline's value. Runtime is compared only against a
-//! baseline measured on the same machine with the same build profile, since it says nothing across machines, and only a
-//! run that takes more than three times as long, and at least two seconds longer, fails: right after `cargo xtask ci`'s
-//! tests, a laptop's single-threaded runs took up to 3.3 times as long (0.33 s against 1.07 s, 1.81 s against 4.15 s),
-//! one or two of a hundred each time, though none did when the gate ran alone. Every other measure is the same on every
-//! platform within its tolerance (memory because the synthetic stacks run on one thread).
+//! stacks), never a local stack's, which are the user's own. Each of its runs has its metrics, its runtime, its peak
+//! memory and its spill, and the file has the tolerance of each measure: how far a measure may move the wrong way before
+//! the gate fails, the larger of an absolute amount and a share of the baseline's value.
+//!
+//! - **The runtime in seconds** is compared only against a baseline measured on the same machine with the same build
+//!   profile ([`Same::Machine`]), since it says nothing across machines, and only a run that takes more than three
+//!   times as long, and at least two seconds longer, fails: right after `cargo xtask ci`'s tests, a laptop's
+//!   single-threaded runs took up to 3.3 times as long (0.33 s against 1.07 s, 1.81 s against 4.15 s), one or two of a
+//!   hundred each time, though none did when the gate ran alone.
+//! - **The runtime in calibration workloads** (the runner's `calibration.rs`: the runtime divided by a fixed workload
+//!   timed in the same process) is compared on any machine with the same build profile ([`Same::Profile`]), so that
+//!   CI gates time too. It moves much less than the runtime when a machine is slower: with 14 busy processes beside
+//!   the gate, the runtimes of 42 runs took a median 1.98 times as long (1.66 to 2.61), their calibrated runtimes 1.20
+//!   times (0.98 to 1.53). Machines differ in more than speed, though (the disk, the processor's design), so a run
+//!   fails only at more than four times the baseline's and two workloads more: enough to catch a stack that spills to
+//!   disk at every frame, as 3.4's first slabbing did at nine times the time.
+//! - **Every other measure** is the same on every platform within its tolerance (memory and spill because the synthetic
+//!   stacks run on one thread, with a tile budget of their own).
 //!
 //! A change that makes something worse on purpose updates the baseline in the same commit
 //! (`cargo xtask quality --update-baseline`), which keeps the tolerances and replaces the runs: the gate then compares
@@ -40,8 +50,21 @@ pub struct Measure {
     pub digits: usize,
     /// The tolerance a new baseline starts with.
     pub tolerance: Tolerance,
-    /// Compared only with a baseline measured on this machine with this build profile.
-    pub machine: bool,
+    /// What a baseline must share with the run for the measure to be compared.
+    pub scope: Same,
+}
+
+/// What a run shares with the baseline it is compared with, or what a measure needs it to share.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Same {
+    /// Nothing needs to be shared: measured anywhere, compared with anything.
+    #[default]
+    Anywhere,
+    /// The build profile, on any machine: the runtime in calibration workloads, whose engine code the dev profile
+    /// leaves unoptimized and the release profile doesn't.
+    Profile,
+    /// The build profile and the machine: the runtime itself.
+    Machine,
 }
 
 /// How far a measure may move the wrong way: the larger of `absolute` and `relative` times the baseline's value.
@@ -76,18 +99,36 @@ impl Tolerance {
 
 /// Every measure, in the order tables show them. The quality metrics come from florastack-metrics (against the truth),
 /// `out_of_range` is the share of pixels with a sample outside [0, 1], `align_error` the mean transform error of the
-/// aligned frames in pixels, and `rejected` the frames alignment rejected.
+/// aligned frames in pixels, and `rejected` the frames alignment rejected; `spill_mib` is what the tile stores wrote
+/// to disk and read back, which the heap leaves out (the synthetic stacks run with the tile budget a camera's frames
+/// would have, so that they spill when those would).
 pub const MEASURES: &[Measure] = &[
-    Measure { key: "ssim", name: "SSIM", better: Better::Higher, digits: 4, tolerance: Tolerance::absolute(0.002), machine: false },
-    Measure { key: "psnr", name: "PSNR", better: Better::Higher, digits: 2, tolerance: Tolerance::absolute(0.1), machine: false },
-    Measure { key: "halo", name: "halo", better: Better::Lower, digits: 4, tolerance: Tolerance::absolute(0.003), machine: false },
-    Measure { key: "noise", name: "noise", better: Better::Lower, digits: 5, tolerance: Tolerance::relative(0.05, 0.0), machine: false },
-    Measure { key: "delta_e", name: "ΔE", better: Better::Lower, digits: 3, tolerance: Tolerance::absolute(0.05), machine: false },
-    Measure { key: "out_of_range", name: "out", better: Better::Lower, digits: 4, tolerance: Tolerance::absolute(0.001), machine: false },
-    Measure { key: "align_error", name: "align px", better: Better::Lower, digits: 3, tolerance: Tolerance::absolute(0.02), machine: false },
-    Measure { key: "rejected", name: "rejected", better: Better::Lower, digits: 0, tolerance: Tolerance::absolute(0.0), machine: false },
-    Measure { key: "runtime_s", name: "time s", better: Better::Lower, digits: 2, tolerance: Tolerance::relative(2.0, 2.0), machine: true },
-    Measure { key: "peak_mib", name: "peak MiB", better: Better::Lower, digits: 1, tolerance: Tolerance::relative(0.1, 0.5), machine: false },
+    Measure { key: "ssim", name: "SSIM", better: Better::Higher, digits: 4, tolerance: Tolerance::absolute(0.002), scope: Same::Anywhere },
+    Measure { key: "psnr", name: "PSNR", better: Better::Higher, digits: 2, tolerance: Tolerance::absolute(0.1), scope: Same::Anywhere },
+    Measure { key: "halo", name: "halo", better: Better::Lower, digits: 4, tolerance: Tolerance::absolute(0.003), scope: Same::Anywhere },
+    Measure { key: "noise", name: "noise", better: Better::Lower, digits: 5, tolerance: Tolerance::relative(0.05, 0.0), scope: Same::Anywhere },
+    Measure { key: "delta_e", name: "ΔE", better: Better::Lower, digits: 3, tolerance: Tolerance::absolute(0.05), scope: Same::Anywhere },
+    Measure { key: "out_of_range", name: "out", better: Better::Lower, digits: 4, tolerance: Tolerance::absolute(0.001), scope: Same::Anywhere },
+    Measure { key: "align_error", name: "align px", better: Better::Lower, digits: 3, tolerance: Tolerance::absolute(0.02), scope: Same::Anywhere },
+    Measure { key: "rejected", name: "rejected", better: Better::Lower, digits: 0, tolerance: Tolerance::absolute(0.0), scope: Same::Anywhere },
+    Measure { key: "runtime_s", name: "time s", better: Better::Lower, digits: 2, tolerance: Tolerance::relative(2.0, 2.0), scope: Same::Machine },
+    Measure {
+        key: "runtime_rel",
+        name: "time rel",
+        better: Better::Lower,
+        digits: 2,
+        tolerance: Tolerance::relative(3.0, 2.0),
+        scope: Same::Profile,
+    },
+    Measure { key: "peak_mib", name: "peak MiB", better: Better::Lower, digits: 1, tolerance: Tolerance::relative(0.1, 0.5), scope: Same::Anywhere },
+    Measure {
+        key: "spill_mib",
+        name: "spill MiB",
+        better: Better::Lower,
+        digits: 1,
+        tolerance: Tolerance::relative(0.1, 1.0),
+        scope: Same::Anywhere,
+    },
 ];
 
 pub fn measure(key: &str) -> Option<&'static Measure> {
@@ -173,9 +214,15 @@ impl Baseline {
         self.tolerances.get(measure.key).copied().unwrap_or(measure.tolerance)
     }
 
-    /// Whether runtimes measured with `profile` on `host` can be compared with this baseline's.
-    pub fn same_machine(&self, profile: &str, host: &Host) -> bool {
-        self.profile == profile && self.host == *host && host.cpu.is_some()
+    /// What runs measured with `profile` on `host` share with this baseline's.
+    pub fn same(&self, profile: &str, host: &Host) -> Same {
+        if self.profile != profile {
+            Same::Anywhere
+        } else if self.host == *host && host.cpu.is_some() {
+            Same::Machine
+        } else {
+            Same::Profile
+        }
     }
 }
 
@@ -189,6 +236,9 @@ pub struct StackResult {
     pub width: usize,
     pub height: usize,
     pub threads: usize,
+    /// The calibration workload's time, in seconds; 0 from a runner before it.
+    #[serde(default)]
+    pub calibration_s: f64,
     pub truth: bool,
     pub runs: Vec<RunResult>,
     pub regions: Vec<Region>,
@@ -201,7 +251,13 @@ pub struct RunResult {
     pub run: String,
     pub title: String,
     pub runtime_s: f64,
+    /// The runtime in calibration workloads; 0 from a runner before them.
+    #[serde(default)]
+    pub runtime_rel: f64,
     pub peak_mib: f64,
+    /// Runs measured before the spill measure existed have none.
+    #[serde(default)]
+    pub spill_mib: f64,
     pub metrics: BTreeMap<String, f64>,
     pub uncovered: Option<u64>,
     pub slabs: Option<usize>,
@@ -211,11 +267,16 @@ pub struct RunResult {
 }
 
 impl RunResult {
-    /// Every measure of the run: its metrics, its runtime and its peak memory.
+    /// Every measure of the run: its metrics, its runtime (in seconds and in calibration workloads), its peak memory
+    /// and its spill.
     pub fn measures(&self) -> BTreeMap<String, f64> {
         let mut all = self.metrics.clone();
         all.insert("runtime_s".to_owned(), self.runtime_s);
+        if self.runtime_rel > 0.0 {
+            all.insert("runtime_rel".to_owned(), self.runtime_rel);
+        }
         all.insert("peak_mib".to_owned(), self.peak_mib);
+        all.insert("spill_mib".to_owned(), self.spill_mib);
         all
     }
 }
@@ -282,8 +343,10 @@ pub struct Comparison {
     pub unbaselined: Vec<String>,
     /// The baseline's stacks this run didn't run (not here, or left out).
     pub not_run: Vec<String>,
-    /// Whether runtimes were compared.
+    /// Whether runtimes in seconds were compared.
     pub runtime_compared: bool,
+    /// What the runs share with the baseline, which says which runtimes were compared.
+    pub same: Same,
 }
 
 impl Comparison {
@@ -293,9 +356,9 @@ impl Comparison {
 }
 
 /// Compares `outcomes` with `baseline`. `selected` says whether a run name was asked for (`--run`); runtimes are
-/// compared when `same_machine`.
-pub fn compare(baseline: &Baseline, outcomes: &[Outcome], selected: &dyn Fn(&str) -> bool, same_machine: bool) -> Comparison {
-    let mut comparison = Comparison { runtime_compared: same_machine, ..Comparison::default() };
+/// compared as far as the runs are the `same` as the baseline's.
+pub fn compare(baseline: &Baseline, outcomes: &[Outcome], selected: &dyn Fn(&str) -> bool, same: Same) -> Comparison {
+    let mut comparison = Comparison { runtime_compared: same == Same::Machine, same, ..Comparison::default() };
     let by_id: BTreeMap<&str, &Outcome> = outcomes.iter().map(|o| (o.id.as_str(), o)).collect();
     let mut not_run = std::collections::BTreeSet::new();
     for (run_id, expected) in &baseline.runs {
@@ -338,7 +401,7 @@ pub fn compare(baseline: &Baseline, outcomes: &[Outcome], selected: &dyn Fn(&str
             };
             // A hair of slack, for the baseline's rounding.
             let rounding = 1e-9 * base.abs().max(1.0);
-            let state = if m.machine && !same_machine {
+            let state = if m.scope > same {
                 State::NotCompared
             } else if worse > allowed + rounding {
                 State::Regressed
@@ -418,6 +481,8 @@ mod tests {
             title: "Pyramid".to_owned(),
             runtime_s: runtime,
             peak_mib: peak,
+            spill_mib: 0.0,
+            runtime_rel: 0.0,
             metrics: [("ssim".to_owned(), ssim), ("halo".to_owned(), 0.08)].into(),
             uncovered: Some(0),
             slabs: None,
@@ -438,6 +503,7 @@ mod tests {
                 width: 480,
                 height: 360,
                 threads: 1,
+                calibration_s: 1.0,
                 truth: true,
                 runs,
                 regions: Vec::new(),
@@ -460,13 +526,13 @@ mod tests {
     fn the_same_results_pass_and_a_degraded_one_fails() {
         let good = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.9305, 0.66, 18.3), run("synthetic/a/average", 0.8608, 0.5, 9.9)])];
         let base = baseline(&good);
-        let same = compare(&base, &good, ALL, true);
+        let same = compare(&base, &good, ALL, Same::Machine);
         assert!(same.passed(), "{:?}", same.failures);
         assert_eq!(same.checks["synthetic/a/pyramid"]["ssim"].state, State::Within);
 
         // A degraded setting: the pyramid loses 0.01 of SSIM, more than the 0.002 allowed.
         let degraded = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.9205, 0.66, 18.3), run("synthetic/a/average", 0.8608, 0.5, 9.9)])];
-        let gate = compare(&base, &degraded, ALL, true);
+        let gate = compare(&base, &degraded, ALL, Same::Machine);
         assert!(!gate.passed());
         assert_eq!(gate.failures.len(), 1, "{:?}", gate.failures);
         assert!(
@@ -478,12 +544,12 @@ mod tests {
 
         // Within the tolerance either way: no failure, no improvement.
         let close = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.9295, 0.66, 18.3), run("synthetic/a/average", 0.8618, 0.5, 9.9)])];
-        let gate = compare(&base, &close, ALL, true);
+        let gate = compare(&base, &close, ALL, Same::Machine);
         assert!(gate.passed() && gate.improvements.is_empty(), "{:?} {:?}", gate.failures, gate.improvements);
 
         // Better by more than the tolerance: noted, not failed.
         let better = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.95, 0.66, 18.3), run("synthetic/a/average", 0.8608, 0.5, 9.9)])];
-        let gate = compare(&base, &better, ALL, true);
+        let gate = compare(&base, &better, ALL, Same::Machine);
         assert!(gate.passed());
         assert_eq!(gate.improvements.len(), 1, "{:?}", gate.improvements);
     }
@@ -494,17 +560,43 @@ mod tests {
         let base = baseline(&good);
         // A run held up under load, at 2.5 times the baseline's time, still passes.
         let held_up = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 2.5, 20.0)])];
-        assert!(compare(&base, &held_up, ALL, true).passed());
+        assert!(compare(&base, &held_up, ALL, Same::Machine).passed());
         let slow_and_big = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 3.5, 23.0)])];
-        let here = compare(&base, &slow_and_big, ALL, true);
+        let here = compare(&base, &slow_and_big, ALL, Same::Machine);
         assert_eq!(here.failures.len(), 2, "runtime three times the baseline or 2 s, and memory 10%, allowed: {:?}", here.failures);
-        let elsewhere = compare(&base, &slow_and_big, ALL, false);
+        let elsewhere = compare(&base, &slow_and_big, ALL, Same::Anywhere);
         assert_eq!(elsewhere.failures.len(), 1, "{:?}", elsewhere.failures);
         assert!(elsewhere.failures[0].contains("peak MiB"), "{:?}", elsewhere.failures);
         assert_eq!(elsewhere.checks["synthetic/a/pyramid"]["runtime_s"].state, State::NotCompared);
         let other = Host { cpu: Some("Another CPU".into()), ..host() };
-        assert!(base.same_machine("dev", &host()) && !base.same_machine("release", &host()) && !base.same_machine("dev", &other));
-        assert!(!Baseline { host: Host { cpu: None, ..host() }, ..baseline(&good) }.same_machine("dev", &Host { cpu: None, ..host() }));
+        assert_eq!(base.same("dev", &host()), Same::Machine);
+        assert_eq!((base.same("release", &host()), base.same("dev", &other)), (Same::Anywhere, Same::Profile));
+        assert_eq!(Baseline { host: Host { cpu: None, ..host() }, ..baseline(&good) }.same("dev", &Host { cpu: None, ..host() }), Same::Profile);
+    }
+
+    #[test]
+    fn the_runtime_in_calibration_workloads_is_compared_on_any_machine_with_the_same_profile() {
+        let timed = |runtime_rel: f64| {
+            let mut run = run("synthetic/a/pyramid", 0.93, 1.0, 20.0);
+            run.runtime_rel = runtime_rel;
+            [stack("synthetic/a", vec![run])]
+        };
+        let base = baseline(&timed(1.5));
+        assert_eq!(base.runs["synthetic/a/pyramid"]["runtime_rel"], 1.5);
+        // Four times the baseline's passes; more fails on another machine, but not with another build profile.
+        assert!(compare(&base, &timed(6.0), ALL, Same::Profile).passed());
+        let slower = compare(&base, &timed(6.5), ALL, Same::Profile);
+        assert_eq!(slower.failures.len(), 1, "{:?}", slower.failures);
+        assert!(slower.failures[0].contains("time rel"), "{:?}", slower.failures);
+        assert!(!slower.runtime_compared, "the runtime itself isn't compared on another machine");
+        let other_build = compare(&base, &timed(6.5), ALL, Same::Anywhere);
+        assert!(other_build.passed());
+        assert_eq!(other_build.checks["synthetic/a/pyramid"]["runtime_rel"].state, State::NotCompared);
+        // Under two calibration workloads more, even many times the baseline's passes: too short to tell.
+        let short = baseline(&timed(0.2));
+        assert!(compare(&short, &timed(2.1), ALL, Same::Profile).passed());
+        // A runner from before the calibration measured none, and none is compared.
+        assert!(!run("synthetic/a/pyramid", 0.93, 1.0, 20.0).measures().contains_key("runtime_rel"));
     }
 
     #[test]
@@ -513,24 +605,24 @@ mod tests {
         let base = baseline(&good);
         // A run that no longer runs fails, unless it was left out on purpose.
         let fewer = [stack("synthetic/a", vec![run("synthetic/a/pyramid", 0.93, 1.0, 20.0)])];
-        assert_eq!(compare(&base, &fewer, ALL, true).failures, ["synthetic/a/average: in the baseline, but no longer run"]);
-        assert!(compare(&base, &fewer, &|name| name.contains("pyramid"), true).passed());
+        assert_eq!(compare(&base, &fewer, ALL, Same::Machine).failures, ["synthetic/a/average: in the baseline, but no longer run"]);
+        assert!(compare(&base, &fewer, &|name| name.contains("pyramid"), Same::Machine).passed());
         // A failed run, a failed stack and a metric no longer measured fail.
         let mut failed = run("synthetic/a/average", 0.0, 0.0, 0.0);
         failed.error = Some("stack.average: out of memory".into());
         let mut unmeasured = run("synthetic/a/pyramid", 0.93, 1.0, 20.0);
         unmeasured.metrics.remove("halo");
-        let gate = compare(&base, &[stack("synthetic/a", vec![unmeasured, failed])], ALL, true);
+        let gate = compare(&base, &[stack("synthetic/a", vec![unmeasured, failed])], ALL, Same::Machine);
         assert_eq!(gate.failures.len(), 2, "{:?}", gate.failures);
         assert!(gate.failures.iter().any(|f| f.contains("halo is in the baseline, but no longer measured")), "{:?}", gate.failures);
         let crashed = [Outcome { id: "synthetic/a".into(), result: Err("exit code 101".into()) }];
-        assert_eq!(compare(&base, &crashed, ALL, true).failures, ["synthetic/a: the runner failed: exit code 101"]);
+        assert_eq!(compare(&base, &crashed, ALL, Same::Machine).failures, ["synthetic/a: the runner failed: exit code 101"]);
         // A stack not run here is listed, not failed; a new run of a shared stack is listed; a local stack is neither.
         let elsewhere = [
             stack("synthetic/b", vec![run("synthetic/b/pyramid", 0.9, 1.0, 1.0)]),
             stack("local/wasp", vec![run("local/wasp/pyramid", 0.9, 1.0, 1.0)]),
         ];
-        let gate = compare(&base, &elsewhere, ALL, true);
+        let gate = compare(&base, &elsewhere, ALL, Same::Machine);
         assert!(gate.passed());
         assert_eq!(gate.not_run, ["synthetic/a"]);
         assert_eq!(gate.unbaselined, ["synthetic/b/pyramid"]);
