@@ -238,10 +238,11 @@ dependencies = [
 
 [[package]]
 name = "florastack-codecs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "exr",
  "florastack-core",
+ "half",
  "image",
  "image-webp",
  "lightcraft-codecs",
@@ -265,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -293,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "florastack-raw"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "florastack-core",
  "lightcraft-codecs",
