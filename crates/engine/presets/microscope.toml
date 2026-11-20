@@ -1,7 +1,7 @@
 # A built-in preset (florastack-engine's `preset.list`): stacks shot through a microscope.
 [preset]
 name = "Microscope"
-description = "Stacks through a microscope, the stage moved between frames: shift and brightness corrected (lamp flicker), no scale or rotation, dust on the sensor detected and painted out, cropped to what every frame covers; the pyramid with low grit against noise; a 16-bit TIFF."
+description = "Stacks through a microscope, the stage moved between frames: shift and brightness corrected (lamp flicker), no scale or rotation, dust on the sensor detected and painted out, cropped to what every frame covers; the pyramid's finest detail blended against noise (grit 0.75); a 16-bit TIFF."
 
 [align]
 shift_x = true
@@ -13,7 +13,7 @@ detect_defects = true
 framing = "common"
 
 [stack.pyramid]
-grit = 0.25
+grit = 0.75
 range_limit = 1.0
 tone = "compress"
 

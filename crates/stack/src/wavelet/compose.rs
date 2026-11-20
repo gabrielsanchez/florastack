@@ -13,8 +13,8 @@ use florastack_core::{ColorSpace, Image, Monitor, Rect, Tile};
 use rayon::prelude::*;
 
 use super::frame::{Layout, Split, context, gather, read_region, tile_extension};
-use super::select::{Choices, blend_weight, deciding, noise_floor, noise_gain, raise};
-use super::transform::{Bank, Details, Spare, activity, analyze, extend, extension, multiply, pool, synthesize};
+use super::select::{Choices, Rule, deciding, noise_gains, noise_variance, rules, score};
+use super::transform::{Bank, Details, Spare, analyze_activity, analyze_masked, extend, extension, multiply, pool, synthesize};
 use super::{FOCUS_POWER, WAVELET};
 use crate::average::MIN_COVERAGE;
 use crate::depth::MAX_FRAMES;
@@ -44,15 +44,16 @@ struct Coarse {
 pub struct ComposeKernel {
     choices: Arc<Choices>,
     bank: &'static Bank,
-    power: Option<f32>,
+    /// How each tiled level combines the frames, as in pass 1.
+    rules: Vec<Rule>,
     limit: f32,
     coarse: Option<Coarse>,
     /// The fused low-pass, once [`TileKernel::prepare`] has made it.
     fused: Option<Image<f32>>,
     added: usize,
     spare: Spare,
-    /// The finest level's activity per unit of noise variance, as pass 1 had it.
-    gain: f32,
+    /// Each tiled level's activity per unit of noise variance, as pass 1 had it.
+    gains: Vec<f32>,
 }
 
 /// The samples of `map`, a plane of the whole level, around `span` extended by `by`, through `f`. Beyond the level,
@@ -96,40 +97,47 @@ impl ComposeKernel {
             return Err(StackError::TooManyFrames { max: MAX_FRAMES });
         }
         let settings = &choices.settings;
-        let (bank, power) = (settings.wavelet.bank(), settings.power());
+        let bank = settings.wavelet.bank();
         #[allow(clippy::cast_possible_truncation)] // From 0 to 1.
         let limit = settings.range_limit as f32;
-        let gain = noise_gain(bank)?;
-        Ok(ComposeKernel { choices, bank, power, limit, coarse: None, fused: None, added: 0, spare: Spare::default(), gain })
+        let (rules, gains) = (rules(settings), noise_gains(bank)?);
+        Ok(ComposeKernel { choices, bank, rules, limit, coarse: None, fused: None, added: 0, spare: Spare::default(), gains })
     }
 
     fn layout(&self) -> Layout {
         self.choices.layout
     }
 
-    /// Each frame's share of the finest level: its blend weight over the sum of the frames', on the extended plane, with
-    /// its activity raised to the noise floor as pass 1 raised it.
-    fn blend_mask(&self, power: f32, split: &Split, span: Span, by: usize) -> Result<Option<Image<f32>>, StackError> {
-        let Some(total) = self.choices.fine.first() else { return Ok(None) };
+    /// Each frame's share of tiled level `k`, which blends by `rule`: its blend weight over the sum of the frames', on the
+    /// extended plane, made as pass 1 made it.
+    fn blend_mask(&self, k: usize, rule: Rule, split: &Split, span: Span, by: usize) -> Result<Option<Image<f32>>, StackError> {
+        let Some(total) = self.choices.fine.get(k) else { return Ok(None) };
         let spare = &self.spare;
-        let plane = extend(&luminance(&split.residual)?, span, by, 0, spare)?;
-        let (low, details) = analyze(self.bank, &plane, 1, spare)?;
-        spare.give(plane);
-        spare.give(low);
-        let mut energy = activity(&details, self.choices.settings.window, spare)?;
-        details.recycle(spare);
-        if let Some(floor) = noise_floor(&self.choices.settings, self.gain, split, span, by, spare)? {
-            raise(&mut energy, &floor);
-            spare.give(floor);
+        let mut plane = extend(&luminance(&split.residual)?, span, by, 0, spare)?;
+        let mut coverage = split.coverage().map(|c| extend(c, span, by, 0, spare)).transpose()?;
+        let mut energy = None;
+        for j in 0..=k {
+            let (low, e) = analyze_activity(self.bank, &plane, 1 << j, self.choices.settings.window, spare)?;
+            spare.give(std::mem::replace(&mut plane, low));
+            if let Some(last) = energy.replace(e) {
+                spare.give(last);
+            }
+            if let Some(last) = coverage.take() {
+                coverage = Some(pool(&last, 1 << j, spare)?);
+                spare.give(last);
+            }
         }
-        let coverage = split.coverage().map(|k| extend(k, span, by, 0, spare)).transpose()?.map(|k| pool(&k, 1, spare)).transpose()?;
+        spare.give(plane);
+        let Some(mut mask) = energy else { return Ok(None) };
+        let variance = noise_variance(&self.choices.settings, split, span, by, spare)?;
+        score(rule, &mut mask, variance.as_ref(), self.gains.get(k).copied().unwrap_or(1.0), coverage.as_ref());
+        if let Some(variance) = variance {
+            spare.give(variance);
+        }
         let sums = window(total, span, by, spare, |v| v)?;
-        let mut mask = energy;
-        mask.par_rows_mut().zip(sums.par_rows()).enumerate().for_each(|(y, (row, sums))| {
-            let cov = coverage.as_ref().and_then(|k| k.row(y));
-            for (x, (v, &sum)) in row.iter_mut().zip(sums).enumerate() {
-                let w = blend_weight(power, *v, cov.map_or(1.0, |k| k.get(x).copied().unwrap_or(0.0)));
-                *v = if sum > 0.0 { w / sum } else { 0.0 };
+        mask.par_rows_mut().zip(sums.par_rows()).for_each(|(row, sums)| {
+            for (v, &sum) in row.iter_mut().zip(sums) {
+                *v = if sum > 0.0 { *v / sum } else { 0.0 };
             }
         });
         spare.give(sums);
@@ -149,15 +157,9 @@ impl ComposeKernel {
             let mut plane = extend(&split.residual, span, by, channel, spare)?;
             let mut details: Vec<Option<Details>> = Vec::with_capacity(top + 1);
             for (k, mask) in masks.iter().enumerate().take(top + 1) {
-                let (low, mut level) = analyze(self.bank, &plane, 1 << k, spare)?;
+                let (low, level) = analyze_masked(self.bank, &plane, 1 << k, mask.as_ref().map(Some), spare)?;
                 spare.give(std::mem::replace(&mut plane, low));
-                if let Some(m) = mask {
-                    level.scale(m);
-                    details.push(Some(level));
-                } else {
-                    level.recycle(spare);
-                    details.push(None);
-                }
+                details.push(level);
             }
             // The last low-pass is kept where its level is; a level above `top` chose this frame nowhere.
             if top + 1 == tiled
@@ -234,15 +236,9 @@ impl ComposeKernel {
             let mut plane = extend(values, small, by, channel, &self.spare)?;
             let mut details: Vec<Option<Details>> = Vec::with_capacity(masks.len());
             for (j, mask) in masks.iter().enumerate() {
-                let (low, mut level) = analyze(self.bank, &plane, 1 << j, &self.spare)?;
+                let (low, level) = analyze_masked(self.bank, &plane, 1 << j, mask.as_ref().map(Some), &self.spare)?;
                 self.spare.give(std::mem::replace(&mut plane, low));
-                if let Some(m) = mask {
-                    level.scale(m);
-                    details.push(Some(level));
-                } else {
-                    level.recycle(&self.spare);
-                    details.push(None);
-                }
+                details.push(level);
             }
             add_channel(&mut coarse.low, &plane, Some(&pooled), channel);
             if let Some(mask) = &low_mask {
@@ -388,9 +384,9 @@ impl TileKernel for ComposeKernel {
         let frame = view.frame as f32;
         let mut masks = Vec::with_capacity(layout.tiled);
         for (k, map) in self.choices.fine.iter().enumerate() {
-            masks.push(match (self.power, k) {
-                (Some(power), 0) => self.blend_mask(power, &split, span, by)?,
-                _ => chosen(map, frame, span, by, &self.spare)?,
+            masks.push(match self.rules.get(k).copied().unwrap_or(Rule::Pick) {
+                Rule::Pick => chosen(map, frame, span, by, &self.spare)?,
+                rule @ Rule::Blend(_) => self.blend_mask(k, rule, &split, span, by)?,
             });
         }
         let inner = view.inner_in_patch();

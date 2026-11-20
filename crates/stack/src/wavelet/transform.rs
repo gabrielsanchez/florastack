@@ -126,8 +126,9 @@ pub struct Details {
 }
 
 impl Details {
-    /// Multiplies every subband by `mask`, one plane of their size.
-    pub(super) fn scale(&mut self, mask: &Image<f32>) {
+    /// Multiplies every subband by `mask`, one plane of their size: what [`analyze_masked`] does as it goes.
+    #[cfg(test)]
+    fn scale(&mut self, mask: &Image<f32>) {
         for band in [&mut self.horizontal, &mut self.vertical, &mut self.diagonal] {
             multiply(band, mask);
         }
@@ -203,11 +204,6 @@ pub(super) fn multiply(a: &mut Image<f32>, b: &Image<f32>) {
     a.par_rows_mut().zip(b.par_rows()).for_each(|(a, b)| a.iter_mut().zip(b).for_each(|(v, &s)| *v *= s));
 }
 
-/// `a += b`, sample by sample (planes of the same size).
-fn add(a: &mut Image<f32>, b: &Image<f32>) {
-    a.par_rows_mut().zip(b.par_rows()).for_each(|(a, b)| a.iter_mut().zip(b).for_each(|(v, &s)| *v += s));
-}
-
 /// `dst[x] += tap * row[x + shift]`, reading `row`'s end samples beyond it; with `FIRST`, `dst` is written instead, so
 /// that its samples needn't be cleared first.
 fn add_shifted<const FIRST: bool>(dst: &mut [f32], row: &[f32], tap: f32, shift: isize) {
@@ -234,74 +230,237 @@ fn add_shifted<const FIRST: bool>(dst: &mut [f32], row: &[f32], tap: f32, shift:
     }
 }
 
-fn filter_rows(src: &Image<f32>, filter: Filter, dilation: usize, spare: &Spare) -> Result<Image<f32>, StackError> {
-    let mut out = spare.take_written(src.width(), src.height())?;
-    out.par_rows_mut().zip(src.par_rows()).for_each(|(dst, row)| {
-        for (i, &tap) in filter.taps.iter().enumerate() {
-            let shift = (filter.first + signed(i)) * signed(dilation);
+/// `dst` as `filter` along `row` gives it: each output its taps added in order from the first.
+fn filter_row(dst: &mut [f32], row: &[f32], filter: Filter, dilation: usize) {
+    for (i, &tap) in filter.taps.iter().enumerate() {
+        let shift = (filter.first + signed(i)) * signed(dilation);
+        if i == 0 {
+            add_shifted::<true>(dst, row, tap, shift);
+        } else {
+            add_shifted::<false>(dst, row, tap, shift);
+        }
+    }
+}
+
+/// `dst` as row `y` of `filter` along the columns of `src` gives it: each output its taps added in order from the
+/// first, the plane's end rows repeated beyond it.
+fn filter_column(dst: &mut [f32], src: &Image<f32>, filter: Filter, dilation: usize, y: usize) {
+    let last = signed(src.height()) - 1;
+    for (i, &tap) in filter.taps.iter().enumerate() {
+        let at = (signed(y) + (filter.first + signed(i)) * signed(dilation)).clamp(0, last);
+        if let Some(row) = usize::try_from(at).ok().and_then(|at| src.row(at)) {
             if i == 0 {
-                add_shifted::<true>(dst, row, tap, shift);
+                dst.iter_mut().zip(row).for_each(|(v, &s)| *v = tap * s);
             } else {
-                add_shifted::<false>(dst, row, tap, shift);
+                dst.iter_mut().zip(row).for_each(|(v, &s)| *v += tap * s);
             }
         }
-    });
+    }
+}
+
+fn filter_rows(src: &Image<f32>, filter: Filter, dilation: usize, spare: &Spare) -> Result<Image<f32>, StackError> {
+    let mut out = spare.take_written(src.width(), src.height())?;
+    out.par_rows_mut().zip(src.par_rows()).for_each(|(dst, row)| filter_row(dst, row, filter, dilation));
     Ok(out)
 }
 
 fn filter_columns(src: &Image<f32>, filter: Filter, dilation: usize, spare: &Spare) -> Result<Image<f32>, StackError> {
     let mut out = spare.take_written(src.width(), src.height())?;
-    let last = signed(src.height()) - 1;
-    out.par_rows_mut().enumerate().for_each(|(y, dst)| {
-        for (i, &tap) in filter.taps.iter().enumerate() {
-            let at = (signed(y) + (filter.first + signed(i)) * signed(dilation)).clamp(0, last);
-            if let Some(row) = usize::try_from(at).ok().and_then(|at| src.row(at)) {
-                if i == 0 {
-                    dst.iter_mut().zip(row).for_each(|(v, &s)| *v = tap * s);
-                } else {
-                    dst.iter_mut().zip(row).for_each(|(v, &s)| *v += tap * s);
-                }
+    out.par_rows_mut().enumerate().for_each(|(y, dst)| filter_column(dst, src, filter, dilation, y));
+    Ok(out)
+}
+
+/// `a += b`, sample by sample.
+fn add_row(a: &mut [f32], b: &[f32]) {
+    a.iter_mut().zip(b).for_each(|(v, &s)| *v += s);
+}
+
+/// How many output rows an analysis makes from one band of row-filtered rows. The band's rows stay in a thread's
+/// buffers instead of going out to planes; a band also filters the rows its column filters read beyond it, `2 reach
+/// dilation` more, so a smaller one repeats more work. On 8 frames of 20 MP the method took 61 s with 32 rows, 63 s with
+/// 64, and no less with 16.
+const BAND: usize = 32;
+
+/// The rows of a plane that the column filters of one band of output rows read, filtered along the rows: low-passed,
+/// and high-passed unless only the low-pass is wanted, from row `from` on.
+#[derive(Default)]
+struct Band {
+    from: usize,
+    low: Vec<f32>,
+    high: Vec<f32>,
+}
+
+impl Band {
+    /// Fills the band for output rows `y0..y1` of `plane`, `high` saying whether the high-pass is wanted too.
+    fn fill(&mut self, bank: &Bank, plane: &Image<f32>, dilation: usize, (y0, y1): (usize, usize), high: bool) {
+        let (w, h) = (plane.width(), plane.height());
+        let reach = bank.reach().saturating_mul(dilation);
+        self.from = y0.saturating_sub(reach);
+        let to = y1.saturating_add(reach).min(h);
+        let n = to.saturating_sub(self.from) * w;
+        self.low.resize(n, 0.0);
+        self.high.resize(if high { n } else { 0 }, 0.0);
+        let mut highs = self.high.chunks_exact_mut(w.max(1));
+        for (y, low) in (self.from..to).zip(self.low.chunks_exact_mut(w.max(1))) {
+            let Some(row) = plane.row(y) else { continue };
+            filter_row(low, row, bank.low, dilation);
+            if let Some(high) = highs.next() {
+                filter_row(high, row, bank.high, dilation);
             }
         }
-    });
-    Ok(out)
+    }
+}
+
+/// [`filter_column`] on the rows of a band, which start at row `from` of a plane `width` x `height`.
+#[allow(clippy::too_many_arguments)] // A filter's taps and where it reads.
+fn filter_band(dst: &mut [f32], band: &[f32], from: usize, (width, height): (usize, usize), filter: Filter, dilation: usize, y: usize) {
+    let last = signed(height) - 1;
+    for (i, &tap) in filter.taps.iter().enumerate() {
+        let at = (signed(y) + (filter.first + signed(i)) * signed(dilation)).clamp(0, last);
+        let row = usize::try_from(at).ok().and_then(|at| at.checked_sub(from)).and_then(|j| band.get(j * width..(j + 1) * width));
+        if let Some(row) = row {
+            if i == 0 {
+                dst.iter_mut().zip(row).for_each(|(v, &s)| *v = tap * s);
+            } else {
+                dst.iter_mut().zip(row).for_each(|(v, &s)| *v += tap * s);
+            }
+        }
+    }
 }
 
 /// `plane`'s next level at `dilation`: its low-pass and its details.
 pub fn analyze(bank: &Bank, plane: &Image<f32>, dilation: usize, spare: &Spare) -> Result<(Image<f32>, Details), StackError> {
-    let low = filter_rows(plane, bank.low, dilation, spare)?;
-    let high = filter_rows(plane, bank.high, dilation, spare)?;
-    let details = Details {
-        horizontal: filter_columns(&low, bank.high, dilation, spare)?,
-        vertical: filter_columns(&high, bank.low, dilation, spare)?,
-        diagonal: filter_columns(&high, bank.high, dilation, spare)?,
+    let (next, details) = analyze_masked(bank, plane, dilation, Some(None), spare)?;
+    match details {
+        Some(details) => Ok((next, details)),
+        None => Err(StackError::NotStarted),
+    }
+}
+
+/// `plane`'s next level at `dilation` and, as `keep` says, its details: `Some(mask)` keeps them, each subband
+/// multiplied by `mask` when there is one (a plane of their size), and `None` keeps none and spends nothing on them.
+/// The rows are filtered a band at a time into a thread's buffers ([`Band`]) and the columns from there, so that only
+/// the results go out to planes; each sample is computed as [`filter_rows`] and [`filter_columns`] would, then
+/// multiplied, so the result is the same bit for bit.
+pub fn analyze_masked(
+    bank: &Bank,
+    plane: &Image<f32>,
+    dilation: usize,
+    keep: Option<Option<&Image<f32>>>,
+    spare: &Spare,
+) -> Result<(Image<f32>, Option<Details>), StackError> {
+    let (w, h) = (plane.width(), plane.height());
+    let mut next = spare.take_written(w, h)?;
+    let Some(mask) = keep else {
+        next.par_rows_mut().chunks(BAND).enumerate().for_each_init(Band::default, |band, (b, rows)| {
+            let y0 = b * BAND;
+            band.fill(bank, plane, dilation, (y0, y0 + rows.len()), false);
+            for (j, n) in rows.into_iter().enumerate() {
+                filter_band(n, &band.low, band.from, (w, h), bank.low, dilation, y0 + j);
+            }
+        });
+        return Ok((next, None));
     };
-    let next = filter_columns(&low, bank.low, dilation, spare)?;
-    spare.give(low);
-    spare.give(high);
-    Ok((next, details))
+    let mut horizontal = spare.take_written(w, h)?;
+    let mut vertical = spare.take_written(w, h)?;
+    let mut diagonal = spare.take_written(w, h)?;
+    let bands = next
+        .par_rows_mut()
+        .chunks(BAND)
+        .zip(horizontal.par_rows_mut().chunks(BAND))
+        .zip(vertical.par_rows_mut().chunks(BAND))
+        .zip(diagonal.par_rows_mut().chunks(BAND));
+    bands.enumerate().for_each_init(Band::default, |band, (b, (((n, hz), vt), dg))| {
+        let y0 = b * BAND;
+        band.fill(bank, plane, dilation, (y0, y0 + n.len()), true);
+        let (from, low, high) = (band.from, &band.low, &band.high);
+        for (j, (((n, hz), vt), dg)) in n.into_iter().zip(hz).zip(vt).zip(dg).enumerate() {
+            let y = y0 + j;
+            filter_band(hz, low, from, (w, h), bank.high, dilation, y);
+            filter_band(vt, high, from, (w, h), bank.low, dilation, y);
+            filter_band(dg, high, from, (w, h), bank.high, dilation, y);
+            filter_band(n, low, from, (w, h), bank.low, dilation, y);
+            if let Some(m) = mask.and_then(|m| m.row(y)) {
+                for subband in [hz, vt, dg] {
+                    subband.iter_mut().zip(m).for_each(|(v, &s)| *v *= s);
+                }
+            }
+        }
+    });
+    Ok((next, Some(Details { horizontal, vertical, diagonal })))
+}
+
+/// `plane`'s next level at `dilation` and that level's activity ([`activity`]), without keeping its details: each
+/// row's subbands are computed into buffers and squared there, the same arithmetic as [`analyze`] then [`activity`].
+pub fn analyze_activity(
+    bank: &Bank,
+    plane: &Image<f32>,
+    dilation: usize,
+    window: u32,
+    spare: &Spare,
+) -> Result<(Image<f32>, Image<f32>), StackError> {
+    let (w, h) = (plane.width(), plane.height());
+    let mut next = spare.take_written(w, h)?;
+    let mut energy = spare.take_written(w, h)?;
+    let bands = next.par_rows_mut().chunks(BAND).zip(energy.par_rows_mut().chunks(BAND));
+    bands.enumerate().for_each_init(
+        || (Band::default(), vec![0.0; w], vec![0.0; w], vec![0.0; w]),
+        |(band, hz, vt, dg), (b, (n, e))| {
+            let y0 = b * BAND;
+            band.fill(bank, plane, dilation, (y0, y0 + n.len()), true);
+            let (from, low, high) = (band.from, &band.low, &band.high);
+            for (j, (n, e)) in n.into_iter().zip(e).enumerate() {
+                let y = y0 + j;
+                filter_band(hz, low, from, (w, h), bank.high, dilation, y);
+                filter_band(vt, high, from, (w, h), bank.low, dilation, y);
+                filter_band(dg, high, from, (w, h), bank.high, dilation, y);
+                filter_band(n, low, from, (w, h), bank.low, dilation, y);
+                for (((e, &h), &v), &d) in e.iter_mut().zip(hz.iter()).zip(vt.iter()).zip(dg.iter()) {
+                    *e = h * h + v * v + d * d;
+                }
+            }
+        },
+    );
+    let out = windowed(&energy, window, spare)?;
+    spare.give(energy);
+    Ok((next, out))
+}
+
+/// `energy` averaged over a `window` x `window` binomial window, 3 or 5.
+fn windowed(energy: &Image<f32>, window: u32, spare: &Spare) -> Result<Image<f32>, StackError> {
+    let filter = if window == 3 { WINDOW_3 } else { WINDOW_5 };
+    let rows = filter_rows(energy, filter, 1, spare)?;
+    let out = filter_columns(&rows, filter, 1, spare)?;
+    spare.give(rows);
+    Ok(out)
 }
 
 /// The plane [`analyze`] took `low` and `details` from, or, with no details, what `low` alone gives: synthesis is
-/// linear, so a plane's parts can be synthesized apart and added.
+/// linear, so a plane's parts can be synthesized apart and added. Each output row is made in one go, from row buffers
+/// of the column filters' results: no plane but the output is written, and each sum is added in the order separate
+/// filters and additions would add it, so the result is the same bit for bit.
 pub fn synthesize(bank: &Bank, low: &Image<f32>, details: Option<&Details>, dilation: usize, spare: &Spare) -> Result<Image<f32>, StackError> {
-    let mut rows = filter_columns(low, bank.synthesis_low, dilation, spare)?;
-    let Some(details) = details else {
-        let out = filter_rows(&rows, bank.synthesis_low, dilation, spare)?;
-        spare.give(rows);
-        return Ok(out);
-    };
-    let added = |to: &mut Image<f32>, plane: Image<f32>| {
-        add(to, &plane);
-        spare.give(plane);
-    };
-    added(&mut rows, filter_columns(&details.horizontal, bank.synthesis_high, dilation, spare)?);
-    let mut high = filter_columns(&details.vertical, bank.synthesis_low, dilation, spare)?;
-    added(&mut high, filter_columns(&details.diagonal, bank.synthesis_high, dilation, spare)?);
-    let mut out = filter_rows(&rows, bank.synthesis_low, dilation, spare)?;
-    added(&mut out, filter_rows(&high, bank.synthesis_high, dilation, spare)?);
-    spare.give(rows);
-    spare.give(high);
+    let w = low.width();
+    let mut out = spare.take_written(w, low.height())?;
+    // Each output row needs only that row of the column pass's results, so they stay in row buffers.
+    out.par_rows_mut().enumerate().for_each_init(
+        || (vec![0.0; w], vec![0.0; w], vec![0.0; w]),
+        |(rows, high, buffer), (y, o)| {
+            filter_column(rows, low, bank.synthesis_low, dilation, y);
+            let Some(details) = details else {
+                filter_row(o, rows, bank.synthesis_low, dilation);
+                return;
+            };
+            filter_column(buffer, &details.horizontal, bank.synthesis_high, dilation, y);
+            add_row(rows, buffer);
+            filter_column(high, &details.vertical, bank.synthesis_low, dilation, y);
+            filter_column(buffer, &details.diagonal, bank.synthesis_high, dilation, y);
+            add_row(high, buffer);
+            filter_row(o, rows, bank.synthesis_low, dilation);
+            filter_row(buffer, high, bank.synthesis_high, dilation);
+            add_row(o, buffer);
+        },
+    );
     Ok(out)
 }
 
@@ -316,11 +475,8 @@ pub fn activity(details: &Details, window: u32, spare: &Spare) -> Result<Image<f
             *e = h * h + v * v + d * d;
         }
     });
-    let filter = if window == 3 { WINDOW_3 } else { WINDOW_5 };
-    let rows = filter_rows(&energy, filter, 1, spare)?;
+    let out = windowed(&energy, window, spare)?;
     spare.give(energy);
-    let out = filter_columns(&rows, filter, 1, spare)?;
-    spare.give(rows);
     Ok(out)
 }
 
@@ -437,6 +593,73 @@ mod tests {
                 assert!((filter.taps.iter().sum::<f32>() - 1.0).abs() < 1e-6, "{wavelet:?}: low-pass filters sum to 1");
             }
             assert!(bank.high.taps.iter().sum::<f32>().abs() < 1e-6, "{wavelet:?}: high-pass filters pass no brightness");
+        }
+    }
+
+    /// The analysis as it was before its passes were fused: one filter a pass over a whole plane.
+    fn analyze_apart(bank: &Bank, plane: &Image<f32>, dilation: usize, spare: &Spare) -> (Image<f32>, Details) {
+        let low = filter_rows(plane, bank.low, dilation, spare).unwrap();
+        let high = filter_rows(plane, bank.high, dilation, spare).unwrap();
+        let details = Details {
+            horizontal: filter_columns(&low, bank.high, dilation, spare).unwrap(),
+            vertical: filter_columns(&high, bank.low, dilation, spare).unwrap(),
+            diagonal: filter_columns(&high, bank.high, dilation, spare).unwrap(),
+        };
+        (filter_columns(&low, bank.low, dilation, spare).unwrap(), details)
+    }
+
+    /// The synthesis as it was before its passes were fused: one filter a pass, then whole planes added.
+    fn synthesize_apart(bank: &Bank, low: &Image<f32>, details: &Details, dilation: usize, spare: &Spare) -> Image<f32> {
+        let add = |a: &mut Image<f32>, b: Image<f32>| a.rows_mut().zip(b.rows()).for_each(|(a, b)| add_row(a, b));
+        let mut rows = filter_columns(low, bank.synthesis_low, dilation, spare).unwrap();
+        add(&mut rows, filter_columns(&details.horizontal, bank.synthesis_high, dilation, spare).unwrap());
+        let mut high = filter_columns(&details.vertical, bank.synthesis_low, dilation, spare).unwrap();
+        add(&mut high, filter_columns(&details.diagonal, bank.synthesis_high, dilation, spare).unwrap());
+        let mut out = filter_rows(&rows, bank.synthesis_low, dilation, spare).unwrap();
+        add(&mut out, filter_rows(&high, bank.synthesis_high, dilation, spare).unwrap());
+        out
+    }
+
+    /// A seeded plane of samples from -0.5 to 1.5.
+    fn noise(width: usize, height: usize, seed: u64) -> Image<f32> {
+        let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        Image::from_fn(width, height, 1, ColorSpace::LINEAR, |_, _, _| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (state >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 0.5
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_fused_passes_give_what_one_filter_a_pass_gives_bit_for_bit() {
+        let spare = Spare::default();
+        for wavelet in [Wavelet::Bior22, Wavelet::Db2] {
+            let bank = wavelet.bank();
+            for (width, height) in [(37, 23), (1, 9), (64, 1), (130, 70)] {
+                for dilation in [1, 2, 4] {
+                    let at = format!("{wavelet:?}, {width}x{height}, dilation {dilation}");
+                    let plane = noise(width, height, (width * height + dilation) as u64);
+                    let mask = noise(width, height, 7);
+                    let (want_next, want) = analyze_apart(bank, &plane, dilation, &spare);
+                    let (next, details) = analyze(bank, &plane, dilation, &spare).unwrap();
+                    assert_eq!((&next, &details), (&want_next, &want), "{at}: analysis");
+                    let (next, masked) = analyze_masked(bank, &plane, dilation, Some(Some(&mask)), &spare).unwrap();
+                    let mut scaled = want.clone();
+                    scaled.scale(&mask);
+                    assert_eq!((&next, masked.as_ref()), (&want_next, Some(&scaled)), "{at}: masked analysis");
+                    let (next, none) = analyze_masked(bank, &plane, dilation, None, &spare).unwrap();
+                    assert_eq!((&next, none), (&want_next, None), "{at}: the low-pass alone");
+                    for window in [3, 5] {
+                        let (next, energy) = analyze_activity(bank, &plane, dilation, window, &spare).unwrap();
+                        assert_eq!((&next, &energy), (&want_next, &activity(&want, window, &spare).unwrap()), "{at}: activity over {window}");
+                    }
+                    let restored = synthesize(bank, &want_next, Some(&scaled), dilation, &spare).unwrap();
+                    assert_eq!(restored, synthesize_apart(bank, &want_next, &scaled, dilation, &spare), "{at}: synthesis");
+                    let rows = filter_columns(&want_next, bank.synthesis_low, dilation, &spare).unwrap();
+                    let low_only = filter_rows(&rows, bank.synthesis_low, dilation, &spare).unwrap();
+                    assert_eq!(synthesize(bank, &want_next, None, dilation, &spare).unwrap(), low_only, "{at}: the low-pass's synthesis");
+                }
+            }
         }
     }
 

@@ -13,7 +13,7 @@ use florastack_core::{ColorSpace, Image, Monitor, Rect, Tile};
 use rayon::prelude::*;
 
 use super::frame::{Layout, Split, context, gather, read_region, tile_extension};
-use super::transform::{Bank, Spare, activity, analyze, extend, extension, pool};
+use super::transform::{Bank, Spare, analyze, analyze_activity, extend, extension, pool};
 use super::{Lowpass, WAVELET, WaveletSettings};
 use crate::depth::MAX_FRAMES;
 use crate::error::StackError;
@@ -41,9 +41,8 @@ pub(super) fn deciding(bank: &Bank, window: u32, luminance: &Image<f32>, levels:
     let anchor = ANCHOR.min(levels - 1);
     let mut plane = spare.copy(luminance)?;
     for j in 0..=anchor {
-        let (low, details) = analyze(bank, &plane, 1 << j, spare)?;
-        out.push(activity(&details, window, spare)?);
-        details.recycle(spare);
+        let (low, energy) = analyze_activity(bank, &plane, 1 << j, window, spare)?;
+        out.push(energy);
         spare.give(std::mem::replace(&mut plane, low));
     }
     spare.give(plane);
@@ -74,16 +73,16 @@ struct CoarsePick {
 pub struct SelectKernel {
     settings: WaveletSettings,
     bank: &'static Bank,
-    /// The finest level's blend power, `1 / grit`; `None` picks.
-    power: Option<f32>,
+    /// How each tiled level combines the frames.
+    rules: Vec<Rule>,
     layout: Option<Layout>,
     coarse: Vec<CoarsePick>,
     /// With [`Lowpass::Focus`], the most of what weighs a low-pass so far, on the extended plane.
     peak: Option<Image<f32>>,
     frames: usize,
     spare: Spare,
-    /// The finest level's activity per unit of noise variance (`noise_gain`).
-    gain: f32,
+    /// Each tiled level's activity per unit of noise variance (`noise_gain`).
+    gains: Vec<f32>,
 }
 
 /// Folds a level's `energy` into `best` and `frame`, planes of `at`'s size: a frame replaces the one before it where it
@@ -108,13 +107,13 @@ impl SelectKernel {
         Ok(SelectKernel {
             settings: settings.clone(),
             bank: settings.wavelet.bank(),
-            power: settings.power(),
+            rules: rules(settings),
             layout: None,
             coarse: Vec::new(),
             peak: None,
             frames: 0,
             spare: Spare::default(),
-            gain: noise_gain(settings.wavelet.bank())?,
+            gains: noise_gains(settings.wavelet.bank())?,
         })
     }
 
@@ -122,79 +121,147 @@ impl SelectKernel {
         self.layout.ok_or(StackError::NotStarted)
     }
 
-    /// The state's plane of level `k`: its most activity (or sum of blend weights), and after it its frame.
+    /// How level `k` combines the frames.
+    fn rule(&self, k: usize) -> Rule {
+        self.rules.get(k).copied().unwrap_or(Rule::Pick)
+    }
+
+    /// The state's plane of level `k`: the sum of its blend weights, or its most activity and after it its frame.
     fn plane(&self, k: usize) -> usize {
-        match (self.power.is_some(), k) {
-            (true, 0) => 0,
-            (true, k) => 2 * k - 1,
-            (false, k) => 2 * k,
-        }
+        (0..k).map(|j| if self.rule(j) == Rule::Pick { 2 } else { 1 }).sum()
     }
 }
 
-/// The activity white noise of variance 1 gives at the finest level of `bank`: the sum of the squares of the three
-/// subbands' responses to an impulse. Activity averages its window, so noise's expected activity is this times its
-/// variance.
-pub(super) fn noise_gain(bank: &Bank) -> Result<f32, StackError> {
-    let size = 33;
-    let impulse = Image::from_fn(size, size, 1, ColorSpace::LINEAR, |x, y, _| if x == size / 2 && y == size / 2 { 1.0 } else { 0.0 })?;
+/// How a tiled level combines the frames.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Rule {
+    /// Each position takes the frame with the most activity.
+    Pick,
+    /// Each position blends the frames, each weighted by its activity to this power.
+    Blend(f32),
+}
+
+/// How each tiled level combines the frames under `settings`: the finest blends as `grit` says, and the levels above it
+/// pick.
+pub(super) fn rules(settings: &WaveletSettings) -> Vec<Rule> {
+    (0..TILED_LEVELS).map(|k| if k == 0 { settings.power().map_or(Rule::Pick, Rule::Blend) } else { Rule::Pick }).collect()
+}
+
+/// The activity white noise of variance 1 gives at tiled level `level` of `bank`: the sum of the squares of the three
+/// subbands' responses to an impulse, through the levels below it. Activity averages its window, so noise's expected
+/// activity is this times its variance.
+pub(super) fn noise_gain(bank: &Bank, level: usize) -> Result<f32, StackError> {
+    let size = 65;
+    let mut plane = Image::from_fn(size, size, 1, ColorSpace::LINEAR, |x, y, _| if x == size / 2 && y == size / 2 { 1.0 } else { 0.0 })?;
     let spare = Spare::default();
-    let (_, details) = analyze(bank, &impulse, 1, &spare)?;
+    for j in 0..level {
+        plane = analyze(bank, &plane, 1 << j, &spare)?.0;
+    }
+    let (_, details) = analyze(bank, &plane, 1 << level, &spare)?;
     let square = |image: &Image<f32>| image.as_raw().iter().map(|v| v * v).sum::<f32>();
     Ok(square(&details.horizontal) + square(&details.vertical) + square(&details.diagonal))
 }
 
-/// The finest level's noise floor on `split`'s extended plane, `None` when `settings` turn it off: the activity that
-/// noise of `noise_floor` percent of white, in gamma-encoded values, makes at each position, given the frame's light
-/// there pooled as its coverage is. Gamma-encoded `g` is about linear `L^(1 / 2.2)`, so noise `n` there is
-/// `2.2 L^0.545 n` in linear light.
-pub(super) fn noise_floor(
+/// [`noise_gain`] of every tiled level.
+pub(super) fn noise_gains(bank: &Bank) -> Result<Vec<f32>, StackError> {
+    (0..TILED_LEVELS).map(|k| noise_gain(bank, k)).collect()
+}
+
+/// The variance, in linear light, of noise of `noise_floor` percent of white in gamma-encoded values, at each position
+/// of `split`'s extended plane given the frame's light there pooled as its coverage is, and never less than at
+/// [`DARKEST`]; `None` when `settings` turn the noise floor off. Gamma-encoded `g` is about linear `L^(1 / 2.2)`, so
+/// noise `n` there is `2.2 L^0.545 n` in linear light: the same noise in gamma-encoded values is larger in linear light
+/// where a frame is brighter.
+pub(super) fn noise_variance(
     settings: &WaveletSettings,
-    gain: f32,
     split: &Split,
     span: Span,
     by: usize,
     spare: &Spare,
 ) -> Result<Option<Image<f32>>, StackError> {
-    if settings.noise_floor <= 0.0 {
-        return Ok(None);
-    }
     #[allow(clippy::cast_possible_truncation)] // A percentage from 0 to 2.
     let noise = (settings.noise_floor / 100.0) as f32;
+    if noise <= 0.0 {
+        return Ok(None);
+    }
     let light = extend(&luminance(split.image())?, span, by, 0, spare)?;
-    let mut floor = pool(&light, 1, spare)?;
+    let mut variance = pool(&light, 1, spare)?;
     spare.give(light);
-    floor.par_rows_mut().for_each(|row| {
+    variance.par_rows_mut().for_each(|row| {
         for v in row {
-            let n = noise * 2.2 * v.max(0.0).powf(0.545);
-            *v = n * n * gain;
+            let n = noise * 2.2 * v.max(DARKEST).powf(0.545);
+            *v = n * n;
         }
     });
-    Ok(Some(floor))
+    Ok(Some(variance))
 }
 
-/// Raises `energy` to `floor` where it is below it.
-pub(super) fn raise(energy: &mut Image<f32>, floor: &Image<f32>) {
-    energy.par_rows_mut().zip(floor.par_rows()).for_each(|(row, floor)| {
-        for (e, &f) in row.iter_mut().zip(floor) {
-            *e = e.max(f);
+/// The least light the noise is reckoned at, one step of a 16-bit sample: in darker places a frame's detail is compared
+/// as if it were that bright, so that a frame black there doesn't win by dividing by nothing.
+const DARKEST: f32 = 1.0 / 65536.0;
+
+/// The most a blend weight relative to the noise grows to, which keeps the sum of the most frames within `f32`.
+const MOST_WEIGHT: f32 = 1e24;
+
+/// What a frame brings to tiled level `k`, ruled by `rule`, at each position of its extended plane, made in place of
+/// that level's activity `energy`: for a level that picks, the activity it compares; for one that blends, its weight
+/// there, coverage included. With a noise floor (`variance`, from [`noise_variance`]) a frame's activity counts relative
+/// to its own noise at its light, `gain` times `variance`: in absolute terms the same noise in gamma-encoded values makes
+/// more activity where a frame is brighter, so in a dark place that only the sharp frame shows dark, the lighter,
+/// out-of-focus frames' noise won it, and came out as fine colored speckle. A blend's weight is that ratio, never less
+/// than 1, to its power: frames whose detail is only noise weigh alike. Without a noise floor, activity counts as it is.
+pub(super) fn score(rule: Rule, energy: &mut Image<f32>, variance: Option<&Image<f32>>, gain: f32, coverage: Option<&Image<f32>>) {
+    energy.par_rows_mut().enumerate().for_each(|(y, row)| {
+        let noise = variance.and_then(|v| v.row(y));
+        let cov = coverage.and_then(|k| k.row(y));
+        for (x, e) in row.iter_mut().enumerate() {
+            let floor = noise.and_then(|v| v.get(x)).map(|&v| gain * v);
+            *e = match rule {
+                Rule::Pick => floor.map_or(*e, |f| *e / f),
+                Rule::Blend(power) => {
+                    let k = cov.map_or(1.0, |k| k.get(x).copied().unwrap_or(0.0));
+                    match floor {
+                        Some(f) => relative_weight(power, *e / f, k),
+                        None => blend_weight(power, *e, k),
+                    }
+                }
+            };
         }
     });
 }
 
-/// Folds a frame's blend weights at the finest level into `sum`, a plane of `at`'s size.
-fn blend(power: f32, energy: &Image<f32>, coverage: Option<&Image<f32>>, at: Rect, sum: &mut Image<f32>) {
+/// A frame's blend weight for an activity `ratio` times the noise floor's and a pooled coverage `coverage`.
+fn relative_weight(power: f32, ratio: f32, coverage: f32) -> f32 {
+    if coverage < crate::average::MIN_COVERAGE {
+        return 0.0;
+    }
+    let r = ratio.max(1.0);
+    #[allow(clippy::float_cmp)] // The common powers take fast paths.
+    let w = if power == 2.0 {
+        r * r
+    } else if power == 4.0 {
+        let s = r * r;
+        s * s
+    } else if power == 8.0 {
+        let s = r * r;
+        let q = s * s;
+        q * q
+    } else {
+        r.powf(power)
+    };
+    w.min(MOST_WEIGHT) * coverage.min(1.0)
+}
+
+/// Adds the `at` window of a frame's blend `weights` to `sum`, a plane of `at`'s size.
+fn blend(weights: &Image<f32>, at: Rect, sum: &mut Image<f32>) {
     sum.par_rows_mut().enumerate().for_each(|(j, sum)| {
-        let Some(e) = energy.row(at.y + j).and_then(|r| r.get(at.x..at.x + at.width)) else { return };
-        let cov = coverage.and_then(|k| k.row(at.y + j)).and_then(|r| r.get(at.x..at.x + at.width));
-        for (x, (sum, &e)) in sum.iter_mut().zip(e).enumerate() {
-            *sum += blend_weight(power, e, cov.map_or(1.0, |k| k.get(x).copied().unwrap_or(0.0)));
-        }
+        let Some(w) = weights.row(at.y + j).and_then(|r| r.get(at.x..at.x + at.width)) else { return };
+        sum.iter_mut().zip(w).for_each(|(s, &w)| *s += w);
     });
 }
 
-/// A frame's weight in the finest level's blend, for an activity `energy` and a pooled coverage `coverage`.
-pub(super) fn blend_weight(power: f32, energy: f32, coverage: f32) -> f32 {
+/// A frame's weight in a blend without a noise floor, for an activity `energy` and a pooled coverage `coverage`.
+fn blend_weight(power: f32, energy: f32, coverage: f32) -> f32 {
     if coverage >= crate::average::MIN_COVERAGE { Pyramid::blend_weight(power, energy, coverage.min(1.0)) } else { 0.0 }
 }
 
@@ -231,11 +298,11 @@ impl TileKernel for SelectKernel {
         let layout = self.layout()?;
         let mut planes = Vec::new();
         for k in 0..layout.tiled {
-            if k == 0 && self.power.is_some() {
-                planes.push(StatePlane::F32(filled(inner.width, inner.height, 1, 0.0)?));
+            if self.rule(k) == Rule::Pick {
+                planes.push(StatePlane::F32(filled(inner.width, inner.height, 1, NO_FRAME)?));
+                planes.push(StatePlane::F32(filled(inner.width, inner.height, 1, NO_FRAME)?));
             } else {
-                planes.push(StatePlane::F32(filled(inner.width, inner.height, 1, NO_FRAME)?));
-                planes.push(StatePlane::F32(filled(inner.width, inner.height, 1, NO_FRAME)?));
+                planes.push(StatePlane::F32(filled(inner.width, inner.height, 1, 0.0)?));
             }
         }
         Ok(planes)
@@ -255,30 +322,31 @@ impl TileKernel for SelectKernel {
         let index = view.frame as f32;
         let planes = state.len();
         let bad = || StackError::Shape { width: 0, height: 0, channels: planes };
+        // The noise at the frame's light: the finest level's floor, and what the levels above it compare activity to.
+        let variance = noise_variance(&self.settings, &split, span, by, spare)?;
         for k in 0..layout.tiled {
             let dilation = 1 << k;
-            let (low, details) = analyze(self.bank, &plane, dilation, spare)?;
-            let mut energy = activity(&details, self.settings.window, spare)?;
-            details.recycle(spare);
+            let (low, mut energy) = analyze_activity(self.bank, &plane, dilation, self.settings.window, spare)?;
             if let Some(last) = coverage.take() {
                 coverage = Some(pool(&last, dilation, spare)?);
                 spare.give(last);
             }
             let first = self.plane(k);
-            if let (Some(power), 0) = (self.power, k) {
-                if let Some(floor) = noise_floor(&self.settings, self.gain, &split, span, by, spare)? {
-                    raise(&mut energy, &floor);
-                    spare.give(floor);
-                }
-                let sum = state.get_mut(first).and_then(StatePlane::as_f32_mut).ok_or_else(bad)?;
-                blend(power, &energy, coverage.as_ref(), at, sum);
-            } else {
+            let rule = self.rule(k);
+            score(rule, &mut energy, variance.as_ref(), self.gains.get(k).copied().unwrap_or(1.0), coverage.as_ref());
+            if rule == Rule::Pick {
                 let Some([best, frame]) = state.get_mut(first..first + 2) else { return Err(bad()) };
                 let (Some(best), Some(frame)) = (best.as_f32_mut(), frame.as_f32_mut()) else { return Err(bad()) };
                 pick(&energy, coverage.as_ref(), at, index, best, frame);
+            } else {
+                let sum = state.get_mut(first).and_then(StatePlane::as_f32_mut).ok_or_else(bad)?;
+                blend(&energy, at, sum);
             }
             spare.give(energy);
             spare.give(std::mem::replace(&mut plane, low));
+        }
+        if let Some(variance) = variance {
+            spare.give(variance);
         }
         spare.give(plane);
         if let Some(coverage) = coverage {
@@ -323,7 +391,7 @@ impl TileKernel for SelectKernel {
         let Some(first) = state.first().and_then(StatePlane::as_f32) else {
             return Err(StackError::Shape { width: 0, height: 0, channels: state.len() });
         };
-        let blended = self.power.is_some();
+        let blended = self.rule(0) != Rule::Pick;
         let mut covered = first.clone();
         covered.par_rows_mut().for_each(|row| {
             for v in row {
@@ -340,7 +408,7 @@ impl TileKernel for SelectKernel {
         let bad = || StackError::Shape { width: 0, height: 0, channels: state.len() };
         let mut out = Image::new(inner.width, inner.height, c, ColorSpace::LINEAR)?;
         for k in 0..c {
-            let at = if k == 0 && self.power.is_some() { self.plane(0) } else { self.plane(k) + 1 };
+            let at = if self.rule(k) == Rule::Pick { self.plane(k) + 1 } else { self.plane(k) };
             let plane = state.get(at).and_then(StatePlane::as_f32).ok_or_else(bad)?;
             out.par_rows_mut().zip(plane.par_rows()).for_each(|(row, values)| {
                 for (pixel, &v) in row.chunks_exact_mut(c).zip(values) {
@@ -404,13 +472,12 @@ pub struct Choices {
 impl Choices {
     fn new(kernel: &SelectKernel, stitched: &Image<f32>, frames: usize) -> Result<Choices, StackError> {
         let layout = kernel.layout()?;
-        let blended = kernel.power.is_some();
         let consistent = kernel.settings.consistency;
         let mut fine = Vec::with_capacity(layout.tiled);
         for k in 0..layout.tiled {
             let c = stitched.channels();
             let mut plane = Image::new(stitched.width(), stitched.height(), 1, ColorSpace::LINEAR)?;
-            let weights = k == 0 && blended;
+            let weights = kernel.rule(k) != Rule::Pick;
             plane.par_rows_mut().zip(stitched.par_rows()).for_each(|(row, values)| {
                 for (v, pixel) in row.iter_mut().zip(values.chunks_exact(c)) {
                     let s = pixel.get(k).copied().unwrap_or(0.0);
@@ -430,7 +497,7 @@ impl Choices {
                 let last = coarse.len().saturating_sub(1);
                 match coarse.last() {
                     Some(level) => Some(most_common(level, 1 << last)),
-                    None => fine_frames(&layout, &fine, blended)?.map(|f| most_common(&f, 1)),
+                    None => fine_frames(&layout, &fine, kernel.rule(layout.tiled.saturating_sub(1)) != Rule::Pick)?.map(|f| most_common(&f, 1)),
                 }
             }
         };
@@ -450,7 +517,7 @@ impl Choices {
 
 /// With no coarse level, the coarsest tiled level's frames on the low-pass's samples; none if that level blends.
 fn fine_frames(layout: &Layout, fine: &[Image<f32>], blended: bool) -> Result<Option<Image<f32>>, StackError> {
-    if layout.tiled == 1 && blended {
+    if blended {
         return Ok(None);
     }
     let Some(level) = fine.last() else { return Ok(None) };

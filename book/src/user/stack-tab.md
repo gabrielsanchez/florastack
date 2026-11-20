@@ -62,7 +62,7 @@ The first picture takes as long as a quarter-size preview, since every frame is 
 
 ## Grit
 
-The finest detail of the pyramid and wavelet methods can favor the single sharpest frame or a blend of the sharpest ones. Raise grit for crisper fine texture; lower it to reduce speckled noise in smooth areas.
+The finest detail of the pyramid and wavelet methods can come from the single sharpest frame or from a blend of the sharpest ones. Grit sets how much they blend: raise it to reduce speckled noise in smooth areas; lower it for crisper fine texture. 0 turns the blend off and picks the sharpest frame, as the coarser levels do.
 
 ## Range limit
 
@@ -82,7 +82,7 @@ Whether the pyramid picks the sharpest detail once for all colors (**By luminanc
 
 ## Noise floor
 
-How noisy the frames are, in percent of white, for the wavelet method's finest detail. Where a frame's fine detail is no stronger than this, it is treated as noise, and that place blends the frames evenly instead of taking the noisiest one, which keeps flat areas smooth. The default, 0.4, suits camera JPEGs at low ISO; raise it (to 1 or more) for high-ISO frames whose flat areas look grainy, and lower it, or set 0 to turn it off, when fine texture looks softened. It only acts with **Grit** above 0. The preview divides it by four, as a quarter-size frame has about a quarter of the noise.
+How noisy the frames are, in percent of white, for the wavelet method. The method compares each frame's detail with this noise at the frame's brightness, so that in a dark place only the sharp frame shows dark, the lighter, out-of-focus frames' noise doesn't win and show as colored speckle. Where a frame's finest detail is no stronger than this noise, that place blends the frames evenly instead of taking the noisiest one, which keeps flat areas smooth (with **Grit** above 0). The default, 0.4, suits camera JPEGs at low ISO; raise it (to 1 or more) for high-ISO frames whose flat areas look grainy, and lower it, or set 0 to turn it off, when fine texture looks softened. The preview divides it by four, as a quarter-size frame has about a quarter of the noise.
 
 ## Window
 

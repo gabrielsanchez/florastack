@@ -31,13 +31,21 @@
 //!    (`select::majority`), which replaces isolated picks, the ones noise makes, by the choice around them.
 //! 4. **Grit** (`grit`): picking the largest of several frames' noise builds up grit at the finest level, so there, as
 //!    in the pyramid, each frame is weighted by its activity raised to `1 / grit`. 0 picks, as the other levels do.
-//!    **Noise floor** (`noise_floor`): where a frame's activity there is no more than its noise would make, it is
-//!    raised to that, so that frames whose detail is only noise share that place evenly instead of the noisiest one
-//!    winning it. The noise is `noise_floor` percent of white in gamma-encoded values, as cameras' noise roughly is,
-//!    brought into linear light at the frame's brightness there (`select::noise_floor`). On four real JPEG stacks, 0.4%
-//!    lowered the noise of flat areas by 4 to 26% and the subjects' fine detail by 0.2 to 1.8%; on synthetic stacks a
-//!    floor near their true noise raised SSIM, and 2% blurred real detail. With `grit` 0 the finest level picks, and the
-//!    floor does nothing.
+//!    **Noise floor** (`noise_floor`): the frames' noise, `noise_floor` percent of white in gamma-encoded values, as
+//!    cameras' noise roughly is, brought into linear light at each frame's brightness there (`select::noise_variance`).
+//!    With it, every tiled level compares a frame's activity relative to that noise (`select::score`): the same noise
+//!    makes more activity in linear light where a frame is brighter, so in a dark place that only the sharp frame shows
+//!    dark, the lighter, out-of-focus frames' noise won the choices, and came out as fine colored speckle. On the
+//!    ladybug's black spot that speckle (fine chroma) fell from 11.2 to 7.8, against the pyramid's 5.2; on the four
+//!    real JPEG stacks the subjects' fine detail moved by 0 to -0.7% and flat areas' noise by -0.4 to -1.1%. At the
+//!    finest level a frame's weight is that ratio, never less than 1, so that
+//!    frames whose detail is only noise share that place evenly instead of the noisiest one winning it. On four real
+//!    JPEG stacks, 0.4% lowered the noise of flat areas by 4 to 26% and the subjects' fine detail by 0.2 to 1.8%; on
+//!    synthetic stacks a floor near their true noise raised SSIM, and 2% blurred real detail. What speckle is left
+//!    comes from the second and third levels, where every frame is noise and the picks change from pixel to pixel: an
+//!    even blend there where no frame stands above 16 times its white noise's activity removed it, since a JPEG's noise
+//!    is correlated and fills those levels more than white noise, but that threshold blurred the synthetic stacks'
+//!    textures, whose noise is white. It needs each stack's noise measured at each level.
 //! 5. **Low-pass** (`lowpass`): the coarsest low-pass is the frames', weighted by that same pooled activity to the
 //!    power [`FOCUS_POWER`] and by coverage. A plain average lifts what only the sharp frames show dark: measured on real
 //!    stacks, a ladybug's spot came out at 33 of 255 where its sharp frames have 15, about the frames' mean. Taking the
@@ -68,8 +76,12 @@
 //! Undecimated levels make the method's filters run on whole planes, and what limits it is memory traffic, not
 //! arithmetic: on 8 cores it takes the same time on 4 threads as on 16, and with no page faults at all it still doesn't
 //! scale. So it cuts the traffic: its tiles are wider than other methods' ([`TILE_SIZE`]), which halves the share of
-//! their work that overlaps, and it reuses its planes ([`transform::Spare`]). Filtering in cache-sized bands of rows
-//! is what would help next.
+//! their work that overlaps, and it reuses its planes ([`transform::Spare`]). The transform's passes are fused
+//! (`transform.rs`): an analysis filters its rows a band at a time into a thread's buffers and makes all four of a
+//! level's outputs, masked, in one pass over the columns; pass 1 squares the subbands as it makes them and keeps only
+//! their activity; a synthesis makes each output row in one go from row buffers. Every sample is computed as the
+//! separate filters computed it, so the results are the same bit for bit (a test keeps the separate filters to check
+//! it). On 8 frames of 20 MP the method went from 89.6 to 61 s, pass 2 from 60.9 to 35.8 s.
 
 pub mod compose;
 mod frame;
@@ -151,9 +163,9 @@ pub struct WaveletSettings {
     /// sharpest frame's coefficients are picked, as at the other levels).
     #[schemars(range(min = 0.0, max = 1.0))]
     pub grit: f64,
-    /// The noise floor of the finest level's blend, in percent of white in gamma-encoded values, from 0 (off) to 2: the
-    /// frames' noise, below which activity counts as noise. Raise it for noisy frames (high ISO); too high, it blends
-    /// away fine detail.
+    /// The frames' noise, in percent of white in gamma-encoded values, from 0 (off) to 2: every level compares a frame's
+    /// detail with this noise at its brightness, and at the finest level detail below it counts as noise and blends
+    /// evenly. Raise it for noisy frames (high ISO); too high, it blends away fine detail.
     #[schemars(range(min = 0.0, max = 2.0))]
     pub noise_floor: f64,
     /// How strictly each pixel is held within the range the frames span there, from 0 (off) to 1 (never darker or
