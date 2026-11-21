@@ -17,6 +17,8 @@ pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capture_tab;
 #[cfg(not(target_arch = "wasm32"))]
+mod clipboard;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;
 pub mod export_tab;
@@ -60,7 +62,9 @@ pub fn native_options() -> eframe::NativeOptions {
         .with_maximized(true)
         .with_drag_and_drop(true);
     #[allow(unused_mut, reason = "changed on Linux only")]
-    let mut options = eframe::NativeOptions { viewport, persist_window: true, centered: true, ..eframe::NativeOptions::default() };
+    // The clipboard's shortcuts are the app's (`clipboard.rs`), so that files copied in a file manager paste.
+    let mut options =
+        eframe::NativeOptions { viewport, persist_window: true, centered: true, clipboard_shortcuts: false, ..eframe::NativeOptions::default() };
     #[cfg(all(unix, not(target_os = "macos")))]
     if files::use_x11(std::env::var_os("DISPLAY").as_deref(), std::env::var_os(WAYLAND_VARIABLE).as_deref()) {
         options.event_loop_builder = Some(Box::new(|builder| {

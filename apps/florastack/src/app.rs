@@ -150,6 +150,11 @@ pub enum Banner {
 
 /// See the module documentation.
 pub struct FloraStackApp {
+    /// The system's clipboard, for the shortcuts the app handles, and the files a paste found, to be opened.
+    #[cfg(not(target_arch = "wasm32"))]
+    clipboard: crate::clipboard::System,
+    #[cfg(not(target_arch = "wasm32"))]
+    pasted_files: Vec<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) control: Option<florastack_engine::control::Server>,
     /// What the control channel's clients may do.
@@ -274,6 +279,10 @@ impl FloraStackApp {
             autosave: None,
             checked: None,
             quitting: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            clipboard: crate::clipboard::System::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pasted_files: Vec::new(),
             last_project: None,
             batch: BatchForm::default(),
             follow_preview: false,
@@ -880,6 +889,11 @@ impl FloraStackApp {
         if !dropped.is_empty() {
             self.dropped(dropped);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.pasted_files.is_empty() {
+            let pasted = std::mem::take(&mut self.pasted_files);
+            self.dropped(pasted);
+        }
         if !typing {
             for text in pasted {
                 let paths = paths_from_text(&text);
@@ -941,6 +955,15 @@ impl eframe::App for FloraStackApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw_ui(ui);
+    }
+
+    /// The clipboard's shortcuts, which egui-winit leaves to the app (`native_options`): files copied in a file
+    /// manager are opened as dropped ones, and text fields get their cut, copy and paste events as before.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let typing = ctx.egui_wants_keyboard_input();
+        let files = crate::clipboard::translate(&mut raw_input.events, typing, &mut self.clipboard);
+        self.pasted_files.extend(files);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

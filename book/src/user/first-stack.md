@@ -8,7 +8,8 @@ WebP and OpenEXR all work.
 
 ## 1. Add the frames
 
-Start FloraStack and drop the photos, or the folder that holds them, on its window. (Or **File > Add frames…**.) They
+Start FloraStack and drop the photos, or the folder that holds them, on its window, or copy them in Explorer or Finder
+and paste them into the window with Ctrl+V (Cmd+V on a Mac). (Or **File > Add frames…**.) They
 become the frames of a new, temporary project and appear in the frame list on the left, in the order of their file
 names; the viewer in the middle shows the selected one.
 

@@ -42,6 +42,9 @@ bytemuck.workspace = true
 # Waiting for the viewer's shaders to compile (an error scope), at startup.
 pollster.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard.workspace = true
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit.workspace = true
 

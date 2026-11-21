@@ -1637,6 +1637,7 @@ dependencies = [
 name = "florastack"
 version = "0.7.0"
 dependencies = [
+ "arboard",
  "bytemuck",
  "clap",
  "eframe",
