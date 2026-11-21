@@ -73,8 +73,9 @@ pub const RULES: Rules = Rules {
     // The CPU references that the GPU kernels' agreement tests compare against (AGENTS.md, CPU oracle).
     allowed_dev: &[("florastack-gpu", &["florastack-align", "florastack-stack"])],
     dev_only: &["florastack-metrics", "florastack-testkit"],
-    // The synthetic stack generator and test scenes (crates/core/src/testutil).
-    dev_only_features: &[(CORE, "testutil")],
+    // The synthetic stack generator and test scenes (crates/core/src/testutil), and the GPU's injected faults
+    // (crates/gpu/src/testutil.rs).
+    dev_only_features: &[(CORE, "testutil"), ("florastack-gpu", "testutil")],
     ui_crates: &["egui*", "eframe", "winit", "rfd"],
     ui_allowed: &["florastack"],
 };
@@ -477,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_only_features_are_enabled_from_dev_dependencies_only() {
-        assert_eq!(RULES.dev_only_features, [(CORE, "testutil")]);
+        assert_eq!(RULES.dev_only_features, [(CORE, "testutil"), ("florastack-gpu", "testutil")]);
         let with_feature = |kind| Dep { name: CORE.to_owned(), kind, workspace: true, features: vec!["testutil".to_owned()] };
         let mut ws = workspace();
         for krate in ["florastack-align", "florastack-metrics", CORE] {

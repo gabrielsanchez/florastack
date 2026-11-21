@@ -9,6 +9,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Test-only (AGENTS.md: enabled from dev-dependencies alone): `testutil::fail_after`, which makes the devices fail on
+# purpose so that the engine's fallback to the CPU can be tested.
+testutil = []
+
 [dependencies]
 florastack-core.workspace = true
 wgpu.workspace = true

@@ -51,6 +51,8 @@ futures-channel.workspace = true
 futures-core.workspace = true
 
 [dev-dependencies]
+# The GPU's injected faults, for the fallback test (tests/gpu_fallback.rs). Dev-dependencies only.
+florastack-gpu = { workspace = true, features = ["testutil"] }
 florastack-testkit.workspace = true
 # Synthetic stacks, written as frame files, for the commands' tests and the quality runner.
 florastack-core = { workspace = true, features = ["testutil"] }

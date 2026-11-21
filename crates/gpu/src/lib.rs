@@ -21,6 +21,8 @@ mod plane;
 mod selftest;
 mod shaders;
 mod stack;
+#[cfg(feature = "testutil")]
+pub mod testutil;
 
 pub use device::{AdapterKind, AdapterSummary, Gpu, GpuOptions};
 pub use error::GpuError;
