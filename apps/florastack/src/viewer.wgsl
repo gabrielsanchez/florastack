@@ -1,4 +1,5 @@
-// The viewer's shader (viewer.rs): the image drawn as a textured quad (its mipmaps: levels.wgsl).
+// The viewer's shader (viewer.rs): the image drawn as a textured quad, or a large image as a quad for each tile in
+// view (its mipmaps: levels.wgsl).
 //
 // The image is linear light in sRGB's primaries (florastack-engine's `view`), in an Rgba16Float texture whose mip
 // levels hold 2 x 2 averages in linear light, so that a zoomed-out image is filtered properly (trilinearly) rather
@@ -9,8 +10,6 @@ struct View {
     // Clip space = offset + scale * image pixel.
     scale: vec2<f32>,
     offset: vec2<f32>,
-    // The image's size, in pixels.
-    size: vec2<f32>,
     // The viewport's top-left in framebuffer pixels, for the checkerboard's phase.
     origin: vec2<f32>,
     // The checkerboard's square, in framebuffer pixels.
@@ -21,6 +20,11 @@ struct View {
     nearest: f32,
     // How many times brighter the image is shown: the retouching view's boost for dark regions, 1 otherwise.
     boost: f32,
+    pad: vec2<f32>,
+    // The image pixels this quad covers (x, y, width, height): the whole image, or a tile of a large one.
+    quad: vec4<f32>,
+    // The part of the texture it shows (u0, v0, u1, v1): a tile's texture holds a border of its neighbors' pixels.
+    uvs: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -39,10 +43,10 @@ fn vs_image(@builtin(vertex_index) index: u32) -> Varying {
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
-    let uv = corners[index];
+    let corner = corners[index];
     var out: Varying;
-    out.position = vec4<f32>(view.offset + view.scale * (uv * view.size), 0.0, 1.0);
-    out.uv = uv;
+    out.position = vec4<f32>(view.offset + view.scale * (view.quad.xy + corner * view.quad.zw), 0.0, 1.0);
+    out.uv = mix(view.uvs.xy, view.uvs.zw, corner);
     return out;
 }
 

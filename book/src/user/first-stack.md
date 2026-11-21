@@ -38,7 +38,8 @@ settings, and in the viewer.
 
 ![The Stack tab, with the frame list on the left and the output in the viewer](../images/stack.webp)
 
-Zoom to 100% (Ctrl+1, or **View > Zoom to 100%**) and look at the fine detail. If you see halos along edges, smeared
+Zoom to 100% (Ctrl+1, or **View > Zoom to 100%**) and look at the fine detail. Images up to 16,384 pixels on their
+longer side show every pixel at 100%; larger ones show reduced to that size. If you see halos along edges, smeared
 hairs or blotches, [Choosing a method](methods.md) explains what each method does well, and **Both** makes a pyramid
 and a depth-map output to compare: tick **Compare** on two outputs to see them side by side or with a split line.
 
