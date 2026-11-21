@@ -60,6 +60,8 @@ pub mod output;
 pub mod parallax;
 pub mod preset;
 pub mod project;
+#[cfg(not(target_arch = "wasm32"))]
+mod queue;
 pub mod reproduce;
 pub mod retouch;
 pub(crate) mod scientific;

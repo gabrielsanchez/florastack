@@ -112,7 +112,11 @@ pub enum Command {
     #[command(after_help = examples(&["batch --in stacks --out results --preset macro.toml", "batch --in photos --out results --preset macro.toml --method depthmap"]))]
     Batch(BatchArgs),
     /// Capture arriving files, update a preview and finalize after a quiet period.
-    #[command(after_help = examples(&["watch capture --preset macro.toml", "watch capture --out results --preset macro.toml --idle 10"]))]
+    #[command(after_help = examples(&[
+        "watch capture --preset macro.toml",
+        "watch capture --out results --preset macro.toml --idle 10",
+        "watch capture --preset macro.toml --captures 0"
+    ]))]
     Watch(WatchArgs),
     /// Open a project and dispatch commands in order, waiting for each job.
     #[command(after_help = examples(&[
@@ -171,6 +175,13 @@ pub struct WatchArgs {
     /// Maximum milliseconds between directory scans, in addition to filesystem events.
     #[arg(long, default_value = "250")]
     pub poll_ms: u64,
+    /// How many captures to make before exiting, each after the one before goes quiet; 0 keeps watching until the
+    /// process is stopped.
+    #[arg(long, default_value = "1", value_name = "N")]
+    pub captures: u32,
+    /// Add to the earlier captures of this folder in the destination, leaving out their frames.
+    #[arg(long)]
+    pub append: bool,
     #[command(flatten)]
     pub processing: QueueOptions,
 }
@@ -187,6 +198,9 @@ pub struct QueueOptions {
     /// TIFF filename: {stack}, {method}, {range}, {first}, {last}, {date} (UTC), {params}.
     #[arg(long, default_value = "{stack}-{method}-{range}.tif")]
     pub template: String,
+    /// Discard the work an interrupted run left in the destination instead of resuming it.
+    #[arg(long)]
+    pub restart: bool,
 }
 
 fn parse_queue_method(value: &str) -> Result<Method, String> {

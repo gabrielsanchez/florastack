@@ -648,3 +648,121 @@ fn batch_failures_have_csv_and_a_processing_exit_code() {
     assert_eq!(result["failed"], 1);
     assert!(dir.path().join("results/summary.csv").is_file());
 }
+
+/// Starts the CLI with `args` and JSON progress, and sends each of its stdout and stderr lines down the channels.
+fn spawn_with_lines(dir: &Path, args: &[&str]) -> (std::process::Child, std::sync::mpsc::Receiver<Value>, std::sync::mpsc::Receiver<Value>) {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin!())
+        .current_dir(dir)
+        .args(args)
+        .arg("--json-progress")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = out_tx.send(serde_json::from_str(&line).unwrap_or(Value::String(line)));
+        }
+    });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = err_tx.send(serde_json::from_str(&line).unwrap_or(Value::String(line)));
+        }
+    });
+    (child, out_rx, err_rx)
+}
+
+/// Waits for an event that `wanted` accepts, failing after 60 seconds.
+fn wait_for(events: &std::sync::mpsc::Receiver<Value>, what: &str, wanted: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let event = events.recv_timeout(left).unwrap_or_else(|e| panic!("waiting for {what}: {e}"));
+        if wanted(&event) {
+            return event;
+        }
+    }
+}
+
+#[test]
+fn a_killed_batch_resumes_from_the_first_stack_it_had_not_finished() {
+    let dir = TempDir::new().unwrap();
+    let source = frames(dir.path());
+    std::fs::write(dir.path().join("preset.toml"), "").unwrap();
+    let input = dir.path().join("queue");
+    for stack in 0..6 {
+        let folder = input.join(format!("stack-{stack}"));
+        std::fs::create_dir_all(&folder).unwrap();
+        for path in &source {
+            std::fs::copy(path, folder.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    let args = ["batch", "--in", "queue", "--out", "results", "--preset", "preset.toml"];
+    let (mut child, _, progress) = spawn_with_lines(dir.path(), &args);
+    // Killed once it has finished a stack: nothing cleans up, as after a crash or a power cut.
+    wait_for(&progress, "the first stack", |e| e["job"]["command"] == "batch.run" && e["job"]["progress"]["done"].as_u64().is_some_and(|d| d >= 1));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let results = dir.path().join("results");
+    assert!(!results.join("summary.csv").exists(), "killed before publishing");
+    assert!(results.join(".queue").join("journal.json").is_file(), "its journal stays");
+
+    let output = cli(dir.path()).args(args).assert().success().get_output().clone();
+    let result = json_output(&output);
+    let resumed = result["resumed"].as_u64().unwrap();
+    assert!((1..6).contains(&resumed), "{result}");
+    assert_eq!(result["stacks"].as_array().unwrap().len(), 6, "{result}");
+    for entry in result["stacks"].as_array().unwrap() {
+        check_image(Path::new(entry["output"].as_str().unwrap()));
+    }
+    assert_eq!(std::fs::read_to_string(results.join("summary.csv")).unwrap().lines().count(), 7);
+    assert!(!results.join(".queue").exists());
+    // What the stack it was working on had staged is gone, not published beside the finished one.
+    let projects = std::fs::read_dir(&results).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "florastack")).count();
+    assert_eq!(projects, 6);
+}
+
+#[test]
+fn a_killed_watch_resumes_its_capture_and_stays_armed_for_the_next() {
+    let dir = TempDir::new().unwrap();
+    let source = frames(dir.path());
+    let input = dir.path().join("capture");
+    std::fs::create_dir(&input).unwrap();
+    std::fs::write(dir.path().join("preset.toml"), "").unwrap();
+    let watch = |idle: &str, captures: &str| {
+        let args = ["watch", "capture", "--preset", "preset.toml", "--settle-ms", "60", "--poll-ms", "20", "--idle", idle, "--captures", captures];
+        spawn_with_lines(dir.path(), &args)
+    };
+    let previewed = |frames: u64| move |e: &Value| e["job"]["preview"]["frames"].as_u64() == Some(frames);
+    let (mut child, _, progress) = watch("60", "1");
+    for (i, path) in source.iter().take(2).enumerate() {
+        std::fs::copy(path, input.join(path.file_name().unwrap())).unwrap();
+        wait_for(&progress, "a preview", previewed(i as u64 + 1));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let out = dir.path().join("capture-stacked");
+    assert!(out.join(".queue").join("journal.json").is_file());
+
+    // Run again, for two captures: the first finishes the interrupted one with the frames shot since.
+    std::fs::copy(&source[2], input.join(source[2].file_name().unwrap())).unwrap();
+    let (mut child, results, progress) = watch("1", "2");
+    let first = wait_for(&results, "the first capture", |r| r["stacks"].is_array());
+    assert_eq!((first["resumed"].as_u64(), first["stacks"][0]["frames"].as_u64()), (Some(2), Some(3)), "{first}");
+    // The next stack, of new files only.
+    for (i, path) in source.iter().take(2).enumerate() {
+        std::fs::copy(path, input.join(format!("next {i}.png"))).unwrap();
+        wait_for(&progress, "a preview of the next capture", previewed(i as u64 + 1));
+    }
+    let second = wait_for(&results, "the second capture", |r| r["stacks"].is_array());
+    assert!(child.wait().unwrap().success(), "it exits after two captures");
+    assert_eq!(second["stacks"][0]["stack"], "capture-capture-2", "{second}");
+    assert_eq!(second["stacks"][0]["frames"], 2, "{second}");
+    assert_eq!(std::fs::read_to_string(out.join("summary.csv")).unwrap().lines().count(), 3);
+    check_image(Path::new(second["stacks"][0]["output"].as_str().unwrap()));
+}

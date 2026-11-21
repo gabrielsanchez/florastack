@@ -1,7 +1,9 @@
-//! Tethered capture through native filesystem notifications with a periodic directory scan as a fallback.
+//! Tethered capture through native filesystem notifications with a periodic directory scan as a fallback. A capture
+//! that was interrupted resumes from its journal, and another capture into the same output leaves out the frames of
+//! the earlier ones (`queue`).
 
-use florastack_core::time::{Duration, Instant, SystemTime};
-use std::collections::BTreeMap;
+use florastack_core::time::{Duration, Instant};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 
@@ -11,7 +13,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::batch::{self, BatchResult, Method, Workspace, call, children, io_error, unavailable};
+use super::batch::{self, BatchResult, Method, call, children, io_error, unavailable};
+use super::queue::{CaptureState, Captured, Journal, Kind, LEDGER, Request, Stamp, Taken, Workspace};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Effects, Meta, Params};
@@ -22,16 +25,26 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         Meta::new("watch.run", "Watch capture folder", "Ingests settled frames, aligns arrivals and updates a preview until capture goes quiet.")
             .help(
                 "Watches files directly inside input, including existing images, using native events plus polling. \
-                   A frame must have unchanged size and modification time for settleMs and decode successfully, with \
-                   unchanged metadata before and after the read. Truncated or locked files are retried until the quiet \
-                   timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend \
-                   the neighbor alignment chain; job events expose the latest preview path and frame count. After \
-                   idleSeconds without a new or changed frame, counted from the latest frame's preview, runs final alignment and exports one stack and its \
-                   project plus summary.csv. Waits for the first frame indefinitely. Output must be outside input. \
-                   Template tokens are the same as batch.run; preset depth-map thresholds need no interaction.",
+                 A frame must have unchanged size and modification time for settleMs and decode successfully, with \
+                 unchanged metadata before and after the read. Truncated or locked files are retried until the quiet \
+                 timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend \
+                 the neighbor alignment chain; job events expose the latest preview path and frame count. After \
+                 idleSeconds without a new or changed frame, counted from the latest frame's preview, runs final \
+                 alignment and exports one stack and its project, with summary.csv and captures.json (each capture's \
+                 frames). Waits for the first frame indefinitely. Output must be outside input. Template tokens are \
+                 the same as batch.run; preset depth-map thresholds need no interaction. With `append`, the capture \
+                 joins earlier ones of the same input in output: their frames are left out, its stack is numbered \
+                 after theirs (`<input>-capture-2`) and summary.csv gains its row, so that watching again after each \
+                 capture keeps a tethered session going. A capture that was interrupted (a crash, a killed process, \
+                 or an error that stopped it) resumes when it is run again with the same input, output, preset, \
+                 method and template, its frames taken again unless they changed; `restart` discards it instead. \
+                 Cancelling discards the capture in progress.",
             )
             .effects(Effects::Files)
-            .examples(&[r#"{"input":"C:/Capture","output":"C:/Results","preset":"C:/Presets/macro.toml","idleSeconds":5}"#]),
+            .examples(&[
+                r#"{"input":"C:/Capture","output":"C:/Results","preset":"C:/Presets/macro.toml","idleSeconds":5}"#,
+                r#"{"input":"C:/Capture","output":"C:/Results","preset":"builtin:insect-macro","append":true}"#,
+            ]),
         Lane::Heavy,
         run,
     )]
@@ -53,7 +66,7 @@ fn poll() -> u64 {
 pub(super) struct WatchParams {
     /// Folder populated by a tethered camera or its capture application.
     pub(super) input: String,
-    /// Folder for the saved project, TIFF and summary.csv, outside input.
+    /// Folder for the saved project, TIFF, summary.csv and captures.json, outside input.
     pub(super) output: String,
     /// TOML preset, including contrast thresholds for unattended depth-map runs; or a built-in one as `builtin:<id>`.
     pub(super) preset: String,
@@ -76,6 +89,13 @@ pub(super) struct WatchParams {
     #[serde(default = "poll")]
     #[schemars(range(min = 10, max = 5000))]
     poll_ms: u64,
+    /// Join the earlier captures of this input in output, leaving out their frames, instead of requiring an output
+    /// without a summary.
+    #[serde(default)]
+    pub(super) append: bool,
+    /// Discard an interrupted capture's staged work in output instead of resuming it.
+    #[serde(default)]
+    pub(super) restart: bool,
 }
 
 impl Params for WatchParams {
@@ -94,17 +114,6 @@ impl Params for WatchParams {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    size: u64,
-    modified: Option<SystemTime>,
-}
-
-fn stamp(path: &Path) -> Result<Stamp, CommandError> {
-    let metadata = florastack_core::fs::metadata(path).map_err(|e| io_error(path, e))?;
-    Ok(Stamp { size: metadata.len(), modified: metadata.modified().ok() })
-}
-
 struct Pending {
     stamp: Stamp,
     changed: Instant,
@@ -116,18 +125,43 @@ struct Capture {
     files: BTreeMap<PathBuf, Pending>,
     activity: Instant,
     frames: Vec<PathBuf>,
+    /// The names of the frames earlier captures took, which this one leaves alone.
+    earlier: BTreeSet<String>,
 }
 
 impl Capture {
-    fn new() -> Self {
-        Self { files: BTreeMap::new(), activity: Instant::now(), frames: Vec::new() }
+    fn new(earlier: BTreeSet<String>) -> Self {
+        Self { files: BTreeMap::new(), activity: Instant::now(), frames: Vec::new(), earlier }
+    }
+
+    /// Takes a frame an interrupted run of this capture had taken, which must not have changed since.
+    fn resume(&mut self, path: PathBuf, before: Option<Stamp>) -> Result<(), CommandError> {
+        let now = Stamp::of(&path)
+            .map_err(|_| unavailable("watch.run", format!("{} is gone since the capture was interrupted: restart it", path.display())))?;
+        if before.is_some_and(|before| before != now) {
+            return Err(unavailable("watch.run", format!("{} changed since the capture was interrupted: restart it", path.display())));
+        }
+        self.files.insert(path.clone(), Pending { stamp: now, changed: Instant::now(), accepted: true, error: None });
+        self.frames.push(path);
+        Ok(())
+    }
+
+    /// The frames taken, as the journal records them.
+    fn taken(&self) -> Vec<Taken> {
+        self.frames
+            .iter()
+            .filter_map(|path| Some(Taken { name: path.file_name()?.to_str()?.to_owned(), stamp: self.files.get(path)?.stamp }))
+            .collect()
     }
 
     /// A bounded rescan also catches rename-to-final-name, missed events and unsupported network shares.
     fn scan(&mut self, input: &Path) -> Result<(), CommandError> {
         let paths = children(input)?;
         for path in paths.into_iter().filter(|p| florastack_core::fs::path_is_file(p) && crate::frames::is_frame_name(p)) {
-            let Ok(current) = stamp(&path) else { continue };
+            if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| self.earlier.contains(n)) {
+                continue;
+            }
+            let Ok(current) = Stamp::of(&path) else { continue };
             if let Some(file) = self.files.get_mut(&path) {
                 if file.stamp != current {
                     if file.accepted {
@@ -174,7 +208,7 @@ impl Capture {
                 Ok::<_, CommandError>(())
             })();
             match readable {
-                Ok(()) if stamp(path).is_ok_and(|now| now == file.stamp) => ready.push(path.clone()),
+                Ok(()) if Stamp::of(path).is_ok_and(|now| now == file.stamp) => ready.push(path.clone()),
                 Ok(()) => {
                     file.changed = Instant::now();
                 }
@@ -222,7 +256,7 @@ fn notifications(input: &Path) -> (Option<notify::RecommendedWatcher>, std::sync
     (watcher, rx)
 }
 
-#[allow(clippy::too_many_lines)] // The watch's loop, in the order it runs: scan, ingest, preview, and the quiet end.
+/// Takes the output folder for a capture, runs it, and keeps its work for a resume when an error stops it.
 pub(super) fn ingest(
     ctx: &JobContext,
     p: WatchParams,
@@ -230,20 +264,76 @@ pub(super) fn ingest(
     tiling: florastack_stack::Tiling,
     managed: Option<Managed>,
 ) -> Result<BatchResult, CommandError> {
-    let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
+    let request = Request {
+        command: if managed.is_some() { "capture.run" } else { "watch.run" },
+        kind: Kind::Capture,
+        input: &p.input,
+        output: &p.output,
+        preset: &p.preset,
+        params: json!({"preset": p.preset, "method": p.method, "template": p.template}),
+        restart: p.restart,
+        append: p.append,
+    };
+    let (workspace, mut journal, _) = Workspace::open(request)?;
+    let result = capture(ctx, &p, &workspace, &mut journal, compute, tiling, managed);
+    workspace.ended(ctx, &journal, &result);
+    result
+}
+
+#[allow(clippy::too_many_lines)] // The watch's loop, in the order it runs: scan, ingest, preview, and the quiet end.
+fn capture(
+    ctx: &JobContext,
+    p: &WatchParams,
+    workspace: &Workspace,
+    journal: &mut Journal,
+    compute: crate::compute::Compute,
+    tiling: florastack_stack::Tiling,
+    managed: Option<Managed>,
+) -> Result<BatchResult, CommandError> {
     let input = super::absolute(&p.input)?;
+    let mut ledger = workspace.ledger()?;
     let mut engine = workspace.engine(true, compute, tiling)?;
-    let name = format!("{}-capture", batch::safe(input.file_name().and_then(|s| s.to_str()).unwrap_or("stack")));
-    batch::new_project(&mut engine, ctx, &workspace, &name, &p.preset)?;
+    let mut capture = Capture::new(ledger.frames().into_iter().map(str::to_owned).collect());
+    let state = if let Some(state) = journal.capture.clone() {
+        let project = workspace.stage.join(format!("{}{}", state.name, florastack_core::branding::PROJECT_EXTENSION));
+        if florastack_core::fs::path_is_dir(&project) {
+            call(&mut engine, ctx, "project.open", json!({"path": super::display(&project)}))?;
+            // The project's frames are the capture's: the journal may lag behind its last save.
+            let frames: Vec<PathBuf> = engine.project().into_iter().flat_map(|project| &project.frames).map(|f| PathBuf::from(&f.path)).collect();
+            for path in frames {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                let before = state.frames.iter().find(|t| t.name == name).map(|t| t.stamp);
+                capture.resume(path, before)?;
+            }
+        } else {
+            batch::new_project(&mut engine, ctx, workspace, &state.name, &p.preset)?;
+        }
+        state
+    } else {
+        let base = format!("{}-capture", batch::safe(input.file_name().and_then(|s| s.to_str()).unwrap_or("stack")));
+        let number = ledger.captures.len() + 1;
+        let name = if number == 1 { base } else { format!("{base}-{number}") };
+        batch::new_project(&mut engine, ctx, workspace, &name, &p.preset)?;
+        CaptureState { name, number, frames: Vec::new() }
+    };
+    let resumed = capture.frames.len();
+    journal.capture = Some(CaptureState { frames: capture.taken(), ..state.clone() });
+    workspace.record(journal)?;
     let settings = crate::project::develop_settings(engine.project().ok_or_else(|| unavailable("watch.run", "capture project is missing"))?)?;
     let (_watcher, rx) = notifications(&input);
-    let mut capture = Capture::new();
     let start = Instant::now();
     let settle = Duration::from_millis(p.settle_ms);
     let quiet = Duration::from_secs_f64(p.idle_seconds).max(settle);
     let interval = Duration::from_millis(p.poll_ms).min(Duration::from_millis(100));
-    let mut entry = batch::entry(name, 0, p.method);
+    let mut entry = batch::entry(state.name.clone(), 0, p.method);
     let preview_name = format!("{}-preview.tif", entry.stack);
+    if resumed > 0 {
+        let preview = workspace.stage.join(&preview_name);
+        if florastack_core::fs::path_is_file(&preview) {
+            ctx.preview(super::display(&preview), resumed);
+        }
+        tracing::info!("resumed the capture {} with {resumed} frames", entry.stack);
+    }
     if let Some(managed) = &managed {
         managed.ready.send(()).map_err(|_| unavailable("capture.run", "device worker disconnected before shooting"))?;
     }
@@ -272,7 +362,7 @@ pub(super) fn ingest(
             for path in ready {
                 if accepted.contains(&path) {
                     if let Some(file) = capture.files.get_mut(&path) {
-                        if stamp(&path)? != file.stamp {
+                        if Stamp::of(&path)? != file.stamp {
                             return Err(unavailable("watch.run", "a frame changed while being ingested: increase settleMs"));
                         }
                         file.accepted = true;
@@ -284,15 +374,22 @@ pub(super) fn ingest(
             if added.get("added").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
                 call(&mut engine, ctx, "watch.align", json!({}))?;
                 let preview = call(&mut engine, ctx, "stack.preview", json!({"method": p.method.name(), "keepFile": true}))?;
+                let mut shown = None;
                 if let Some(path) = preview.get("path").and_then(Value::as_str) {
-                    let destination = workspace.stage.path().join(&preview_name);
+                    let destination = workspace.stage.join(&preview_name);
                     let bytes = florastack_core::fs::read(path).map_err(|e| io_error(Path::new(path), e))?;
                     super::output::write_atomically(&destination, &bytes)?;
                     // stack.preview creates an unreferenced cache file. Keep only the published capture copy.
                     florastack_core::fs::remove_file(path).map_err(|e| io_error(Path::new(path), e))?;
-                    ctx.preview(super::display(&destination), capture.frames.len());
+                    shown = Some(destination);
                 }
                 call(&mut engine, ctx, "project.save", json!({}))?;
+                journal.capture = Some(CaptureState { frames: capture.taken(), ..state.clone() });
+                workspace.record(journal)?;
+                // Shown once it is on record: a frame in a preview is never taken again after an interruption.
+                if let Some(destination) = shown {
+                    ctx.preview(super::display(&destination), capture.frames.len());
+                }
                 if let Some(managed) = &managed {
                     let _ = managed.accepted.send(capture.frames.len());
                 }
@@ -307,7 +404,8 @@ pub(super) fn ingest(
         }
         let completed = expected.is_some_and(|count| capture.frames.len() >= count);
         let quiet_end = capture.activity.elapsed() >= quiet && (expected.is_some() || managed.is_none());
-        if completed || (!capture.files.is_empty() && quiet_end) {
+        // A resumed capture ends after a quiet period too, though nothing new arrives.
+        if completed || ((!capture.files.is_empty() || resumed > 0) && quiet_end) {
             for (path, file) in &capture.files {
                 if !file.accepted {
                     entry.warnings.push(format!("{}: {}", path.display(), file.error.as_deref().unwrap_or("file did not finish writing")));
@@ -332,9 +430,13 @@ pub(super) fn ingest(
         }
     }
     entry.frames = capture.frames.len();
-    batch::finish_stack(&mut engine, ctx, &workspace, &mut entry, &capture.frames, &p.template, p.method)?;
+    batch::finish_stack(&mut engine, ctx, workspace, &mut entry, &capture.frames, &p.template, p.method)?;
     entry.time = start.elapsed().as_secs_f64();
-    let result = workspace.publish(ctx, vec![entry])?;
+    let earlier = !ledger.captures.is_empty();
+    ledger.captures.push(Captured { entry: entry.clone(), frames: capture.taken().into_iter().map(|t| t.name).collect() });
+    let rows: Vec<_> = ledger.captures.iter().map(|c| c.entry.clone()).collect();
+    let summary = workspace.publish(ctx, &rows, &[(LEDGER, ledger.to_bytes())], earlier)?;
     ctx.preview(super::display(&workspace.output.join(preview_name)), capture.frames.len());
-    Ok(result)
+    let failed = usize::from(entry.error.is_some());
+    Ok(BatchResult { summary, stacks: vec![entry], failed, resumed })
 }

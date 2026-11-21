@@ -37,6 +37,15 @@ names the output files (default `{stack}-{method}-{range}.tif`): `{stack}` is th
 `{first}` and `{last}` the first and last frames' file names, `{range}` both joined, `{date}` the processing date
 (`YYYY-MM-DD`, UTC) and `{params}` the method's settings. The command exits with code 1 when any stack failed.
 
+### An interrupted batch
+
+Until it publishes, a batch works in a `.queue` folder inside the results folder, and records there each stack it has
+finished. When the batch is interrupted (the computer crashed or lost power, the process was killed, or an error
+stopped it), run it again with the same input, results folder, preset, method and template: it carries on from the
+first stack it hadn't finished, and its result's `resumed` says how many it kept. Run with other settings, it refuses
+and says why; `--restart` (`restart` for `batch.run`) discards the interrupted batch's work and starts again.
+Cancelling a batch discards its work, as asked.
+
 ## Watch folder
 
 A watch folder stacks a stack as it is shot: each photo that arrives in the folder is read, aligned to the ones before
@@ -63,7 +72,29 @@ How it decides that a photo has arrived:
   set it longer than the time between photos, exposure and transfer included. A
   photo replaced after it was read stops the capture with an error.
 
-When it finishes, the frames are aligned again as a whole, and the project, the stacked TIFF, a preview and
-`summary.csv` are saved in the results folder (by default a folder beside the watched one, named
-`<folder>-stacked`). Each watch handles one stack and ends. With `--json-progress`, each update's event carries the
+When it finishes, the frames are aligned again as a whole, and the project, the stacked TIFF, a preview,
+`summary.csv` and `captures.json` (which frames each capture took) are saved in the results folder (by default a
+folder beside the watched one, named `<folder>-stacked`). With `--json-progress`, each update's event carries the
 running preview's path and frame count (`job.preview.path`, `job.preview.frames`), for other programs to show.
+
+### Several stacks in one session
+
+Each watch makes one stack. To shoot stack after stack into the same folder, keep the watch armed:
+
+```sh
+florastack-cli watch capture --out results --preset builtin:insect-macro --idle 30 --captures 0
+```
+
+`--captures N` makes N stacks, one after another, each started by the next photo after the one before has finished;
+`0` keeps watching until the process is stopped (Ctrl+C), which leaves the stack in progress for
+the next watch to resume (below). Each stack leaves out the photos of the ones before it, is
+numbered after them (`capture-capture`, `capture-capture-2`, …) and adds its row to `summary.csv`. `--append` joins a
+new watch to the stacks already in a results folder in the same way (`append` for `watch.run`).
+
+### An interrupted capture
+
+A capture records each photo it takes in the results folder's `.queue` folder. When it is interrupted (a crash, a
+power cut, a stopped process), run the watch again with the same folders, preset, method and template: it opens the
+capture where it was, with the photos it had previewed, takes the ones that arrived since, and finishes once the
+idle time passes. A photo changed or removed since then stops it with an error; `--restart` starts the capture
+afresh instead. Stopping a watch from the Capture tab, which cancels it, discards the capture in progress.
