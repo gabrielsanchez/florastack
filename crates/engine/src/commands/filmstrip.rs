@@ -46,8 +46,10 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                     "Reads and develops the frames whose preview is missing or out of date (their file, the develop \
                      settings or the defect mask changed), and aligns every aligned frame's preview onto the canvas \
                      of the framing set, which needs no frame read. A frame whose file can't be read is listed in \
-                     `unreadable` and keeps its previews. `align.run` makes them too, as it reads the frames. Runs \
-                     beside other jobs as a preview; a newer call replaces an older one still running. Previews are \
+                     `unreadable` and keeps its previews. Each frame's previews are published as soon as they are \
+                     made, in a `partial` event (`{\"frame\", \"preview\", \"alignedPreview\"}`), so that a view can \
+                     show them before the job ends. `align.run` makes them too, as it reads the frames. Runs beside \
+                     other jobs as a preview; a newer call replaces an older one still running. Previews are \
                      cache files, not edits: no undo step.",
                 )
                 .requires(Requires::Project)
@@ -188,6 +190,19 @@ struct Unreadable {
     reason: String,
 }
 
+/// A frame's previews, published by `filmstrip.update` as it makes them (`Event::Partial`), for a view to show before
+/// the job ends.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Made {
+    frame: FrameId,
+    /// Its preview as shot.
+    preview: String,
+    /// Its preview aligned onto the output's canvas, when one was made now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aligned_preview: Option<String>,
+}
+
 /// A frame whose previews `filmstrip.update` makes.
 struct Job {
     id: FrameId,
@@ -267,6 +282,12 @@ fn update(session: &Session, _: NoParams) -> Result<JobPlan<Updated>, CommandErr
                 }
                 None => None,
             };
+            let root = cache.path();
+            ctx.partial(&Made {
+                frame: job.id,
+                preview: preview.path.resolve(root).display().to_string(),
+                aligned_preview: aligned.as_ref().map(|r| r.path.resolve(root).display().to_string()),
+            });
             edits.push((job.id, preview, aligned));
             ctx.step(done as u64 + 1, total)?;
         }

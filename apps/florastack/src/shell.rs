@@ -113,6 +113,9 @@ pub struct Shell {
     /// only after the project changed (a failing update isn't asked for over and over).
     changes: u64,
     previews_asked: Option<u64>,
+    /// The frames' previews a running `filmstrip.update` has published (`Event::Partial`) before it commits them, as
+    /// shot and aligned, for the frame list to show at once.
+    previews_made: BTreeMap<u64, (PathBuf, Option<PathBuf>)>,
     /// Counts the times the lists were read again, so that what the panels keep from the project can tell it is old.
     pub revision: u64,
 }
@@ -149,6 +152,7 @@ impl Shell {
             compute: None,
             stale: true,
             changes: 0,
+            previews_made: BTreeMap::new(),
             previews_asked: None,
             revision: 0,
         }
@@ -282,6 +286,7 @@ impl Shell {
                         self.preview_image = None;
                         self.threshold = None;
                         self.relief = None;
+                        self.previews_made.clear();
                     }
                     self.changes += 1;
                     self.stale = true;
@@ -291,6 +296,11 @@ impl Shell {
                     self.stale = true;
                 }
                 Event::History { .. } => {}
+                Event::Partial { command, item, .. } => {
+                    if command == "filmstrip.update" {
+                        self.preview_made(&item);
+                    }
+                }
             }
         }
         if self.stale {
@@ -301,7 +311,29 @@ impl Shell {
         changed
     }
 
+    /// Folds in a frame's previews that `filmstrip.update` has just made.
+    fn preview_made(&mut self, item: &Value) {
+        let (Some(frame), Some(preview)) = (item["frame"].as_u64(), item["preview"].as_str()) else { return };
+        let made = (PathBuf::from(preview), item["alignedPreview"].as_str().map(PathBuf::from));
+        if let Some(row) = self.frames.iter_mut().find(|f| f.id == frame) {
+            row.preview = Some(made.0.clone());
+            if made.1.is_some() {
+                row.aligned_preview.clone_from(&made.1);
+            }
+        }
+        self.previews_made.insert(frame, made);
+    }
+
+    /// Whether `filmstrip.update` is making previews now.
+    pub fn making_previews(&self) -> bool {
+        self.jobs.values().any(|j| j.command == "filmstrip.update" && !j.state.is_finished())
+    }
+
     fn job_event(&mut self, job: JobInfo) {
+        if job.command == "filmstrip.update" && job.state.is_finished() {
+            // What it made is in the project now, or was never committed.
+            self.previews_made.clear();
+        }
         if matches!(job.command.as_str(), "watch.run" | "capture.run")
             && let Some(preview) = &job.preview
         {
@@ -385,6 +417,7 @@ impl Shell {
         let strip = self.engine.run("filmstrip.list", json!({})).unwrap_or(Value::Null);
         let previews: BTreeMap<u64, &Value> =
             strip["frames"].as_array().into_iter().flatten().filter_map(|f| Some((f["frame"].as_u64()?, f))).collect();
+        let made = &self.previews_made;
         self.frames = listed["frames"]
             .as_array()
             .into_iter()
@@ -399,14 +432,17 @@ impl Shell {
                     file,
                     enabled: f["enabled"].as_bool().unwrap_or(true),
                     flags: f["flags"].as_array().into_iter().flatten().filter_map(flag_name).collect(),
-                    preview: strip.and_then(|s| s["preview"].as_str()).map(PathBuf::from),
-                    aligned_preview: strip.and_then(|s| s["alignedPreview"].as_str()).map(PathBuf::from),
+                    preview: strip.and_then(|s| s["preview"].as_str()).map(PathBuf::from).or_else(|| made.get(&id).map(|m| m.0.clone())),
+                    aligned_preview: strip
+                        .and_then(|s| s["alignedPreview"].as_str())
+                        .map(PathBuf::from)
+                        .or_else(|| made.get(&id).and_then(|m| m.1.clone())),
                     alignment: aligned.get(&id).map(|&a| a.clone()),
                 })
             })
             .collect();
         let stale = strip["stale"].as_u64().unwrap_or(0);
-        let updating = self.jobs.values().any(|j| j.command == "filmstrip.update" && !j.state.is_finished());
+        let updating = self.making_previews();
         if stale > 0 && !updating && self.previews_asked != Some(self.changes) {
             self.previews_asked = Some(self.changes);
             self.run("filmstrip.update", json!({}));
@@ -432,5 +468,29 @@ mod tests {
         assert_eq!(flag_name(&json!("out-of-focus")).as_deref(), Some("out-of-focus"));
         assert_eq!(flag_name(&json!({ "limit": "shift" })).as_deref(), Some("limit"));
         assert_eq!(flag_name(&json!(3)), None);
+    }
+
+    #[test]
+    fn previews_published_while_they_are_made_show_at_once() {
+        let mut shell = Shell::new(EngineConfig { compute: florastack_engine::Compute::CPU, ..EngineConfig::default() }, None);
+        let row = |id| FrameRow {
+            id,
+            name: format!("{id}.tif"),
+            file: PathBuf::from(format!("{id}.tif")),
+            enabled: true,
+            flags: Vec::new(),
+            preview: None,
+            aligned_preview: None,
+            alignment: None,
+        };
+        shell.frames = vec![row(1), row(2)];
+        shell.preview_made(&json!({ "frame": 2, "preview": "p2.jpg", "alignedPreview": "a2.jpg" }));
+        shell.preview_made(&json!({ "frame": 1, "preview": "p1.jpg" }));
+        shell.preview_made(&json!({ "frame": 9, "preview": "gone.jpg" }));
+        shell.preview_made(&json!({ "preview": "no frame.jpg" }));
+        let shown: Vec<_> = shell.frames.iter().map(|f| (f.preview.clone(), f.aligned_preview.clone())).collect();
+        assert_eq!(shown, [(Some(PathBuf::from("p1.jpg")), None), (Some(PathBuf::from("p2.jpg")), Some(PathBuf::from("a2.jpg")))]);
+        // Kept for the lists read again before the job commits them.
+        assert_eq!(shell.previews_made.keys().copied().collect::<Vec<_>>(), [1, 2, 9]);
     }
 }

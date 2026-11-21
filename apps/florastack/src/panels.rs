@@ -314,11 +314,16 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                 }
                 let size = egui::vec2(ROW_THUMBNAIL * 1.5, ROW_THUMBNAIL);
                 let texture = frame.preview.as_ref().and_then(|p| app.thumbnail(p, THUMBNAIL_SIDE));
-                let thumb = match texture {
-                    Some(texture) => {
-                        ui.add(egui::Image::new(&texture).fit_to_exact_size(size).maintain_aspect_ratio(true).sense(Sense::click_and_drag()))
+                let thumb = if let Some(texture) = texture {
+                    ui.add(egui::Image::new(&texture).fit_to_exact_size(size).maintain_aspect_ratio(true).sense(Sense::click_and_drag()))
+                } else {
+                    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+                    // Its preview is being made, or read: a spinner until it shows.
+                    if app.shell.making_previews() || frame.preview.is_some() {
+                        let spinner = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.height() * 0.5));
+                        egui::Spinner::new().paint_at(ui, spinner);
                     }
-                    None => ui.allocate_exact_size(size, Sense::click_and_drag()).1,
+                    response
                 };
                 if filmed {
                     ui.painter().rect_stroke(thumb.rect, 2.0, ui.visuals().selection.stroke, egui::StrokeKind::Outside);

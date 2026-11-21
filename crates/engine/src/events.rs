@@ -6,7 +6,9 @@ use florastack_project::Aspects;
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::jobs::JobInfo;
+use serde_json::Value;
+
+use crate::jobs::{JobId, JobInfo};
 
 /// Something that happened. Serialized with its kind in `event`: `{"event": "job", "job": {...}}`.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
@@ -30,6 +32,14 @@ pub enum Event {
     },
     /// A job was queued, started, made progress or ended.
     Job { job: Box<JobInfo> },
+    /// A running job published one of its results as soon as it was made, before its commit (`filmstrip.update`: a
+    /// frame's preview, `{"frame", "preview", "alignedPreview"}`). The project changes only when the job ends.
+    Partial {
+        job: JobId,
+        /// The job's command.
+        command: String,
+        item: Value,
+    },
 }
 
 /// What happened to a project.
