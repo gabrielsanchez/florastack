@@ -1,22 +1,23 @@
-//! A serial queue of independent stack projects. Work stays in a private staging folder until publication.
+//! A serial queue of independent stack projects. Work stays in the output's staging folder until publication, and a
+//! queue that was interrupted resumes from its journal (`queue`).
 
 use florastack_core::time::{Duration, Instant};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use florastack_align::SplitSettings;
-use florastack_core::{LockFile, Monitor, branding};
+use florastack_core::{Monitor, branding};
 use florastack_project::{ProjectError, Timestamp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::queue::{Done, Journal, Kind, Request, Workspace};
 use super::{MAX_ITEMS, absolute, check_path, display};
-use crate::compute::Compute;
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobContext, JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Effects, Meta, Params};
-use crate::{Dispatched, Engine, EngineConfig, Session};
+use crate::{Dispatched, Engine, Session};
 
 pub(super) fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::job(
@@ -27,9 +28,12 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                    `builtin:<id>` (`preset.list`), including depth-map contrast thresholds; each output is exported as the \
                    preset's output settings say (`export.run`: a 16-bit TIFF unless they say otherwise, with the maps and \
                    aligned frames they ask for), the template's extension giving way to their format's. \
-                   Failures are recorded and the queue continues. Outputs and projects are staged until the cancellable \
-                   work ends, then published without replacing existing files. summary.csv lists stack, frames, method, \
-                   time in seconds, warnings, project, output and error. Templates accept {stack}, {method}, {range}, \
+                   Failures are recorded and the queue continues. Outputs and projects are staged in the output's \
+                   `.queue` folder until the cancellable work ends, then published without replacing existing files. \
+                   An interrupted queue (a crash, a killed process, or an error that stopped it) resumes when it is run \
+                   again with the same input, output, preset, method, template and split, from the first stack it \
+                   hadn't finished; `restart` discards it instead. Cancelling discards the staged work. summary.csv \
+                   lists stack, frames, method, time in seconds, warnings, project, output and error. Templates accept {stack}, {method}, {range}, \
                    {first}, {last}, {date} (UTC YYYY-MM-DD), and {params} (the method's effective settings).",
             )
             .effects(Effects::Files)
@@ -106,6 +110,9 @@ struct BatchParams {
     /// Boundary detection settings for a flat folder; omitted settings use their defaults.
     #[serde(default)]
     split: SplitSettings,
+    /// Discard the staged work of an interrupted queue in output instead of resuming it.
+    #[serde(default)]
+    restart: bool,
 }
 
 impl Params for BatchParams {
@@ -131,7 +138,7 @@ pub(super) fn check_paths(input: &str, output: &str, preset: &str, template: &st
 }
 
 /// One completed or failed queue entry.
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Entry {
     /// Stack name, unique within the queue.
@@ -162,6 +169,9 @@ pub(super) struct BatchResult {
     pub stacks: Vec<Entry>,
     /// Number of failed entries; a CLI reports failure when nonzero.
     pub failed: usize,
+    /// What was carried over from an interrupted run: the entries a batch had finished, or the frames a capture had
+    /// taken.
+    pub resumed: usize,
 }
 
 pub(super) fn unavailable(command: &str, reason: impl Into<String>) -> CommandError {
@@ -191,112 +201,6 @@ pub(super) fn call(engine: &mut Engine, ctx: &JobContext, name: &str, params: Va
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-}
-
-/// All artifacts stay beneath this folder until the parent's point of no return.
-pub(super) struct Workspace {
-    pub output: PathBuf,
-    pub stage: tempfile::TempDir,
-    _lock: LockFile,
-}
-
-impl Workspace {
-    pub(super) fn new(input: &str, output: &str, preset: &str) -> Result<Self, CommandError> {
-        let input = florastack_core::fs::canonicalize(absolute(input)?).map_err(|e| io_error(Path::new(input), e))?;
-        if !florastack_core::fs::path_is_dir(&input) {
-            return Err(unavailable("batch.run", "input must be a folder"));
-        }
-        super::preset::load(preset)?;
-        let output = absolute(output)?;
-        florastack_core::fs::create_dir_all(&output).map_err(|e| io_error(&output, e))?;
-        let output = florastack_core::fs::canonicalize(&output).map_err(|e| io_error(&output, e))?;
-        if output.starts_with(&input) {
-            return Err(unavailable("batch.run", "output must be outside the input folder so exports cannot be ingested as frames"));
-        }
-        let lock_path = output.join(".queue.lock");
-        let lock = LockFile::try_acquire(&lock_path)
-            .map_err(|e| io_error(&lock_path, e))?
-            .ok_or_else(|| unavailable("batch.run", "another batch or capture is using this output folder"))?;
-        if florastack_core::fs::path_exists(&output.join("summary.csv")) {
-            return Err(ProjectError::Exists { path: output.join("summary.csv") }.into());
-        }
-        let stage = tempfile::Builder::new().prefix(".queue-").tempdir_in(&output).map_err(|e| io_error(&output, e))?;
-        Ok(Self { output, stage, _lock: lock })
-    }
-
-    /// An engine for the workspace's projects, stacking as the parent engine does (`compute`, `tiling`).
-    pub(super) fn engine(&self, capture: bool, compute: Compute, tiling: florastack_stack::Tiling) -> Result<Engine, CommandError> {
-        let config = EngineConfig { temporary_projects: Some(self.stage.path().join("temporary")), compute, tiling, ..EngineConfig::default() };
-        if !capture {
-            return Ok(Engine::new(config));
-        }
-        let registry = crate::Registry::builder()
-            .standard()
-            .command(super::align::capture_spec())
-            .build()
-            .map_err(|e| unavailable("watch.run", e.to_string()))?;
-        Ok(Engine::with_registry(config, std::sync::Arc::new(registry)))
-    }
-
-    pub(super) fn publish(&self, ctx: &JobContext, stacks: Vec<Entry>) -> Result<BatchResult, CommandError> {
-        let mut csv = String::from("stack,frames,method,time,warnings,project,output,error\r\n");
-        for entry in &stacks {
-            let fields = [
-                entry.stack.clone(),
-                entry.frames.to_string(),
-                entry.method.clone(),
-                format!("{:.3}", entry.time),
-                entry.warnings.join("; "),
-                entry.project.clone().unwrap_or_default(),
-                entry.output.clone().unwrap_or_default(),
-                entry.error.clone().unwrap_or_default(),
-            ];
-            csv.push_str(&fields.iter().map(|s| format!("\"{}\"", s.replace('"', "\"\""))).collect::<Vec<_>>().join(","));
-            csv.push_str("\r\n");
-        }
-        let summary = self.stage.path().join("summary.csv");
-        florastack_core::fs::write(&summary, csv).map_err(|e| io_error(&summary, e))?;
-        let mut files = children(self.stage.path())?;
-        // The CSV is the completion record; publish it after its referenced artifacts.
-        files.sort_by_key(|path| path.file_name().is_some_and(|name| name == "summary.csv"));
-        for file in &files {
-            let target = self.output.join(file.file_name().unwrap_or_default());
-            if florastack_core::fs::path_exists(&target) {
-                return Err(ProjectError::Exists { path: target }.into());
-            }
-        }
-        ctx.finalize()?;
-        for file in files {
-            let target = self.output.join(file.file_name().unwrap_or_default());
-            if florastack_core::fs::path_is_dir(&file) {
-                florastack_core::fs::rename(&file, &target).map_err(|e| io_error(&target, e))?;
-            } else {
-                publish_file(&file, &target)?;
-            }
-        }
-        let failed = stacks.iter().filter(|s| s.error.is_some()).count();
-        Ok(BatchResult { summary: display(&self.output.join("summary.csv")), stacks, failed })
-    }
-}
-
-fn publish_file(source: &Path, target: &Path) -> Result<(), CommandError> {
-    // Unlike rename on Unix, hard_link fails atomically if the destination appeared meanwhile.
-    match florastack_core::fs::hard_link(source, target) {
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(io_error(target, error)),
-        Err(_) => {} // FAT and some network filesystems do not support links; reserve a fresh file instead.
-    }
-    let mut destination = florastack_core::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| io_error(target, e))?;
-    let copied = (|| {
-        let mut file = florastack_core::fs::File::open(source)?;
-        std::io::copy(&mut file, &mut destination)?;
-        destination.sync_all()
-    })();
-    drop(destination);
-    copied.map_err(|error| {
-        let _ = florastack_core::fs::remove_file(target);
-        io_error(target, error)
-    })
 }
 
 pub(super) fn children(path: &Path) -> Result<Vec<PathBuf>, CommandError> {
@@ -392,7 +296,7 @@ pub(super) fn new_project(engine: &mut Engine, ctx: &JobContext, workspace: &Wor
     if florastack_core::fs::path_exists(&target) {
         return Err(ProjectError::Exists { path: target }.into());
     }
-    call(engine, ctx, "project.new", json!({"name": name, "folder": display(workspace.stage.path())}))?;
+    call(engine, ctx, "project.new", json!({"name": name, "folder": display(&workspace.stage)}))?;
     let params = match preset.strip_prefix(super::preset::BUILT_IN_PREFIX) {
         Some(id) => json!({ "builtin": id }),
         None => json!({ "path": preset }),
@@ -438,8 +342,7 @@ pub(super) fn finish_stack(
     let stacked = call(engine, ctx, method.command(), json!({}))?;
     let output = stacked.get("output").and_then(Value::as_u64).ok_or_else(|| unavailable("batch.run", "stack returned no output"))?;
     let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
-    let exported =
-        call(engine, ctx, "export.run", json!({"output": output, "folder": display(workspace.stage.path()), "settings": { "template": stem }}))?;
+    let exported = call(engine, ctx, "export.run", json!({"output": output, "folder": display(&workspace.stage), "settings": { "template": stem }}))?;
     entry.warnings.extend(exported.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
     let written = exported.get("files").and_then(|f| f.get(0)).and_then(|f| f.get("path")).and_then(Value::as_str).map(Path::new);
     let target = written.and_then(Path::file_name).map_or(target, |file| workspace.output.join(file));
@@ -501,48 +404,87 @@ fn queue(engine: &mut Engine, ctx: &JobContext, input: &str, split: SplitSetting
 fn run(session: &Session, p: BatchParams) -> Result<JobPlan<BatchResult>, CommandError> {
     let (compute, tiling) = (session.compute(), session.tiling());
     Ok(JobPlan::new(move |ctx| {
-        let workspace = Workspace::new(&p.input, &p.output, &p.preset)?;
-        let mut engine = workspace.engine(false, compute, tiling)?;
-        let queue = queue(&mut engine, ctx, &p.input, p.split)?;
+        let request = Request {
+            command: "batch.run",
+            kind: Kind::Batch,
+            input: &p.input,
+            output: &p.output,
+            preset: &p.preset,
+            params: json!({"preset": p.preset, "method": p.method, "template": p.template, "split": p.split}),
+            restart: p.restart,
+            append: false,
+        };
+        let (workspace, mut journal, resumed) = Workspace::open(request)?;
+        let result = process(ctx, &p, &workspace, &mut journal, resumed, compute, tiling);
+        workspace.ended(ctx, &journal, &result);
+        let result = result?;
+        Ok(commit(move |_| Ok(result)))
+    })
+    .stages(&[("Processing stack queue", 1.0)]))
+}
+
+/// Works through the queue from the first stack the journal doesn't have done, then publishes it.
+fn process(
+    ctx: &JobContext,
+    p: &BatchParams,
+    workspace: &Workspace,
+    journal: &mut Journal,
+    resumed: bool,
+    compute: crate::compute::Compute,
+    tiling: florastack_stack::Tiling,
+) -> Result<BatchResult, CommandError> {
+    let mut engine = workspace.engine(false, compute, tiling)?;
+    if resumed {
+        // What the stack it was working on had staged goes: it starts again.
+        workspace.clear_except(&journal.done.iter().flat_map(|d| d.files.iter().cloned()).collect())?;
+    } else {
+        let queue = queue(&mut engine, ctx, &p.input, p.split.clone())?;
         let mut names = BTreeSet::new();
         if queue.iter().any(|(name, _)| !names.insert(name.to_lowercase())) {
             return Err(unavailable("batch.run", "stack folder names collide after filename sanitization"));
         }
-        let total = queue.len() as u64;
-        let mut entries = Vec::new();
-        for (i, (name, files)) in queue.into_iter().enumerate() {
-            ctx.checkpoint()?;
-            let start = Instant::now();
-            let mut entry = entry(name, files.len(), p.method);
-            let result = (|| {
-                if files.is_empty() {
-                    return Err(unavailable("batch.run", "stack folder has no frames"));
-                }
-                new_project(&mut engine, ctx, &workspace, &entry.stack, &p.preset)?;
-                let added = call(&mut engine, ctx, "project.addFrames", json!({"paths": files}))?;
-                if added.get("skipped").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
-                    return Err(unavailable("batch.run", format!("not all frames were ingested: {}", added["skipped"])));
-                }
-                finish_stack(&mut engine, ctx, &workspace, &mut entry, &files, &p.template, p.method)
-            })();
-            if let Err(error) = result {
-                if ctx.is_cancelled() || matches!(error, CommandError::Cancelled) {
-                    return Err(CommandError::Cancelled);
-                }
-                entry.error = Some(error.info().message);
-                // Preserve a failed stack's project for diagnosis without leaking its editing lock.
-                if engine.project().is_some() {
-                    call(&mut engine, ctx, "project.save", json!({}))?;
-                    entry.project = engine.project_path().and_then(Path::file_name).map(|n| display(&workspace.output.join(n)));
-                    call(&mut engine, ctx, "project.close", json!({}))?;
-                }
+        journal.queue = queue;
+        workspace.record(journal)?;
+    }
+    let carried = journal.done.len();
+    let total = journal.queue.len() as u64;
+    let mut entries: Vec<Entry> = journal.done.iter().map(|d| d.entry.clone()).collect();
+    for (i, (name, files)) in journal.queue.clone().into_iter().enumerate().skip(carried) {
+        ctx.checkpoint()?;
+        let before = workspace.staged()?;
+        let start = Instant::now();
+        let mut entry = entry(name, files.len(), p.method);
+        let result = (|| {
+            if files.is_empty() {
+                return Err(unavailable("batch.run", "stack folder has no frames"));
             }
-            entry.time = start.elapsed().as_secs_f64();
-            entries.push(entry);
-            ctx.step(i as u64 + 1, total)?;
+            new_project(&mut engine, ctx, workspace, &entry.stack, &p.preset)?;
+            let added = call(&mut engine, ctx, "project.addFrames", json!({"paths": files}))?;
+            if added.get("skipped").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
+                return Err(unavailable("batch.run", format!("not all frames were ingested: {}", added["skipped"])));
+            }
+            finish_stack(&mut engine, ctx, workspace, &mut entry, &files, &p.template, p.method)
+        })();
+        if let Err(error) = result {
+            if ctx.is_cancelled() || matches!(error, CommandError::Cancelled) {
+                return Err(CommandError::Cancelled);
+            }
+            entry.error = Some(error.info().message);
+            // Preserve a failed stack's project for diagnosis without leaking its editing lock.
+            if engine.project().is_some() {
+                call(&mut engine, ctx, "project.save", json!({}))?;
+                entry.project = engine.project_path().and_then(Path::file_name).map(|n| display(&workspace.output.join(n)));
+                call(&mut engine, ctx, "project.close", json!({}))?;
+            }
         }
-        let result = workspace.publish(ctx, entries)?;
-        Ok(commit(move |_| Ok(result)))
-    })
-    .stages(&[("Processing stack queue", 1.0)]))
+        entry.time = start.elapsed().as_secs_f64();
+        let files = workspace.staged()?.difference(&before).cloned().collect();
+        journal.done.push(Done { entry: entry.clone(), files });
+        workspace.record(journal)?;
+        entries.push(entry);
+        ctx.step(i as u64 + 1, total)?;
+    }
+    let summary = workspace.publish(ctx, &entries, &[], false)?;
+    let failed = entries.iter().filter(|s| s.error.is_some()).count();
+    Ok(BatchResult { summary, stacks: entries, failed, resumed: carried })
 }

@@ -910,7 +910,7 @@ Example:
 
 **Process batch.** Queues stacks as separate projects, exports their outputs and writes a summary CSV.
 
-Immediate subfolders are stacks; a folder with images directly inside is auto-split with project.findStacks. Mixed layouts are refused. Each stack receives the preset, a TOML file or a built-in one as `builtin:<id>` (`preset.list`), including depth-map contrast thresholds; each output is exported as the preset's output settings say (`export.run`: a 16-bit TIFF unless they say otherwise, with the maps and aligned frames they ask for), the template's extension giving way to their format's. Failures are recorded and the queue continues. Outputs and projects are staged until the cancellable work ends, then published without replacing existing files. summary.csv lists stack, frames, method, time in seconds, warnings, project, output and error. Templates accept {stack}, {method}, {range}, {first}, {last}, {date} (UTC YYYY-MM-DD), and {params} (the method's effective settings).
+Immediate subfolders are stacks; a folder with images directly inside is auto-split with project.findStacks. Mixed layouts are refused. Each stack receives the preset, a TOML file or a built-in one as `builtin:<id>` (`preset.list`), including depth-map contrast thresholds; each output is exported as the preset's output settings say (`export.run`: a 16-bit TIFF unless they say otherwise, with the maps and aligned frames they ask for), the template's extension giving way to their format's. Failures are recorded and the queue continues. Outputs and projects are staged in the output's `.queue` folder until the cancellable work ends, then published without replacing existing files. An interrupted queue (a crash, a killed process, or an error that stopped it) resumes when it is run again with the same input, output, preset, method, template and split, from the first stack it hadn't finished; `restart` discards it instead. Cancelling discards the staged work. summary.csv lists stack, frames, method, time in seconds, warnings, project, output and error. Templates accept {stack}, {method}, {range}, {first}, {last}, {date} (UTC YYYY-MM-DD), and {params} (the method's effective settings).
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -924,6 +924,7 @@ Parameters:
 | `method` | `"pyramid"` \| `"depth-map"` \| `"average"` \| `"wavelet"` | Method to run for each stack; pyramid by default. Default: `"pyramid"`. |
 | `output` | string | **Required.** Destination for individual projects, TIFFs and summary.csv; existing entries are refused. |
 | `preset` | string | **Required.** TOML preset applied to each project, including its depth-map contrast threshold; or a built-in one as `builtin:<id>` (`preset.list`). |
+| `restart` | boolean | Discard the staged work of an interrupted queue in output instead of resuming it. Default: `false`. |
 | `split` | object | Boundary detection settings for a flat folder; omitted settings use their defaults. Default: `{"gap":null,"maxScaleStep":5.0,"maxShift":10.0,"minScore":0.3,"minSimilarity":0.9}`. |
 | `split.gap` | number, at least 0.0 | A gap in capture time longer than this, in seconds, cuts the batch; `None` chooses it from the batch: 30 s or 8 times its median gap, whichever is longer. |
 | `split.maxScaleStep` | number, from 0.0 to 50.0 | A change of scale between matching neighbors beyond this, in percent, is a new framing. Default: `5.0`. |
@@ -937,6 +938,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `failed` | integer | Number of failed entries; a CLI reports failure when nonzero. |
+| `resumed` | integer | What was carried over from an interrupted run: the entries a batch had finished, or the frames a capture had taken. |
 | `stacks` | array of object | Each queue entry, in processing order. |
 | `summary` | string | The CSV summary file. |
 
@@ -1239,12 +1241,14 @@ Parameters:
 | `stepMicrometers` | number, from -1000000 to 1000000 | Signed physical spacing in micrometers for rail mode; zero for lens mode. Default: `0.0`. |
 | `trigger` | `"camera"` \| `"controller"` \| `"external"` | **Required.** camera downloads, controller triggers the DIY shutter, external waits for a tethered image. |
 | `watch` | object | **Required.** Watch-folder ingest, preview, preset and final output settings. idleSeconds applies only after shooting ends. |
+| `watch.append` | boolean | Join the earlier captures of this input in output, leaving out their frames, instead of requiring an output without a summary. Default: `false`. |
 | `watch.idleSeconds` | number, from 0.1 to 86400 | Seconds without a new or changed frame before finalization, counted from the latest frame's preview; waits at least settleMs too. Default: `5.0`. |
 | `watch.input` | string | **Required.** Folder populated by a tethered camera or its capture application. |
 | `watch.method` | `"pyramid"` \| `"depth-map"` \| `"average"` \| `"wavelet"` | Method used for the running preview and the final output. Default: `"pyramid"`. |
-| `watch.output` | string | **Required.** Folder for the saved project, TIFF and summary.csv, outside input. |
+| `watch.output` | string | **Required.** Folder for the saved project, TIFF, summary.csv and captures.json, outside input. |
 | `watch.pollMs` | integer, from 10 to 5000 | Maximum milliseconds between directory scans, including when native events are unavailable. Default: `250`. |
 | `watch.preset` | string | **Required.** TOML preset, including contrast thresholds for unattended depth-map runs; or a built-in one as `builtin:<id>`. |
+| `watch.restart` | boolean | Discard an interrupted capture's staged work in output instead of resuming it. Default: `false`. |
 | `watch.settleMs` | integer, from 50 to 60000 | Milliseconds a file's size and modification time must remain unchanged before decoding. Default: `1000`. |
 | `watch.template` | string | A portable image filename; accepts batch.run's template tokens, its extension following the preset's format. Default: `"{stack}-{method}-{range}.tif"`. |
 
@@ -1253,6 +1257,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `failed` | integer | Number of failed entries; a CLI reports failure when nonzero. |
+| `resumed` | integer | What was carried over from an interrupted run: the entries a batch had finished, or the frames a capture had taken. |
 | `stacks` | array of object | Each queue entry, in processing order. |
 | `summary` | string | The CSV summary file. |
 
@@ -3767,7 +3772,7 @@ Examples:
 
 **Watch capture folder.** Ingests settled frames, aligns arrivals and updates a preview until capture goes quiet.
 
-Watches files directly inside input, including existing images, using native events plus polling. A frame must have unchanged size and modification time for settleMs and decode successfully, with unchanged metadata before and after the read. Truncated or locked files are retried until the quiet timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend the neighbor alignment chain; job events expose the latest preview path and frame count. After idleSeconds without a new or changed frame, counted from the latest frame's preview, runs final alignment and exports one stack and its project plus summary.csv. Waits for the first frame indefinitely. Output must be outside input. Template tokens are the same as batch.run; preset depth-map thresholds need no interaction.
+Watches files directly inside input, including existing images, using native events plus polling. A frame must have unchanged size and modification time for settleMs and decode successfully, with unchanged metadata before and after the read. Truncated or locked files are retried until the quiet timeout, then reported as warnings. Files rewritten after ingest are refused. New frames extend the neighbor alignment chain; job events expose the latest preview path and frame count. After idleSeconds without a new or changed frame, counted from the latest frame's preview, runs final alignment and exports one stack and its project, with summary.csv and captures.json (each capture's frames). Waits for the first frame indefinitely. Output must be outside input. Template tokens are the same as batch.run; preset depth-map thresholds need no interaction. With `append`, the capture joins earlier ones of the same input in output: their frames are left out, its stack is numbered after theirs (`<input>-capture-2`) and summary.csv gains its row, so that watching again after each capture keeps a tethered session going. A capture that was interrupted (a crash, a killed process, or an error that stopped it) resumes when it is run again with the same input, output, preset, method and template, its frames taken again unless they changed; `restart` discards it instead. Cancelling discards the capture in progress.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3777,12 +3782,14 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
+| `append` | boolean | Join the earlier captures of this input in output, leaving out their frames, instead of requiring an output without a summary. Default: `false`. |
 | `idleSeconds` | number, from 0.1 to 86400 | Seconds without a new or changed frame before finalization, counted from the latest frame's preview; waits at least settleMs too. Default: `5.0`. |
 | `input` | string | **Required.** Folder populated by a tethered camera or its capture application. |
 | `method` | `"pyramid"` \| `"depth-map"` \| `"average"` \| `"wavelet"` | Method used for the running preview and the final output. Default: `"pyramid"`. |
-| `output` | string | **Required.** Folder for the saved project, TIFF and summary.csv, outside input. |
+| `output` | string | **Required.** Folder for the saved project, TIFF, summary.csv and captures.json, outside input. |
 | `pollMs` | integer, from 10 to 5000 | Maximum milliseconds between directory scans, including when native events are unavailable. Default: `250`. |
 | `preset` | string | **Required.** TOML preset, including contrast thresholds for unattended depth-map runs; or a built-in one as `builtin:<id>`. |
+| `restart` | boolean | Discard an interrupted capture's staged work in output instead of resuming it. Default: `false`. |
 | `settleMs` | integer, from 50 to 60000 | Milliseconds a file's size and modification time must remain unchanged before decoding. Default: `1000`. |
 | `template` | string | A portable image filename; accepts batch.run's template tokens, its extension following the preset's format. Default: `"{stack}-{method}-{range}.tif"`. |
 
@@ -3791,11 +3798,13 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `failed` | integer | Number of failed entries; a CLI reports failure when nonzero. |
+| `resumed` | integer | What was carried over from an interrupted run: the entries a batch had finished, or the frames a capture had taken. |
 | `stacks` | array of object | Each queue entry, in processing order. |
 | `summary` | string | The CSV summary file. |
 
-Example:
+Examples:
 
 ```json
 {"idleSeconds":5,"input":"C:/Capture","output":"C:/Results","preset":"C:/Presets/macro.toml"}
+{"append":true,"input":"C:/Capture","output":"C:/Results","preset":"builtin:insect-macro"}
 ```

@@ -67,14 +67,18 @@ fn execute(cli: Cli) -> Result<(), Failure> {
                 name.push("-stacked");
                 input.with_file_name(name)
             });
-            queue(
-                &mut client,
-                "watch.run",
-                &input,
-                &out,
-                &args.processing,
-                json!({"idleSeconds": args.idle, "settleMs": args.settle_ms, "pollMs": args.poll_ms}),
-            )
+            // Each capture is one watch.run; the next one joins the ones before it in the same destination.
+            let mut made: u32 = 0;
+            loop {
+                let append = args.append || made > 0;
+                let params = json!({"idleSeconds": args.idle, "settleMs": args.settle_ms, "pollMs": args.poll_ms, "append": append});
+                let result = queue(&mut client, "watch.run", &input, &out, &args.processing, params);
+                made = made.saturating_add(1);
+                if result.is_err() || made == args.captures {
+                    break result;
+                }
+                client.reporter.clear_bar()?;
+            }
         }
         Command::Run(args) => run(&mut client, &args),
         Command::Reproduce { sidecar, out, overwrite } => {
@@ -95,6 +99,7 @@ fn queue(client: &mut Client, command: &str, input: &Path, output: &Path, option
     params["preset"] = json!(path_text(&options.preset)?);
     params["method"] = json!(options.method.name());
     params["template"] = json!(options.template);
+    params["restart"] = json!(options.restart);
     let result = client.run(command, params)?;
     print_json(&result)?;
     if result.get("failed").and_then(Value::as_u64).is_some_and(|n| n > 0) {

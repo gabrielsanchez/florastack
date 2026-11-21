@@ -71,6 +71,7 @@ them with the default settings into `<first file>-stacked.tif`, beside the first
 ```sh
 florastack-cli batch --in stacks --out results --preset builtin:insect-macro --method depthmap
 florastack-cli watch capture --out results --preset macro.toml --idle 10 --json-progress
+florastack-cli watch capture --out results --preset macro.toml --captures 0    # stack after stack, until stopped
 ```
 
 | Option | |
@@ -80,9 +81,12 @@ florastack-cli watch capture --out results --preset macro.toml --idle 10 --json-
 | `--template` | The output file's name: `{stack}`, `{method}`, `{range}`, `{first}`, `{last}`, `{date}` (UTC), `{params}` (default `{stack}-{method}-{range}.tif`) |
 | `--in FOLDER` (batch) | A folder of stack folders, or one folder of frames to split into stacks |
 | `--out FOLDER` | Where the outputs, projects and `summary.csv` go; outside the input, and new (`watch` defaults to `<folder>-stacked`) |
+| `--restart` | Discard what an interrupted run left in `--out` instead of resuming it; a run with the same settings resumes it otherwise |
 | `--idle SECONDS` (watch) | Finish after this long without a new or changed file (default 5) |
 | `--settle-ms MS` (watch) | How long a file must stay unchanged before it is read (default 1000) |
 | `--poll-ms MS` (watch) | The longest time between scans of the folder, besides the system's file events (default 250) |
+| `--captures N` (watch) | Make N stacks, each after the one before has finished, then exit; `0` keeps watching (default 1). Each prints its result as a line |
+| `--append` (watch) | Join the stacks already captured from this folder into `--out`, leaving out their photos |
 
 [Batch and watch folders](../user/batch-and-watch.md) explains both.
 

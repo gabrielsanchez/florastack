@@ -239,3 +239,85 @@ fn a_batch_takes_a_built_in_preset_and_exports_as_a_preset_says() {
         "params"
     );
 }
+
+/// The parameters of a quick watch of `input` into `output`, with the template `result.tif`.
+fn quick_watch(dir: &Path, input: &Path, output: &Path) -> florastack_engine::Value {
+    json!({"input": input, "output": output, "preset": preset(dir), "template": "result.tif", "idleSeconds": 0.3, "settleMs": 50, "pollMs": 20})
+}
+
+#[test]
+fn a_capture_an_error_stopped_keeps_its_frames_and_resumes() {
+    let dir = common::TempDir::new("watch-resume");
+    let frames = common::synthetic_frames(dir.path(), "capture", 80, 64, &common::breathing(3, 0.005, None, 9));
+    let input = dir.path().join("capture");
+    let output = dir.path().join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    // The output's name is taken, which the capture finds only once it has its frames.
+    std::fs::write(output.join("result.tif"), b"taken").unwrap();
+    let params = quick_watch(dir.path(), &input, &output);
+    let mut engine = Engine::new(common::config(dir.path()));
+    engine.run("watch.run", params.clone()).unwrap_err();
+    let journal = output.join(".queue").join("journal.json");
+    assert!(journal.is_file(), "the frames taken stay for a resume");
+    // Another setting can't resume it.
+    let mut other = params.clone();
+    other["method"] = json!("average");
+    let e = engine.run("watch.run", other).unwrap_err();
+    assert!(e.to_string().contains("other settings"), "{e}");
+    assert!(journal.is_file());
+
+    std::fs::remove_file(output.join("result.tif")).unwrap();
+    let result = engine.run("watch.run", params.clone()).unwrap();
+    assert_eq!((result["resumed"].as_u64(), result["stacks"][0]["frames"].as_u64()), (Some(3), Some(3)), "{result}");
+    assert!(output.join("result.tif").is_file() && !output.join(".queue").exists());
+    let ledger: florastack_engine::Value = serde_json::from_slice(&std::fs::read(output.join("captures.json")).unwrap()).unwrap();
+    assert_eq!(ledger["captures"][0]["frames"].as_array().unwrap().len(), 3, "{ledger}");
+
+    // A frame rewritten since the interruption can't be resumed; restarting takes the capture afresh.
+    let output = dir.path().join("again");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("result.tif"), b"taken").unwrap();
+    let params = quick_watch(dir.path(), &input, &output);
+    engine.run("watch.run", params.clone()).unwrap_err();
+    std::fs::remove_file(output.join("result.tif")).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    // Written again with its own bytes: only its time changes.
+    std::fs::write(&frames[0], std::fs::read(&frames[0]).unwrap()).unwrap();
+    let e = engine.run("watch.run", params.clone()).unwrap_err();
+    assert!(e.to_string().contains("changed since"), "{e}");
+    let mut restart = params;
+    restart["restart"] = json!(true);
+    let result = engine.run("watch.run", restart).unwrap();
+    assert_eq!((result["resumed"].as_u64(), result["stacks"][0]["frames"].as_u64()), (Some(0), Some(3)), "{result}");
+}
+
+#[test]
+fn another_capture_joins_the_earlier_ones_with_append() {
+    let dir = common::TempDir::new("watch-append");
+    common::synthetic_frames(dir.path(), "capture", 80, 64, &common::breathing(3, 0.005, None, 10));
+    let input = dir.path().join("capture");
+    let output = dir.path().join("out");
+    let mut params = quick_watch(dir.path(), &input, &output);
+    params["template"] = json!("{stack}.tif");
+    let mut engine = Engine::new(common::config(dir.path()));
+    let first = engine.run("watch.run", params.clone()).unwrap();
+    assert_eq!(first["stacks"][0]["stack"], "capture-capture", "{first}");
+
+    // The next stack, shot into the same folder.
+    let next = common::synthetic_frames(dir.path(), "next", 80, 64, &common::breathing(2, 0.005, None, 11));
+    for (i, path) in next.iter().enumerate() {
+        std::fs::copy(path, input.join(format!("next-{i}.tif"))).unwrap();
+    }
+    assert!(engine.run("watch.run", params.clone()).is_err(), "without append, an output with a summary is refused");
+    params["append"] = json!(true);
+    let second = engine.run("watch.run", params).unwrap();
+    assert_eq!(second["stacks"][0]["stack"], "capture-capture-2", "{second}");
+    assert_eq!(second["stacks"][0]["frames"], 2, "only the new frames: {second}");
+    assert!(output.join("capture-capture-2.tif").is_file() && output.join("capture-capture.tif").is_file());
+    let csv = std::fs::read_to_string(output.join("summary.csv")).unwrap();
+    assert_eq!(csv.lines().count(), 3, "{csv}");
+    let ledger: florastack_engine::Value = serde_json::from_slice(&std::fs::read(output.join("captures.json")).unwrap()).unwrap();
+    let frames: Vec<usize> = ledger["captures"].as_array().unwrap().iter().map(|c| c["frames"].as_array().unwrap().len()).collect();
+    assert_eq!(frames, [3, 2], "{ledger}");
+    assert!(ledger["captures"][1]["frames"].as_array().unwrap().iter().all(|f| f.as_str().unwrap().starts_with("next-")));
+}

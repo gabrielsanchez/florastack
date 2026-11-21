@@ -142,6 +142,8 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "settleMs": 0 })),
         ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "pollMs": 0 })),
         ("watch.run", json!({ "input": "x\u{0}", "output": "y", "preset": "p" })),
+        ("watch.run", json!({ "input": "x", "output": "y", "preset": "p", "append": "yes" })),
+        ("batch.run", json!({ "input": "x", "output": "y", "preset": "p", "restart": 1 })),
         ("job.cancel", json!({ "job": 1.5 })),
         ("job.cancel", json!({ "job": 1e30 })),
         ("project.moveFrames", json!({ "frames": [frame], "to": -1 })),
