@@ -26,8 +26,8 @@
 //!   confidence map as its `depth` and `confidence` maps, 16-bit (`output.save` with `map`), the depth at full
 //!   precision as `depth-frames`, and where the depth was filled, each pixel's blend width as `depth-blend` (32-bit),
 //!   which the export's contribution maps take again.
-//! - **The CPU only** (the wavelet method, and the pyramid with a coarse limit): florastack-gpu has no kernels for
-//!   them, so they stack on the CPU even when a GPU is chosen.
+//! - **The CPU only** (the wavelet method): florastack-gpu has no kernels for it, so it stacks on the CPU even when a
+//!   GPU is chosen.
 //! - **The preview** (`stack.preview`) reduces each frame to a quarter of its size as soon as it is read
 //!   (florastack-align's `thumbnail`, which the filmstrip uses too: block averages, then Lanczos3) and warps the small
 //!   copy onto the quarter-size canvas as the full stack warps the frame (tile by tile, bicubic, with its feathered
@@ -1697,7 +1697,6 @@ pub(super) fn stack_feed(
 /// Why `settings` stack on the CPU even with a GPU: the settings the GPU's kernels don't have.
 fn cpu_only(settings: &Chosen) -> Option<&'static str> {
     match settings {
-        Chosen::Pyramid(s) if s.coarse_limit.is_some() => Some("the pyramid's coarse limit isn't done on the GPU"),
         Chosen::Wavelet(_) => Some("the wavelet method isn't done on the GPU"),
         _ => None,
     }
@@ -1865,7 +1864,13 @@ fn stack_gpu(
         Chosen::Pyramid(s) => {
             #[allow(clippy::cast_possible_truncation)] // A grit from 0.25 to 1, a range limit from 0 to 1.
             let (blend, range_limit) = ((s.grit > 0.0).then(|| (1.0 / s.grit) as f32), s.range_limit as f32);
-            GpuMethod::Pyramid { levels: s.levels, blend, channel_decisions: s.decisions == Decisions::Channels, range_limit }
+            GpuMethod::Pyramid {
+                levels: s.levels,
+                blend,
+                channel_decisions: s.decisions == Decisions::Channels,
+                range_limit,
+                coarse_limit: s.coarse_limit,
+            }
         }
         Chosen::DepthMap(depth) => {
             let stats = if let Some(stats) = focus {

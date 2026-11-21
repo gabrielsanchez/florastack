@@ -60,7 +60,7 @@ fn a_gpu_that_fails_part_way_leaves_the_stack_to_the_cpu() {
     println!("stacking on {}", info["adapter"]);
     let mut cpu = aligned(&dir.path().join("cpu"), &files, Device::Cpu);
     for (command, params) in
-        [("stack.average", "{}"), ("stack.pyramid", "{}"), ("stack.depthMap", "{}")]
+        [("stack.average", "{}"), ("stack.pyramid", "{}"), ("stack.depthMap", "{}"), ("stack.pyramid", r#"{ "levels": 5, "coarseLimit": 1 }"#)]
     {
         let made = run(&mut cpu, command, params);
         let expected = output_image(&cpu, &made["output"]);

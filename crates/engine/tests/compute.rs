@@ -100,6 +100,8 @@ fn every_stacking_command_gives_on_the_gpu_what_it_gives_on_the_cpu() {
         ("stack.average", "{}"),
         ("stack.pyramid", "{}"),
         ("stack.pyramid", r#"{ "grit": 0, "decisions": "channels" }"#),
+        // With coarse levels for the coarse limit to act on (the automatic setting gives this canvas only tiled ones).
+        ("stack.pyramid", r#"{ "levels": 5, "coarseLimit": 1 }"#),
         ("stack.depthMap", r#"{ "radius": 1.5, "smoothing": 4.0 }"#),
         ("stack.slabbed", r#"{ "slabSize": 4, "overlap": 1, "final": { "method": "depth-map" } }"#),
         // The wavelet method has no GPU kernels: with a GPU chosen, it stacks on the CPU, the same.
@@ -144,9 +146,9 @@ fn the_preference_chooses_the_device_and_the_settings_the_gpu_lacks_stack_on_the
         return;
     }
     let mut cpu = aligned(&dir.path().join("cpu"), &files, Device::Cpu);
-    // The coarse limit isn't ported: the GPU engine stacks it on the CPU, so the outputs are the same bit for bit.
-    let params = r#"{ "coarseLimit": 2 }"#;
-    let (a, b) = (run(&mut engine, "stack.pyramid", params), run(&mut cpu, "stack.pyramid", params));
+    // The wavelet method isn't done on the GPU: the GPU engine stacks it on the CPU, so the outputs are the same bit
+    // for bit.
+    let (a, b) = (run(&mut engine, "stack.wavelet", "{}"), run(&mut cpu, "stack.wavelet", "{}"));
     assert_eq!(output_image(&engine, &a["output"]), output_image(&cpu, &b["output"]));
     // `compute.set` to the CPU: the next stacks are the CPU's, bit for bit.
     let info = run(&mut engine, "compute.set", r#"{ "device": "cpu" }"#);

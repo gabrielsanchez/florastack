@@ -33,7 +33,7 @@ fn stackers(c: &mut Criterion) {
     group.throughput(Throughput::Elements((WIDTH * HEIGHT) as u64));
     let methods = [
         ("average/add-frame", Method::Average { radius: 3.0, smoothing: 8.0, power: 3.0 }),
-        ("pyramid/add-frame", Method::Pyramid { levels: 0, blend: Some(2.0), channel_decisions: false, range_limit: 1.0 }),
+        ("pyramid/add-frame", Method::Pyramid { levels: 0, blend: Some(2.0), channel_decisions: false, range_limit: 1.0, coarse_limit: None }),
         ("depth-map/measure-frame", Method::Focus { radius: 2.0 }),
     ];
     for (name, method) in methods {

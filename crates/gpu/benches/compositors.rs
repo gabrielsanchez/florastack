@@ -141,6 +141,7 @@ fn run(method: &str, gpu: &Gpu, frame: &Image<f32>, n: usize, canvas: &Canvas) -
                 blend: Some((1.0 / s.grit) as f32),
                 channel_decisions: false,
                 range_limit: s.range_limit as f32,
+                coarse_limit: s.coarse_limit,
             };
             let got = gpu_pass(&mut GpuStacker::new(gpu, method, tiling).unwrap(), frame, n, canvas);
             (cpu_s, t.elapsed().as_secs_f64(), mean_difference(&got.image, &cpu.image))

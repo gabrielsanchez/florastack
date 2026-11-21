@@ -31,6 +31,8 @@ pub(crate) enum Kernel {
     Coefficients,
     Residual,
     Limit,
+    LimitFold,
+    LimitApply,
     FocusNormalize,
     Mark,
     Record,
@@ -67,6 +69,8 @@ impl Kernel {
             Kernel::Coefficients => "coefficients",
             Kernel::Residual => "residual",
             Kernel::Limit => "limit",
+            Kernel::LimitFold => "limit_fold",
+            Kernel::LimitApply => "limit_apply",
             Kernel::FocusNormalize => "focus_normalize",
             Kernel::Mark => "mark",
             Kernel::Record => "record",
@@ -102,6 +106,8 @@ impl Kernel {
             Kernel::Coefficients => include_str!("shaders/coefficients.wgsl"),
             Kernel::Residual => include_str!("shaders/residual.wgsl"),
             Kernel::Limit => include_str!("shaders/limit.wgsl"),
+            Kernel::LimitFold => include_str!("shaders/limit_fold.wgsl"),
+            Kernel::LimitApply => include_str!("shaders/limit_apply.wgsl"),
             Kernel::FocusNormalize => include_str!("shaders/focus_normalize.wgsl"),
             Kernel::Mark => include_str!("shaders/mark.wgsl"),
             Kernel::Record => include_str!("shaders/record.wgsl"),
@@ -117,7 +123,7 @@ impl Kernel {
     }
 
     /// Every kernel, for the test that compiles them all.
-    pub(crate) const ALL: [Kernel; 30] = [
+    pub(crate) const ALL: [Kernel; 32] = [
         Kernel::Fill,
         Kernel::FillU32,
         Kernel::CopyRect,
@@ -142,6 +148,8 @@ impl Kernel {
         Kernel::Coefficients,
         Kernel::Residual,
         Kernel::Limit,
+        Kernel::LimitFold,
+        Kernel::LimitApply,
         Kernel::FocusNormalize,
         Kernel::Mark,
         Kernel::Record,
