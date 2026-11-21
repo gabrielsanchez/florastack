@@ -156,5 +156,8 @@ fn unknown_commands_are_errors_with_a_suggestion() {
 fn events_have_a_schema_too() {
     let schema = florastack_engine::schema::schema_for::<Event>();
     assert_eq!(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
-    assert_eq!(schema["oneOf"].as_array().unwrap().len(), 4);
+    // Each kind by its name: project, changed, history, job, and partial (a job's result published before it ends).
+    let mut kinds: Vec<&str> = schema["oneOf"].as_array().unwrap().iter().map(|k| k["properties"]["event"]["const"].as_str().unwrap()).collect();
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["changed", "history", "job", "partial", "project"]);
 }
