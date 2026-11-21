@@ -29,6 +29,7 @@ pub mod loader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offscreen;
 pub mod palette;
+pub mod palette_form;
 pub mod panels;
 pub mod parallax_ui;
 pub mod preferences;

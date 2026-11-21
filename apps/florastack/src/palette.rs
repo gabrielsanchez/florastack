@@ -1,7 +1,8 @@
 //! The command palette (Ctrl/Cmd+K, [`Palette`]): searches the app's actions and every command of the engine's
 //! registry by title and name. An action or a command that needs no parameters runs as it is picked; any other opens
-//! its parameters as JSON, starting from the command's first example, checked against the command's schema
-//! (`Registry::check`) before it runs. A command's help text shows when the pointer rests on it, and above its
+//! its parameters as a form made from the command's schema (`palette_form.rs`), or as JSON at the user's choice,
+//! starting from the command's first example, checked against the command's schema (`Registry::check`) before it
+//! runs. A command's help text shows when the pointer rests on it, and above its
 //! parameters while they are written.
 
 use egui::{Key, Modal};
@@ -9,6 +10,7 @@ use florastack_engine::{CommandInfo, Registry, Value};
 
 use crate::actions::Action;
 use crate::i18n::{command_help, command_summary, command_title, tr};
+use crate::palette_form::Form;
 
 /// What the palette picked.
 #[derive(Clone, Debug, PartialEq)]
@@ -38,8 +40,90 @@ struct Editing {
     name: &'static str,
     title: String,
     help: String,
-    text: String,
+    /// The parameters' schema, and their form.
+    schema: Value,
+    form: Form,
+    /// The parameters as JSON text, while they are edited so.
+    json: Option<String>,
     error: Option<String>,
+}
+
+impl Editing {
+    /// The parameters as they are now: the JSON text's, or the form's.
+    fn params(&self) -> Result<Value, String> {
+        match &self.json {
+            Some(text) => serde_json::from_str(text).map_err(|e| e.to_string()),
+            None if self.form.is_valid() => Ok(self.form.params.clone()),
+            None => Err(tr("palette-form-invalid")),
+        }
+    }
+
+    /// Draws the parameters being written: their form or JSON, the error, Run and Back. What Run picked, and whether
+    /// Back was clicked.
+    fn ui(&mut self, ui: &mut egui::Ui, registry: &Registry) -> (Option<Picked>, bool) {
+        let (mut picked, mut back) = (None, false);
+        ui.heading(&self.title);
+        if !self.help.is_empty() {
+            egui::ScrollArea::vertical().id_salt("palette.help").max_height(140.0).show(ui, |ui| ui.weak(&self.help));
+        }
+        let label = ui
+            .horizontal(|ui| {
+                let label = ui.label(tr("palette-parameters")).id;
+                let mut json = self.json.is_some();
+                if ui.checkbox(&mut json, tr("palette-json")).on_hover_text(tr("palette-json-tip")).changed() {
+                    self.toggle_json();
+                }
+                label
+            })
+            .inner;
+        match &mut self.json {
+            Some(text) => {
+                ui.add(egui::TextEdit::multiline(text).code_editor().desired_rows(8).desired_width(f32::INFINITY)).labelled_by(label);
+            }
+            None => {
+                egui::ScrollArea::vertical().id_salt("palette.form").max_height(320.0).show(ui, |ui| self.form.ui(ui, &self.schema));
+            }
+        }
+        if let Some(error) = &self.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        ui.horizontal(|ui| {
+            if ui.button(tr("palette-run")).clicked() {
+                match self.params() {
+                    Ok(params) => match registry.check(self.name, params.clone()) {
+                        Ok(()) => picked = Some(Picked::Command { name: self.name.to_owned(), params }),
+                        Err(e) => self.error = Some(e.info().message),
+                    },
+                    Err(e) => self.error = Some(e),
+                }
+            }
+            if ui.button(tr("palette-back")).clicked() {
+                back = true;
+            }
+        });
+        (picked, back)
+    }
+
+    /// Switches between the form and the JSON text, carrying the parameters over; a text that doesn't parse stays.
+    fn toggle_json(&mut self) {
+        match &self.json {
+            Some(_) => match self.params() {
+                Ok(params) => {
+                    self.form = Form::new(params);
+                    self.json = None;
+                    self.error = None;
+                }
+                Err(e) => self.error = Some(e),
+            },
+            None => match self.params() {
+                Ok(params) => {
+                    self.json = Some(serde_json::to_string_pretty(&params).unwrap_or_else(|_| "{}".to_owned()));
+                    self.error = None;
+                }
+                Err(e) => self.error = Some(e),
+            },
+        }
+    }
 }
 
 /// See the module documentation.
@@ -142,29 +226,7 @@ impl Palette {
         let modal = Modal::new(egui::Id::unique("command-palette")).show(ctx, |ui| {
             ui.set_width(560.0);
             if let Some(editing) = &mut self.editing {
-                ui.heading(&editing.title);
-                if !editing.help.is_empty() {
-                    egui::ScrollArea::vertical().id_salt("palette.help").max_height(140.0).show(ui, |ui| ui.weak(&editing.help));
-                }
-                ui.label(tr("palette-parameters"));
-                ui.add(egui::TextEdit::multiline(&mut editing.text).code_editor().desired_rows(8).desired_width(f32::INFINITY));
-                if let Some(error) = &editing.error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                ui.horizontal(|ui| {
-                    if ui.button(tr("palette-run")).clicked() {
-                        match serde_json::from_str::<Value>(&editing.text) {
-                            Ok(params) => match registry.check(editing.name, params.clone()) {
-                                Ok(()) => picked = Some(Picked::Command { name: editing.name.to_owned(), params }),
-                                Err(e) => editing.error = Some(e.info().message),
-                            },
-                            Err(e) => editing.error = Some(e.to_string()),
-                        }
-                    }
-                    if ui.button(tr("palette-back")).clicked() {
-                        back = true;
-                    }
-                });
+                (picked, back) = editing.ui(ui, registry);
                 return;
             }
             let search = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(tr("palette-hint")).desired_width(f32::INFINITY));
@@ -210,8 +272,15 @@ impl Palette {
                     Target::Command(name) => match registry.get(name) {
                         Some(info) if needs_parameters(info) => {
                             let example = info.examples.first().cloned().unwrap_or(Value::Object(serde_json::Map::new()));
-                            let text = serde_json::to_string_pretty(&example).unwrap_or_else(|_| "{}".to_owned());
-                            self.editing = Some(Editing { name, title: entry.title.clone(), help: entry.help.clone(), text, error: None });
+                            self.editing = Some(Editing {
+                                name,
+                                title: entry.title.clone(),
+                                help: entry.help.clone(),
+                                schema: info.params.clone(),
+                                form: Form::new(example),
+                                json: None,
+                                error: None,
+                            });
                         }
                         _ => picked = Some(Picked::Command { name: name.to_owned(), params: Value::Object(serde_json::Map::new()) }),
                     },
@@ -255,5 +324,52 @@ mod tests {
             let found = Palette::entries(name, &registry);
             assert!(matches!(found.first().map(|e| &e.target), Some(Target::Command(n)) if *n == name), "{name} is found first by its name");
         }
+    }
+
+    #[test]
+    fn every_command_s_form_filled_from_its_first_example_gives_it_back() {
+        let registry = Registry::standard();
+        let ctx = egui::Context::default();
+        let mut with_params = 0;
+        for name in registry.names() {
+            let info = registry.get(name).unwrap();
+            let Some(example) = info.examples.first() else { continue };
+            with_params += usize::from(needs_parameters(info));
+            let mut editing = Editing {
+                name,
+                title: name.to_owned(),
+                help: String::new(),
+                schema: info.params.clone(),
+                form: Form::new(example.clone()),
+                json: None,
+                error: None,
+            };
+            // Drawn twice, as frames are, without a touch: the parameters stay the example's.
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| editing.form.ui(ui, &editing.schema));
+                output.textures_delta.clear();
+            }
+            assert_eq!(editing.params().as_ref(), Ok(example), "{name}");
+            // To JSON and back.
+            editing.toggle_json();
+            assert!(editing.json.is_some() && editing.error.is_none(), "{name}");
+            editing.toggle_json();
+            assert_eq!((editing.json.as_ref(), editing.params().as_ref()), (None, Ok(example)), "{name}");
+            assert!(registry.check(name, editing.params().unwrap()).is_ok(), "{name}");
+        }
+        assert!(with_params > 40, "{with_params}");
+        // JSON that doesn't parse stays JSON, with the reason.
+        let info = registry.get("stack.pyramid").unwrap();
+        let mut editing = Editing {
+            name: "stack.pyramid",
+            title: String::new(),
+            help: String::new(),
+            schema: info.params.clone(),
+            form: Form::new(Value::Object(serde_json::Map::new())),
+            json: Some("{ nope".to_owned()),
+            error: None,
+        };
+        editing.toggle_json();
+        assert!(editing.json.is_some() && editing.error.is_some());
     }
 }

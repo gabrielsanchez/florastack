@@ -591,7 +591,10 @@ stacks-stack = { $first } and the following, { $count } frames
 ## Command palette
 
 palette-hint = Type a command or an action…
-palette-parameters = Parameters (JSON):
+palette-parameters = Parameters:
+palette-json = Edit as JSON
+palette-json-tip = Write the parameters as JSON instead of the form, or go back to the form.
+palette-form-invalid = A JSON field doesn't parse: correct it first.
 palette-run = Run
 palette-back = Back
 palette-nothing = Nothing matches.
