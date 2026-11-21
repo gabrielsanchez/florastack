@@ -21,6 +21,7 @@ mod clipboard;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;
+pub mod display_profile;
 pub mod export_tab;
 pub mod files;
 pub mod frame_cache;

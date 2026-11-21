@@ -5,8 +5,9 @@
 //!   floats, and goes up once as an `Rgba16Float` texture with a full mip chain made on the GPU from 2 x 2 averages
 //!   in linear light (`levels.wgsl`): zoomed out, the image is filtered trilinearly instead of aliasing (unfiltered
 //!   downscaling makes previews look noisy and mislead); from 100% up, each image pixel is a crisp square.
-//! - **Display transform**: sRGB's curve, in the shader unless the window's surface applies it; values clip to
-//!   `[0, 1]`, and transparent pixels show over a checkerboard. Monitor profiles are a roadmap follow-up.
+//! - **Display transform**: values clip to `[0, 1]`, transparent pixels show over a checkerboard, then sRGB's curve,
+//!   and the monitor profile's table when one applies ([`GpuViewer::set_display`], `display_profile.rs`). A surface
+//!   that applies sRGB's curve itself gets the result linearized, so that the display receives exactly it.
 //! - **Zoom**: in device pixels per image pixel, so that 100% shows every image pixel on one screen pixel whatever
 //!   the display's scale. The view fits the window until the user zooms or pans.
 //!
@@ -22,7 +23,7 @@ use std::sync::Arc;
 
 use egui::{Pos2, Rect, Sense, Vec2};
 use egui_wgpu::wgpu;
-use florastack_engine::view::DisplayImage;
+use florastack_engine::view::{DisplayImage, DisplayLut};
 
 use crate::prefs::Compare;
 
@@ -375,6 +376,9 @@ pub struct GpuViewer {
     slots: Vec<Slot>,
     /// Counts the frames prepared, for the tiles least recently drawn.
     frame: u64,
+    /// The display transform's table after sRGB's curve, and its points a side when it applies (none for sRGB).
+    table: Layer,
+    table_size: Option<u32>,
 }
 
 /// A texture with its mip levels, and its view.
@@ -521,12 +525,27 @@ impl GpuViewer {
             uploaded: Vec::new(),
             slots: (0..SLOTS).map(|_| Slot { uniforms: Vec::new(), drawn: Vec::new() }).collect(),
             frame: 0,
+            // An empty table of 2 points until a profile applies: the shader skips it meanwhile.
+            table: table_texture(device, None, 2, &[]),
+            table_size: None,
         };
         if let Some(e) = pollster::block_on(scope.pop()) {
             tracing::warn!("the viewer's shaders don't compile on this GPU ({e}): images are drawn without them");
             return None;
         }
         Some(resources)
+    }
+
+    /// Uses `lut`, a monitor profile's table, as the display transform after sRGB's curve; `None` for sRGB's curve
+    /// alone.
+    pub fn set_display(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, lut: Option<&DisplayLut>) {
+        match lut {
+            Some(lut) if lut.size >= 2 && lut.rgb.len() == lut.size.pow(3) * 3 => {
+                self.table = table_texture(device, Some(queue), lut.size, &lut.rgb);
+                self.table_size = u32::try_from(lut.size).ok();
+            }
+            _ => self.table_size = None,
+        }
     }
 
     /// The same viewer, tiling images larger than `limit` pixels a side (at most the device's own limit), as tests
@@ -809,6 +828,39 @@ impl GpuViewer {
     }
 }
 
+/// A display table as an `Rgba16Float` 3D texture of `size` points a side, its RGB values (red fastest) written through
+/// `queue`; left empty without one.
+fn table_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, size: usize, rgb: &[f32]) -> Layer {
+    let points = u32::try_from(size).unwrap_or(2);
+    let extent = wgpu::Extent3d { width: points, height: points, depth_or_array_layers: points };
+    let texels: Vec<u16> = rgb
+        .chunks(3)
+        .flat_map(|v| [v[0], v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0), 1.0])
+        .map(|v| half::f16::from_f32(v).to_bits())
+        .collect();
+    let descriptor = wgpu::TextureDescriptor {
+        label: Some("viewer display table"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    };
+    let texture = device.create_texture(&descriptor);
+    if let Some(queue) = queue {
+        queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(points * 8), rows_per_image: Some(points) },
+            extent,
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    Layer { texture, view }
+}
+
 /// Writes the `size` pixels of `from` at `from_at` into `texture`'s first level at `at`.
 fn write_region(queue: &wgpu::Queue, texture: &wgpu::Texture, from: &DisplayImage, at: [u32; 2], from_at: [u32; 2], size: [u32; 2]) {
     let Ok(row) = u32::try_from(from.width) else { return };
@@ -903,6 +955,7 @@ impl egui_wgpu::CallbackTrait for Paint {
                 }));
             }
             let Some(uniform) = slot.uniforms.get(n) else { break };
+            let (lut, lut_size) = viewer.table_size.map_or((0.0, 2.0), |n| (1.0, n as f32));
             let view: [f32; 20] = [
                 sx,
                 sy,
@@ -914,8 +967,8 @@ impl egui_wgpu::CallbackTrait for Paint {
                 encode,
                 nearest,
                 self.boost,
-                0.0,
-                0.0,
+                lut,
+                lut_size,
                 quad[0],
                 quad[1],
                 quad[2],
@@ -934,6 +987,8 @@ impl egui_wgpu::CallbackTrait for Paint {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&layer.view) },
                     wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&viewer.trilinear) },
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&viewer.pixels) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&viewer.table.view) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&viewer.bilinear) },
                 ],
             }));
         }
@@ -1011,8 +1066,13 @@ pub(crate) mod tests {
 
     /// The viewer's resources for an `Rgba8Unorm` target, tiling images larger than `limit` when there is one.
     fn resources(device: &wgpu::Device, limit: Option<u32>) -> egui_wgpu::CallbackResources {
+        resources_for(device, wgpu::TextureFormat::Rgba8Unorm, limit)
+    }
+
+    /// The viewer's resources for a target of `format`.
+    fn resources_for(device: &wgpu::Device, format: wgpu::TextureFormat, limit: Option<u32>) -> egui_wgpu::CallbackResources {
         let mut resources = egui_wgpu::CallbackResources::default();
-        let viewer = GpuViewer::new(device, wgpu::TextureFormat::Rgba8Unorm).expect("the viewer's shaders compile");
+        let viewer = GpuViewer::new(device, format).expect("the viewer's shaders compile");
         resources.insert(match limit {
             Some(limit) => viewer.with_limit(limit),
             None => viewer,
@@ -1028,8 +1088,19 @@ pub(crate) mod tests {
         paints: &[(Paint, Option<[u32; 4]>)],
         size: u32,
     ) -> Vec<u8> {
+        render_into(device, queue, resources, paints, size, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    /// [`render_in`] into a target of `format`, which the resources must have been made for.
+    fn render_into(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut egui_wgpu::CallbackResources,
+        paints: &[(Paint, Option<[u32; 4]>)],
+        size: u32,
+        format: wgpu::TextureFormat,
+    ) -> Vec<u8> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let format = wgpu::TextureFormat::Rgba8Unorm;
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
@@ -1305,5 +1376,60 @@ pub(crate) mod tests {
         let fresh = render_with(&device, &queue, &[(paint(&mut picture, 0.4), None)], 64, Some(16));
         let worst = kept.iter().zip(&fresh).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
         assert!(worst <= 1, "the overview updated in place differs by {worst}");
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "8-bit values from a table's in [0, 1]")]
+    fn the_display_transform_is_applied_once_whether_the_target_encodes_or_not() {
+        use florastack_engine::view::{StandardDisplay, display_lut, standard_display_profile};
+        let Ok((device, queue)) = device() else {
+            let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
+            assert!(!required, "FLORASTACK_REQUIRE_GPU is set, but no GPU adapter is usable");
+            florastack_testkit::skip!(Gpu, "no GPU adapter is usable");
+            return;
+        };
+        // Linear sRGB red, mid gray (sRGB's 0.5) and a dark blue, side by side at 1600%.
+        let colors = [[1.0, 0.0, 0.0], [0.214, 0.214, 0.214], [0.01, 0.02, 0.3], [1.0, 1.0, 1.0]];
+        let rgba = colors.iter().flat_map(|c| [half(c[0]), half(c[1]), half(c[2]), half(1.0)]).collect();
+        let image = Arc::new(DisplayImage { width: 4, height: 1, rgba, alpha: false });
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
+        let shown = |format: wgpu::TextureFormat, lut: Option<&DisplayLut>| {
+            let mut resources = resources_for(&device, format, None);
+            resources.get_mut::<GpuViewer>().unwrap().set_display(&device, &queue, lut);
+            let paint =
+                Paint { slot: 0, id: 1, image: Arc::clone(&image), updates: Vec::new(), boost: 1.0, rect, zoom: 16.0, center: Vec2::new(2.0, 0.5) };
+            let pixels = render_into(&device, &queue, &mut resources, &[(paint, None)], 64, format);
+            // Each color's square, at its middle.
+            (0..4)
+                .map(|i| {
+                    let at = (32 * 64 + i * 16 + 8) * 4;
+                    [pixels[at], pixels[at + 1], pixels[at + 2]]
+                })
+                .collect::<Vec<_>>()
+        };
+        let (plain, srgb) = (wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let close = |a: &[[u8; 3]], b: &[[u8; 3]], tolerance: u8, what: &str| {
+            for (x, y) in a.iter().zip(b) {
+                assert!(x.iter().zip(y).all(|(p, q)| p.abs_diff(*q) <= tolerance), "{what}: {a:?} against {b:?}");
+            }
+        };
+        // sRGB's curve once: the shader's into a plain target, the hardware's into an sRGB one, the same values.
+        let reference = shown(plain, None);
+        assert!(reference[1].iter().all(|v| v.abs_diff(128) <= 1), "{reference:?}");
+        close(&shown(srgb, None), &reference, 1, "an sRGB target encodes once");
+        // The sRGB profile's table changes nothing, on either target.
+        let srgb_lut = display_lut(&standard_display_profile(StandardDisplay::Srgb).unwrap()).unwrap();
+        close(&shown(plain, Some(&srgb_lut)), &reference, 2, "the sRGB table into a plain target");
+        close(&shown(srgb, Some(&srgb_lut)), &reference, 2, "the sRGB table into an sRGB target");
+        // Display P3's table: the display gets the table's values for each color, on either target, not the curve
+        // applied to them again (which would make P3's red (234, 51, 35) about (243, 123, 104)).
+        let p3 = display_lut(&standard_display_profile(StandardDisplay::DisplayP3).unwrap()).unwrap();
+        let red = p3.at(32, 0, 0).unwrap().map(|v| (v * 255.0).round() as u8);
+        for format in [plain, srgb] {
+            let got = shown(format, Some(&p3));
+            close(&got[..1], &[red], 2, &format!("P3's red into {format:?}"));
+            close(&got[3..], &[[255, 255, 255]], 1, &format!("white into {format:?}"));
+            assert!(got[1].iter().all(|v| v.abs_diff(128) <= 2), "gray stays gray into {format:?}: {got:?}");
+        }
     }
 }

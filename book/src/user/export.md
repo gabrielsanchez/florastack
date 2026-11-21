@@ -89,5 +89,12 @@ keys, and `develop.get`, `align.get`, `stack.get` and `export.get` show them all
   behind.
 - **Autosave**: saves the project a few minutes after the first unsaved change (0 for never).
 - **Appearance**: the theme (dark or light, also Ctrl+Shift+T) and the language.
+- **Display profile**: how the viewer's colors are made for your monitor. **Automatic** uses the profile your system
+  has for the display the window is on (Windows' display settings, macOS's ColorSync, or a color manager such as
+  colord on Linux under X11), and looks again when you move the window to another display; **sRGB** ignores it; and
+  **Profile file** uses an ICC file you pick, such as one your calibration software made, on every display. A profile
+  that is missing or can't be used falls back to sRGB, and the dialog says why. Where the system converts colors for
+  the display itself (Windows' automatic color management, or HDR), the viewer sends sRGB and leaves the conversion to
+  it, so that it never happens twice. Only the viewer is color-managed this way: exported files are not affected.
 
 FloraStack sends nothing anywhere: no telemetry, no usage statistics, no crash reports, no update checks.

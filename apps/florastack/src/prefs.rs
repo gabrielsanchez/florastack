@@ -1,6 +1,6 @@
 //! What the app remembers between runs ([`Prefs`]): the theme, the recent projects, the folders last used, the tab
 //! and the method chosen, and the Preferences dialog's settings (the memory budget, the compute device, the cache
-//! folder, the autosave interval, the language). eframe keeps them with the window's size and place and the panels'
+//! folder, the autosave interval, the language, the display profile). eframe keeps them with the window's size and place and the panels'
 //! widths (its `persistence`), in the app's storage folder, on this machine only.
 
 use std::path::{Path, PathBuf};
@@ -147,6 +147,8 @@ pub struct Prefs {
     pub autosave_minutes: Option<u32>,
     /// The UI's language (`en-US`); `None` for the first the app has.
     pub language: Option<String>,
+    /// Where the viewer's display transform comes from (`display_profile.rs`).
+    pub display_profile: crate::display_profile::Choice,
 }
 
 /// The autosave interval when none is set: two minutes, a few steps' work at most.

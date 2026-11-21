@@ -39,14 +39,25 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 half.workspace = true
 bytemuck.workspace = true
+raw-window-handle.workspace = true
 # Waiting for the viewer's shaders to compile (an error scope), at startup.
 pollster.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-graphics.workspace = true
+objc2-quartz-core.workspace = true
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit.workspace = true
+x11rb.workspace = true
 
 # The browser build (`cargo xtask web`, `src/web.rs`): the page's files, downloads, console and canvas; and wgpu's
 # WebGL backend, which draws the UI where the browser has no WebGPU (stacking needs WebGPU, and runs on the CPU

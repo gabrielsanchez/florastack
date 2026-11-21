@@ -224,6 +224,10 @@ pub struct FloraStackApp {
     shown_preview_revision: u64,
     /// The folder of temporary projects, which the recent projects leave out.
     pub(crate) temporary: Option<PathBuf>,
+    /// The display transform, following the window from display to display, and the window's renderer, whose viewer
+    /// it goes to (`display_profile.rs`).
+    pub display: crate::display_profile::Follower,
+    render_state: Option<egui_wgpu::RenderState>,
 }
 
 impl FloraStackApp {
@@ -235,7 +239,40 @@ impl FloraStackApp {
         let prefs = Prefs::load(cc.storage);
         let mut app = FloraStackApp::with_context(&ctx, options, prefs, gpu);
         app.parallax.gpu = relief_gpu;
+        app.render_state = cc.wgpu_render_state.clone().filter(|_| gpu.is_some());
         app
+    }
+
+    /// Follows the window to the display it is on, and gives the viewer that display's transform when it, or the
+    /// preference, changed: the table to the GPU viewer, the space to the window's tag (macOS), and a notice when the
+    /// profile can't be used.
+    fn follow_display(&mut self, ctx: &egui::Context, window: &impl raw_window_handle::HasWindowHandle) {
+        let Some(state) = &self.render_state else { return };
+        let point = ctx.input(|i| {
+            let viewport = i.viewport();
+            let center = viewport.outer_rect?.center();
+            // Points on macOS, where the system's display coordinates are points too; physical pixels elsewhere.
+            let scale = if cfg!(target_os = "macos") { 1.0 } else { viewport.native_pixels_per_point.unwrap_or(1.0) };
+            Some([f64::from(center.x * scale), f64::from(center.y * scale)])
+        });
+        let Some(decided) = self.display.follow(point, &self.prefs.display_profile).cloned() else { return };
+        let lut = match &decided {
+            crate::display_profile::Decided::Profile { lut, .. } => Some(lut),
+            crate::display_profile::Decided::Srgb(_) => None,
+        };
+        if let Some(viewer) = state.renderer.write().callback_resources.get_mut::<GpuViewer>() {
+            viewer.set_display(&state.device, &state.queue, lut);
+        }
+        let icc = match &decided {
+            crate::display_profile::Decided::Profile { icc, .. } => Some(icc.as_slice()),
+            crate::display_profile::Decided::Srgb(_) => None,
+        };
+        crate::display_profile::tag_output(window, icc);
+        if let crate::display_profile::Decided::Srgb(crate::display_profile::Why::Unusable(_)) = &decided {
+            self.shell.notify(decided.describe(), true);
+        }
+        tracing::info!("{}", decided.describe());
+        ctx.request_repaint();
     }
 
     /// The app on `ctx`, with `prefs`, and the GPU viewer's largest side when it has one: what tests build.
@@ -297,6 +334,8 @@ impl FloraStackApp {
             shown_preview: None,
             shown_preview_revision: 0,
             temporary,
+            display: crate::display_profile::Follower::default(),
+            render_state: None,
         };
         app.set_autosave();
         app.apply_saved();
@@ -1000,8 +1039,9 @@ pub(crate) fn apply_theme(ctx: &egui::Context, theme: Theme) {
 }
 
 impl eframe::App for FloraStackApp {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.tick(ctx);
+        self.follow_display(ctx, frame);
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             if self.shell.engine().is_dirty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
