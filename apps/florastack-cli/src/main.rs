@@ -48,7 +48,9 @@ fn execute(cli: Cli) -> Result<(), Failure> {
     }
     let root = std::path::absolute(cli.temporary_projects.unwrap_or_else(|| std::env::temp_dir().join(branding::APP_ID).join("projects")))?;
     path_text(&root)?;
-    let mut client = Client::new(root, cli.json_progress, cli.device.device());
+    let trash = cli.trash_folder.as_deref().map(std::path::absolute).transpose()?;
+    let cleanup = Cleanup { budget_mb: cli.temporary_budget.0, own_trash: trash.is_some() };
+    let mut client = Client::new(root, trash, cli.json_progress, cli.device.device());
     // What crashed runs left of the tiles they spilled goes first, as when the desktop app starts. A run that can't
     // clean up still does its work.
     let _ = client.engine.dispatch("cache.removeAbandoned", json!({}));
@@ -56,7 +58,7 @@ fn execute(cli: Cli) -> Result<(), Failure> {
         return mcp::serve(client.into_engine(), connect.as_deref(), token_file.as_deref(), *access);
     }
     let result = match cli.command {
-        Command::Stack(args) => stack(&mut client, &args),
+        Command::Stack(args) => stack(&mut client, &args, cleanup),
         Command::Batch(args) => queue(&mut client, "batch.run", &args.input, &args.out, &args.processing, json!({})),
         Command::Watch(args) => {
             let input = std::path::absolute(&args.folder)?;
@@ -80,7 +82,7 @@ fn execute(cli: Cli) -> Result<(), Failure> {
                 client.run("export.reproduce", json!({"sidecar": path_text(&sidecar)?, "folder": path_text(&out)?, "overwrite": overwrite}))?;
             print_json(&result)
         }
-        Command::Project { command } => project(&mut client, command),
+        Command::Project { command } => project(&mut client, command, cleanup),
         Command::Commands | Command::Mcp { .. } => Ok(()),
     };
     client.reporter.clear_bar()?;
@@ -101,7 +103,55 @@ fn queue(client: &mut Client, command: &str, input: &Path, output: &Path, option
     Ok(())
 }
 
-fn stack(client: &mut Client, args: &StackArgs) -> Result<(), Failure> {
+/// How the unnamed projects are kept within their disk budget.
+#[derive(Clone, Copy)]
+struct Cleanup {
+    /// The disk budget in MiB, if any.
+    budget_mb: Option<u64>,
+    /// Whether they go to a folder given with `--trash-folder` rather than the system's trash.
+    own_trash: bool,
+}
+
+/// Moves the unnamed projects beyond the disk budget to the trash, the least recently used first, and returns the
+/// folders moved. Nothing here fails the run, whose work is done: what can't be moved is a warning.
+fn keep_within_budget(client: &mut Client, cleanup: Cleanup) -> Result<Vec<Value>, Failure> {
+    let Some(budget_mb) = cleanup.budget_mb else { return Ok(Vec::new()) };
+    let found = match client.run("project.findOrphans", json!({ "budgetMb": budget_mb })) {
+        Ok(found) => found,
+        Err(failure) => {
+            client.reporter.warning(&format!("the unnamed projects could not be kept within their disk budget: {}", failure.info.message))?;
+            return Ok(Vec::new());
+        }
+    };
+    let paths: Vec<&Value> = found.get("orphans").and_then(Value::as_array).into_iter().flatten().filter_map(|o| o.get("path")).collect();
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    // From a removable or network drive the system may delete instead of keeping: that is for the user to decide.
+    if let Some(drive @ ("removable" | "network")) = found.get("drive").and_then(Value::as_str)
+        && !cleanup.own_trash
+    {
+        client.reporter.warning(&format!(
+            "{} unnamed projects are beyond the disk budget, but the temporary-projects folder is on a {drive} drive, where the \
+             system may delete what is moved to the trash: `project clean-orphans` moves them anyway, `--trash-folder` somewhere else",
+            paths.len()
+        ))?;
+        return Ok(Vec::new());
+    }
+    let result = match client.run("project.trashOrphans", json!({ "paths": paths, "budgetMb": budget_mb })) {
+        Ok(result) => result,
+        Err(failure) => {
+            client.reporter.warning(&format!("the unnamed projects beyond the disk budget were not moved: {}", failure.info.message))?;
+            return Ok(Vec::new());
+        }
+    };
+    for failed in result.get("failed").and_then(Value::as_array).into_iter().flatten() {
+        client.reporter.warning(failed.get("reason").and_then(Value::as_str).unwrap_or("an unnamed project was not moved to the trash"))?;
+    }
+    Ok(result.get("trashed").and_then(Value::as_array).cloned().unwrap_or_default())
+}
+
+fn stack(client: &mut Client, args: &StackArgs, cleanup: Cleanup) -> Result<(), Failure> {
     let paths = args.files.iter().map(|p| path_text(p)).collect::<Result<Vec<_>, _>>()?;
     path_text(&args.out)?;
     client.run("project.new", json!({}))?;
@@ -189,7 +239,8 @@ fn stack(client: &mut Client, args: &StackArgs) -> Result<(), Failure> {
     client.run("project.save", json!({}))?;
     let project = client.engine.project_path().map(Path::to_path_buf);
     client.run("project.close", json!({}))?;
-    print_json(&json!({ "outputs": written, "project": project }))
+    let trashed = keep_within_budget(client, cleanup)?;
+    print_json(&json!({ "outputs": written, "project": project, "trashed": trashed }))
 }
 
 fn method_path(path: &Path, method: Method) -> PathBuf {
@@ -220,7 +271,7 @@ fn run(client: &mut Client, args: &RunArgs) -> Result<(), Failure> {
     Ok(())
 }
 
-fn project(client: &mut Client, command: ProjectCommand) -> Result<(), Failure> {
+fn project(client: &mut Client, command: ProjectCommand, cleanup: Cleanup) -> Result<(), Failure> {
     let result = match command {
         ProjectCommand::New { name, folder } => {
             let params = if let Some(name) = name {
@@ -240,7 +291,11 @@ fn project(client: &mut Client, command: ProjectCommand) -> Result<(), Failure> 
             result
         }
         ProjectCommand::CleanOrphans { days, dry_run } => {
-            let found = client.run("project.findOrphans", json!({ "days": days }))?;
+            let mut params = json!({ "days": days });
+            if let Some(budget_mb) = cleanup.budget_mb {
+                params["budgetMb"] = json!(budget_mb);
+            }
+            let found = client.run("project.findOrphans", params.clone())?;
             let any = found.get("orphans").and_then(Value::as_array).is_some_and(|o| !o.is_empty());
             if let Some(drive @ ("removable" | "network")) = found.get("drive").and_then(Value::as_str)
                 && any
@@ -256,7 +311,8 @@ fn project(client: &mut Client, command: ProjectCommand) -> Result<(), Failure> 
                 if paths.is_empty() {
                     json!({ "trashed": [], "failed": [] })
                 } else {
-                    let result = client.run("project.trashOrphans", json!({ "paths": paths, "days": days }))?;
+                    params["paths"] = json!(paths);
+                    let result = client.run("project.trashOrphans", params)?;
                     if result.get("failed").and_then(Value::as_array).is_some_and(|f| !f.is_empty()) {
                         print_json(&result)?;
                         return Err(Failure::new(1, "project", "some orphaned projects could not be moved to the trash"));

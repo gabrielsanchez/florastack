@@ -2560,9 +2560,9 @@ Examples:
 
 ### `project.findOrphans`
 
-**Find old temporary projects.** Lists the temporary projects old enough to be moved to the trash.
+**Find old temporary projects.** Lists the temporary projects old enough, or beyond the disk budget, to be moved to the trash.
 
-Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that haven't been saved or opened for `days` days (30 by default). `drive` says what the folder is on: from a `removable` or `network` drive the system may delete what is moved to the trash instead of keeping it (Windows has no Recycle Bin there).
+Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that haven't been saved or opened for `days` days, or that are beyond a disk budget of `budgetMb` MiB: the temporary projects are kept from the most recently used, open ones first, until one doesn't fit, and it and every older one are orphans, whatever their age; the most recently used closed one always stays. With neither, `days` is 30. `drive` says what the folder is on: from a `removable` or `network` drive the system may delete what is moved to the trash instead of keeping it (Windows has no Recycle Bin there).
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -2572,7 +2572,8 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
-| `days` | integer, from 0 to 36500 | How many days unused a temporary project must be (30 by default), at most 36500. |
+| `budgetMb` | integer, from 0 to 1073741824 | The MiB the temporary projects may take; those beyond it, the least recently used, are orphans whatever their age. At most 1073741824 (1 PiB). |
+| `days` | integer, from 0 to 36500 | How many days unused a temporary project must be, at most 36500 (30 when `budgetMb` isn't given either). |
 
 Result:
 
@@ -2587,6 +2588,8 @@ Examples:
 ```json
 {}
 {"days":7}
+{"budgetMb":10240}
+{"budgetMb":10240,"days":30}
 ```
 
 ### `project.findStacks`
@@ -2926,7 +2929,7 @@ Example:
 
 **Move old temporary projects to the trash.** Moves orphaned temporary projects to the trash.
 
-Each path is checked again before it is moved: it must still be an orphan in the temporary-projects folder. Nothing is deleted; the projects can be restored from the trash.
+Each path is checked again before it is moved: it must still be an orphan in the temporary-projects folder by `days` and `budgetMb`, as `project.findOrphans` takes them. Nothing is deleted; the projects can be restored from the trash.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -2936,7 +2939,8 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
-| `days` | integer, from 0 to 36500 | How many days unused each must still be (30 by default). |
+| `budgetMb` | integer, from 0 to 1073741824 | The disk budget in MiB beyond which each must still be, as `project.findOrphans` takes it. |
+| `days` | integer, from 0 to 36500 | How many days unused each must still be (30 when `budgetMb` isn't given either). |
 | `paths` | array of string | **Required.** The project folders, as `project.findOrphans` lists them. |
 
 Result:

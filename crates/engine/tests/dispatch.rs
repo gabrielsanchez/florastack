@@ -133,6 +133,22 @@ fn every_command_dispatches_from_json() {
     let trashed = calls.run("project.trashOrphans", &format!(r#"{{ "paths": [{}], "days": 0 }}"#, serde_json::to_string(&path).unwrap()));
     assert_eq!(trashed["trashed"], json!([path]));
     assert!(dir.path().join("trash").join(Path::new(&path).file_name().unwrap()).is_dir(), "in the trash, not deleted");
+    // Beyond a disk budget, whatever their age: the most recently used stays, the older one goes.
+    for _ in 0..2 {
+        calls.run("project.new", "{}");
+        calls.run("project.close", "{}");
+    }
+    let projects = calls.run("project.findOrphans", r#"{ "days": 0 }"#)["orphans"].as_array().unwrap().clone();
+    assert_eq!(projects.len(), 2);
+    assert_eq!(calls.run("project.findOrphans", r#"{ "budgetMb": 1 }"#)["orphans"], json!([]), "two empty projects fit in 1 MiB");
+    let beyond = calls.run("project.findOrphans", r#"{ "budgetMb": 0 }"#);
+    assert_eq!(beyond["orphans"].as_array().unwrap().len(), 1, "{beyond}");
+    let least_recent = beyond["orphans"][0]["path"].as_str().unwrap().to_owned();
+    let listed = serde_json::to_string(&projects.iter().map(|o| o["path"].clone()).collect::<Vec<_>>()).unwrap();
+    let trashed = calls.run("project.trashOrphans", &format!(r#"{{ "paths": {listed}, "budgetMb": 0 }}"#));
+    assert_eq!(trashed["trashed"], json!([least_recent]), "{trashed}");
+    assert!(trashed["failed"][0]["reason"].as_str().unwrap().ends_with("it was used recently and fits within the disk budget"), "{trashed}");
+    calls.run("project.trashOrphans", &format!(r#"{{ "paths": {listed}, "days": 0 }}"#));
 
     // Alignment, on a stack of frames that can be aligned: six frames, each 2% larger than the one before.
     let stack = common::synthetic_frames(dir.path(), "synthetic", 160, 120, &common::breathing(6, 0.02, None, 2));
