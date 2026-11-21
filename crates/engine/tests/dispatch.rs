@@ -617,4 +617,20 @@ fn events_tell_clients_what_happened() {
         let value: Value = serde_json::from_str(line).unwrap();
         assert!(value["event"].is_string(), "every event says what it is: {line}");
     }
+    // `filmstrip.update` publishes each frame's preview as it makes it, before the job ends and before the project
+    // records the previews.
+    run(&mut engine, "filmstrip.update", "{}");
+    let got: Vec<Value> = events.try_iter().map(|e| serde_json::to_value(e).unwrap()).collect();
+    let partials: Vec<(usize, &Value)> = got.iter().enumerate().filter(|(_, e)| e["event"] == "partial").collect();
+    let frames: Vec<u64> = partials.iter().map(|(_, e)| e["item"]["frame"].as_u64().unwrap()).collect();
+    assert_eq!(frames.len(), 2, "{got:#?}");
+    let done = got.iter().position(|e| e["event"] == "job" && e["job"]["state"] == "done").unwrap();
+    for (at, partial) in &partials {
+        assert_eq!(partial["command"], "filmstrip.update", "{partial}");
+        assert!(Path::new(partial["item"]["preview"].as_str().unwrap()).is_file(), "{partial}");
+        assert!(*at < done, "published before the job ended: {got:#?}");
+    }
+    let listed = run(&mut engine, "filmstrip.list", "{}");
+    let previews: Vec<&str> = listed["frames"].as_array().unwrap().iter().map(|f| f["preview"].as_str().unwrap()).collect();
+    assert_eq!(previews, partials.iter().map(|(_, e)| e["item"]["preview"].as_str().unwrap()).collect::<Vec<_>>());
 }

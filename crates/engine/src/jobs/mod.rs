@@ -217,6 +217,7 @@ impl Phase {
 /// What workers tell the engine.
 pub(crate) enum Message {
     Preview { job: JobId, preview: LivePreview },
+    Partial { job: JobId, item: Value },
     Progress { job: JobId, stage: usize, done: u64, total: u64, at: Duration },
     Finished { job: JobId, outcome: Result<Commit<Value>, CommandError> },
 }
@@ -247,6 +248,19 @@ impl JobContext {
             wake();
         }
     }
+
+    /// Publishes one of the job's results as soon as it is made, before the job ends and its commit runs: an
+    /// [`crate::Event::Partial`] that a client can show at once (`filmstrip.update`: each frame's preview). The job's
+    /// result still says what it made; an item a cancelled job published is never committed.
+    pub fn partial(&self, item: &impl serde::Serialize) {
+        let Ok(item) = serde_json::to_value(item) else { return };
+        if self.tx.send(Message::Partial { job: self.id, item }).is_ok()
+            && let Some(wake) = &self.waker
+        {
+            wake();
+        }
+    }
+
     pub(crate) fn new(id: JobId, phase: Arc<Phase>, tx: Sender<Message>, waker: Option<Waker>, clock: Arc<dyn Clock>) -> JobContext {
         JobContext { id, phase, tx, waker, clock, stage: AtomicUsize::new(0), last_sent: AtomicU64::new(u64::MAX), last_done: AtomicU64::new(0) }
     }

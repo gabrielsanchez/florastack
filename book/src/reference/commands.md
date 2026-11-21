@@ -1954,7 +1954,7 @@ Example:
 
 **Update filmstrip.** Makes the frames' previews that are missing or out of date.
 
-Reads and develops the frames whose preview is missing or out of date (their file, the develop settings or the defect mask changed), and aligns every aligned frame's preview onto the canvas of the framing set, which needs no frame read. A frame whose file can't be read is listed in `unreadable` and keeps its previews. `align.run` makes them too, as it reads the frames. Runs beside other jobs as a preview; a newer call replaces an older one still running. Previews are cache files, not edits: no undo step.
+Reads and develops the frames whose preview is missing or out of date (their file, the develop settings or the defect mask changed), and aligns every aligned frame's preview onto the canvas of the framing set, which needs no frame read. A frame whose file can't be read is listed in `unreadable` and keeps its previews. Each frame's previews are published as soon as they are made, in a `partial` event (`{"frame", "preview", "alignedPreview"}`), so that a view can show them before the job ends. `align.run` makes them too, as it reads the frames. Runs beside other jobs as a preview; a newer call replaces an older one still running. Previews are cache files, not edits: no undo step.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|

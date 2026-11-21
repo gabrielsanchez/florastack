@@ -612,7 +612,7 @@ impl Session {
         self.jobs.is_active(id)
     }
 
-    /// The events since the last call: project, change and history events, then job events.
+    /// The events since the last call: project, change and history events, then jobs' partial results, then job events.
     pub(crate) fn take_events(&mut self) -> Vec<Event> {
         if self.retouch.is_some() && self.changed.intersects(Aspects::RETOUCH.union(Aspects::OUTPUTS)) {
             self.sync_retouch();
@@ -629,6 +629,7 @@ impl Session {
                 dirty: self.is_dirty(),
             });
         }
+        events.extend(self.jobs.take_partials().into_iter().map(|(job, command, item)| Event::Partial { job, command, item }));
         events.extend(self.jobs.take_changed().into_iter().map(|job| Event::Job { job: Box::new(job) }));
         events
     }

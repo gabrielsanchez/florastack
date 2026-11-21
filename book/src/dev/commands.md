@@ -101,6 +101,9 @@ again: `cargo xtask book --update-reference` (see [Writing the documentation](do
 ## Using a command from the apps
 
 The desktop app runs commands through its `Shell` (`app.shell.run("output.rename", json!({ ... }))`) and shows their
-progress from the engine's events; the command-line tool's subcommands and `run` dispatch them the same way. When a
+progress from the engine's events; the command-line tool's subcommands and `run` dispatch them the same way. A job
+whose results are worth showing before it ends publishes each one with `JobContext::partial`, which clients receive as
+a `partial` event (`filmstrip.update` does, so that the frame list fills in frame by frame); the project changes only
+when the job commits. When a
 screen needs a computation, it becomes a command or a query in the engine, with tests, and the screen calls it: no
 logic lives only in a front end.

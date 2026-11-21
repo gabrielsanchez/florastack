@@ -1,16 +1,17 @@
-// The viewer's shader (viewer.rs): the image drawn as a textured quad (its mipmaps: levels.wgsl).
+// The viewer's shader (viewer.rs): the image drawn as a textured quad, or a large image as a quad for each tile in
+// view (its mipmaps: levels.wgsl).
 //
 // The image is linear light in sRGB's primaries (florastack-engine's `view`), in an Rgba16Float texture whose mip
 // levels hold 2 x 2 averages in linear light, so that a zoomed-out image is filtered properly (trilinearly) rather
 // than aliased. The fragment shader clips to [0, 1], composites transparent pixels over a checkerboard in linear
-// light, and applies sRGB's curve (the display transform) unless the target applies it.
+// light and applies the display transform: sRGB's curve, then the monitor profile's table when there is one (what
+// the display makes of sRGB-encoded RGB, `display_profile.rs`). A target that applies sRGB's curve itself (an sRGB
+// format) gets the result linearized, so that the curve is applied once and the display receives exactly it.
 
 struct View {
     // Clip space = offset + scale * image pixel.
     scale: vec2<f32>,
     offset: vec2<f32>,
-    // The image's size, in pixels.
-    size: vec2<f32>,
     // The viewport's top-left in framebuffer pixels, for the checkerboard's phase.
     origin: vec2<f32>,
     // The checkerboard's square, in framebuffer pixels.
@@ -21,12 +22,21 @@ struct View {
     nearest: f32,
     // How many times brighter the image is shown: the retouching view's boost for dark regions, 1 otherwise.
     boost: f32,
+    // 1 when the monitor profile's table applies, and its points a side.
+    lut: f32,
+    lut_size: f32,
+    // The image pixels this quad covers (x, y, width, height): the whole image, or a tile of a large one.
+    quad: vec4<f32>,
+    // The part of the texture it shows (u0, v0, u1, v1): a tile's texture holds a border of its neighbors' pixels.
+    uvs: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var trilinear: sampler;
 @group(0) @binding(3) var pixels: sampler;
+@group(0) @binding(4) var table: texture_3d<f32>;
+@group(0) @binding(5) var bilinear: sampler;
 
 struct Varying {
     @builtin(position) position: vec4<f32>,
@@ -39,10 +49,10 @@ fn vs_image(@builtin(vertex_index) index: u32) -> Varying {
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
-    let uv = corners[index];
+    let corner = corners[index];
     var out: Varying;
-    out.position = vec4<f32>(view.offset + view.scale * (uv * view.size), 0.0, 1.0);
-    out.uv = uv;
+    out.position = vec4<f32>(view.offset + view.scale * (view.quad.xy + corner * view.quad.zw), 0.0, 1.0);
+    out.uv = mix(view.uvs.xy, view.uvs.zw, corner);
     return out;
 }
 
@@ -50,6 +60,12 @@ fn srgb(v: vec3<f32>) -> vec3<f32> {
     let low = v * 12.92;
     let high = 1.055 * pow(v, vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(high, low, v <= vec3<f32>(0.0031308));
+}
+
+fn linear(v: vec3<f32>) -> vec3<f32> {
+    let low = v / 12.92;
+    let high = pow((v + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, v <= vec3<f32>(0.04045));
 }
 
 @fragment
@@ -61,6 +77,11 @@ fn fs_image(in: Varying) -> @location(0) vec4<f32> {
     let light = (i32(cell.x) + i32(cell.y)) % 2 == 0;
     let back = select(vec3<f32>(0.03), vec3<f32>(0.1), light);
     let rgb = mix(back, clamp(c.rgb * view.boost, vec3<f32>(0.0), vec3<f32>(1.0)), clamp(c.a, 0.0, 1.0));
-    let shown = select(rgb, srgb(rgb), view.encode > 0.5);
-    return vec4<f32>(shown, 1.0);
+    var shown = srgb(rgb);
+    if (view.lut > 0.5) {
+        // Grid point i of n sits at texel center (i + 0.5) / n.
+        let n = view.lut_size;
+        shown = textureSampleLevel(table, bilinear, shown * ((n - 1.0) / n) + 0.5 / n, 0.0).rgb;
+    }
+    return vec4<f32>(select(linear(shown), shown, view.encode > 0.5), 1.0);
 }

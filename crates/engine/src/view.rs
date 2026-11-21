@@ -11,6 +11,9 @@
 //! above 1 stay, for the viewer to clip.
 //!
 //! Loading is plain file I/O and arithmetic with no engine state, so a viewer runs it on a thread of its own.
+//!
+//! A monitor's ICC profile becomes the viewer's display transform through [`display_lut`]: a table of what the
+//! display makes of sRGB-encoded RGB (florastack-codecs' `display`), in place of sRGB's curve alone.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +22,10 @@ use florastack_core::{Image, ImageError};
 use florastack_raw::{DevelopSettings, Quality};
 
 use crate::frames::{FrameError, FrameReader};
+
+pub use florastack_codecs::display::{
+    DisplayLut, LUT_SIZE, MAX_PROFILE_BYTES as MAX_DISPLAY_PROFILE_BYTES, StandardDisplay, standard_display_profile,
+};
 
 /// The largest file [`load`] reads: far beyond any frame, small enough not to exhaust memory on a hostile path.
 const MAX_FILE_BYTES: u64 = 2 << 30;
@@ -71,6 +78,15 @@ pub enum ViewError {
     Image(#[from] ImageError),
     #[error("cannot reduce the image")]
     Reduce(#[source] florastack_align::AlignError),
+    #[error("the display profile can't be used")]
+    Profile(#[source] florastack_codecs::CodecError),
+}
+
+/// The display transform for the monitor profile `icc`, as a table of [`LUT_SIZE`] points a side: an error for a
+/// profile a display can't use (not RGB, not a display or color-space profile, unreadable), when the viewer shows
+/// sRGB instead.
+pub fn display_lut(icc: &[u8]) -> Result<DisplayLut, ViewError> {
+    florastack_codecs::display::display_lut(icc, LUT_SIZE).map_err(ViewError::Profile)
 }
 
 /// The image in the file at `path` for display, reduced to at most `max_side` pixels on its longer side when given

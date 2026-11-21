@@ -82,3 +82,28 @@ fn importing_a_folder_with_one_stack_adds_its_frames() {
     drop(harness);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn frames_near_the_selection_are_read_ahead_and_shown_at_once() {
+    let (dir, mut harness) = app("read-ahead");
+    drop_files(&mut harness, &frames(&dir.join("photos")));
+    until(&mut harness, "the frames to be listed", |app| app.shell.frames.len() == 4);
+    let listed: Vec<(u64, std::path::PathBuf)> = harness.state().shell.frames.iter().map(|f| (f.id, f.file.clone())).collect();
+    harness.state_mut().select(Selection::Frame(listed[1].0));
+    until(&mut harness, "the frame to show", |app| app.loading.is_none());
+    // Its neighbors, two on each side where there are, are read ahead.
+    let side = harness.state().viewer.max_side();
+    until(&mut harness, "the neighbors to be read", |app| listed.iter().all(|(_, file)| app.frame_cache.has(file, side)));
+    // Selecting one shows it without reading its file again, and reads its own neighbors ahead.
+    harness.state_mut().select(Selection::Frame(listed[3].0));
+    assert!(harness.state().loading.is_none(), "shown at once from what was read ahead");
+    assert_eq!(harness.state().selection, Selection::Frame(listed[3].0));
+    // A frame whose file changed is read again.
+    let bytes = std::fs::read(&listed[2].1).unwrap();
+    std::fs::write(&listed[2].1, [&bytes[..], &[0u8; 16]].concat()).unwrap();
+    harness.state_mut().select(Selection::Frame(listed[2].0));
+    assert!(harness.state().loading.is_some(), "the changed file is read again");
+    until(&mut harness, "the changed frame to show", |app| app.loading.is_none());
+    drop(harness);
+    let _ = std::fs::remove_dir_all(&dir);
+}

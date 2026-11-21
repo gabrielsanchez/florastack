@@ -35,7 +35,8 @@ and leave dark specks along edges, so prefer the pyramid as the final method, or
 ## In the desktop app
 
 Slabbing has no button of its own yet: run it from the command palette. Align the frames, press Ctrl+K (⌘K on macOS),
-type "slabs", pick **Stack in slabs** and give its parameters as JSON, or `{}` for the defaults:
+type "slabs" and pick **Stack in slabs**. Its parameters open as a form; untick every setting for the defaults, or
+tick **Edit as JSON** and write them, for example:
 
 ```json
 { "slabSize": 12, "overlap": 3, "slabs": { "method": "pyramid" }, "final": { "method": "pyramid", "grit": 0.75 } }

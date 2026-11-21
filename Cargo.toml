@@ -99,6 +99,21 @@ half = { version = "2.7.1", default-features = false, features = ["std"] }
 # (`persistence`); X11 and Wayland, which winit loads at run time.
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "persistence", "wayland", "wgpu_no_default_features", "x11"] }
 egui = "0.37.0"
+# Reading files copied in a file manager from the clipboard (`apps/florastack/src/clipboard.rs`), which egui-winit's
+# text-only paste can't. The version egui-winit already uses, without its image support. Pure Rust, MIT OR Apache-2.0.
+arboard = { version = "3.7.0", default-features = false }
+# The display profile of the monitor the viewer is on (`apps/florastack/src/display_profile/`), from the system's own
+# interfaces: Win32 bindings on Windows, Core Graphics and Core Animation through objc2 on macOS (the versions wgpu
+# already uses), and the root window's `_ICC_PROFILE` through x11rb's pure-Rust connection on X11. The window's handle
+# for its Metal layer comes through raw-window-handle, as eframe hands it out. All MIT OR Apache-2.0 (x11rb: MIT OR
+# Apache-2.0; windows-sys: MIT OR Apache-2.0), bindings without C code.
+windows-sys = { version = "0.61.2", features = ["Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem"] }
+objc2 = "0.6.3"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColorSpace", "CGDirectDisplay", "CGDisplayConfiguration", "CGError"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-core-graphics"] }
+raw-window-handle = "0.6.2"
+x11rb = { version = "0.13.2", default-features = false, features = ["randr"] }
 egui-wgpu = { version = "0.37.0", default-features = false, features = ["macos-window-resize-jitter-fix"] }
 # Choosing X11 (XWayland) over Wayland, which has no file drag-and-drop in winit. The Wayland library is loaded at run
 # time (`wayland-dlopen`, so that building needs no system package), and a native Wayland window draws its own frame

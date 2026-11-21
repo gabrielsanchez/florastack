@@ -33,6 +33,9 @@ pub struct Form {
     pub autosave_minutes: u32,
     pub theme: Theme,
     pub language: String,
+    /// Where the viewer's display transform comes from, and the profile file's path as typed.
+    pub display: crate::display_profile::Choice,
+    pub display_file: String,
     /// What the engine said of its device and memory (`compute.info`) and of its caches (`cache.info`).
     pub compute: Value,
     pub caches: Value,
@@ -56,6 +59,11 @@ impl Form {
             autosave_minutes: app.prefs.autosave_minutes.unwrap_or(DEFAULT_AUTOSAVE_MINUTES),
             theme: app.prefs.theme,
             language: app.prefs.language.clone().unwrap_or_else(|| crate::i18n::LANGUAGES[0].0.to_owned()),
+            display_file: match &app.prefs.display_profile {
+                crate::display_profile::Choice::File(path) => path.display().to_string(),
+                _ => String::new(),
+            },
+            display: app.prefs.display_profile.clone(),
             compute,
             caches,
         }
@@ -106,6 +114,7 @@ pub fn dialog(app: &mut FloraStackApp, ui: &mut egui::Ui, mut form: Form) -> (bo
                 }
             });
         });
+        display(app, ui, &mut form);
         section(ui, "prefs-privacy");
         ui.label(tr_args("prefs-no-telemetry", &[("name", florastack_engine::branding::DISPLAY_NAME.into())]));
     });
@@ -171,6 +180,37 @@ fn compute(app: &mut FloraStackApp, ui: &mut egui::Ui, form: &mut Form) {
         None => String::new(),
     };
     ui.weak(result);
+}
+
+/// The display profile: Automatic, sRGB or a file, and what the viewer shows through now.
+fn display(app: &FloraStackApp, ui: &mut egui::Ui, form: &mut Form) {
+    use crate::display_profile::Choice;
+    section(ui, "prefs-display");
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut form.display, Choice::Automatic, tr("prefs-display-automatic")).on_hover_text(tr("tip-display-automatic"));
+        ui.radio_value(&mut form.display, Choice::Srgb, tr("prefs-display-srgb")).on_hover_text(tr("tip-display-srgb"));
+        let file = Choice::File(PathBuf::from(form.display_file.trim()));
+        ui.radio_value(&mut form.display, file, tr("prefs-display-file")).on_hover_text(tr("tip-display-file"));
+    });
+    if matches!(form.display, Choice::File(_)) {
+        ui.horizontal(|ui| {
+            let label = ui.label(tr("prefs-display-file")).id;
+            if ui.add(egui::TextEdit::singleline(&mut form.display_file).desired_width(300.0)).labelled_by(label).changed() {
+                form.display = Choice::File(PathBuf::from(form.display_file.trim()));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if ui.button(tr("browse")).clicked()
+                && let Some(file) = crate::dialogs::read_file(("ICC", &["icc", "icm"]))
+            {
+                form.display_file = file.display().to_string();
+                form.display = Choice::File(file);
+            }
+        });
+    }
+    ui.weak(tr("prefs-display-help"));
+    if let Some(decided) = &app.display.decided {
+        ui.label(decided.describe());
+    }
 }
 
 /// The cache folder, and what the caches take, with a clean-up of what crashed runs left.
@@ -252,6 +292,12 @@ impl FloraStackApp {
         self.prefs.autosave_minutes = (form.autosave_minutes != DEFAULT_AUTOSAVE_MINUTES).then_some(form.autosave_minutes);
         self.set_autosave();
         self.prefs.language = Some(form.language.clone()).filter(|l| l != crate::i18n::LANGUAGES[0].0);
+        if self.prefs.display_profile == form.display {
+            // The same file may have been calibrated again: read it again.
+            self.display.refresh();
+        } else {
+            self.prefs.display_profile = form.display.clone();
+        }
         if self.prefs.theme != form.theme {
             self.prefs.theme = form.theme;
             crate::app::apply_theme(ctx, form.theme);

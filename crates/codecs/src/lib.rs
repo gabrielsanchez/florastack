@@ -9,6 +9,7 @@
 //! - **Color** ([`color`]): embedded ICC profiles are kept, sRGB is assumed without one, and files whose profile has
 //!   another curve than sRGB's or a linear one are linearized as they are read. Outputs go in the input's profile,
 //!   sRGB or a wide working space ([`OutputProfile`]).
+//! - **Displays** ([`display`]): a monitor's ICC profile as a table of what it makes of sRGB, for a viewer.
 //! - **Orientation** ([`OrientationPolicy`]): the recorded orientation is applied, ignored or forced on reading;
 //!   outputs are always written upright.
 //!
@@ -24,6 +25,7 @@
 pub mod codec;
 pub mod color;
 mod decode;
+pub mod display;
 mod encode;
 pub mod error;
 pub mod format;

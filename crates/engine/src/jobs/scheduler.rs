@@ -75,6 +75,8 @@ pub(crate) struct Jobs {
     recent: VecDeque<JobInfo>,
     /// Jobs whose state or progress changed since the engine last looked.
     changed: Vec<JobInfo>,
+    /// Results jobs published as they made them, by job and command, since the engine last looked.
+    partials: Vec<(JobId, String, Value)>,
     /// Why the recently failed jobs failed, until [`Jobs::take_failure`] takes it.
     failures: HashMap<JobId, CommandError>,
 }
@@ -94,6 +96,7 @@ impl Jobs {
             active: Vec::new(),
             recent: VecDeque::new(),
             changed: Vec::new(),
+            partials: Vec::new(),
             failures: HashMap::new(),
         }
     }
@@ -277,6 +280,12 @@ impl Jobs {
                 }
                 None
             }
+            Message::Partial { job, item } => {
+                if let Some(a) = self.active.iter().find(|a| a.id == job) {
+                    self.partials.push((job, a.spec.name().to_owned(), item));
+                }
+                None
+            }
             Message::Progress { job, stage, done, total, at } => {
                 if let Some(a) = self.active.iter_mut().find(|a| a.id == job) {
                     a.tracker.update(stage, done, total, at);
@@ -333,6 +342,10 @@ impl Jobs {
 
     pub(crate) fn take_changed(&mut self) -> Vec<JobInfo> {
         std::mem::take(&mut self.changed)
+    }
+
+    pub(crate) fn take_partials(&mut self) -> Vec<(JobId, String, Value)> {
+        std::mem::take(&mut self.partials)
     }
 }
 

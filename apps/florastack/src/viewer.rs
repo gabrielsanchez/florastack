@@ -5,19 +5,25 @@
 //!   floats, and goes up once as an `Rgba16Float` texture with a full mip chain made on the GPU from 2 x 2 averages
 //!   in linear light (`levels.wgsl`): zoomed out, the image is filtered trilinearly instead of aliasing (unfiltered
 //!   downscaling makes previews look noisy and mislead); from 100% up, each image pixel is a crisp square.
-//! - **Display transform**: sRGB's curve, in the shader unless the window's surface applies it; values clip to
-//!   `[0, 1]`, and transparent pixels show over a checkerboard. Monitor profiles are a roadmap follow-up.
+//! - **Display transform**: values clip to `[0, 1]`, transparent pixels show over a checkerboard, then sRGB's curve,
+//!   and the monitor profile's table when one applies ([`GpuViewer::set_display`], `display_profile.rs`). A surface
+//!   that applies sRGB's curve itself gets the result linearized, so that the display receives exactly it.
 //! - **Zoom**: in device pixels per image pixel, so that 100% shows every image pixel on one screen pixel whatever
 //!   the display's scale. The view fits the window until the user zooms or pans.
 //!
-//! Images larger than the device's largest texture (8192 pixels a side on most) are loaded reduced to it. Without
-//! a GPU renderer (headless tests), the viewer shows a reduced 8-bit copy through egui's own textures.
+//! - **Large images**: an image larger than the device's largest texture (8192 pixels a side on most) loads at up to
+//!   twice that and is tiled: a half-size overview, made on the GPU from its tiles' first mip levels, shows it at 50%
+//!   and less; above that, the tiles in view, of 2048 pixels each holding two of their neighbors' on each side so that
+//!   filtering shows no seams, are uploaded as they come into view, and those least recently drawn let go beyond 512
+//!   MB.
+//!
+//! Without a GPU renderer (headless tests), the viewer shows a reduced 8-bit copy through egui's own textures.
 
 use std::sync::Arc;
 
 use egui::{Pos2, Rect, Sense, Vec2};
 use egui_wgpu::wgpu;
-use florastack_engine::view::DisplayImage;
+use florastack_engine::view::{DisplayImage, DisplayLut};
 
 use crate::prefs::Compare;
 
@@ -25,6 +31,9 @@ const VIEWER_WGSL: &str = include_str!("viewer.wgsl");
 const LEVELS_WGSL: &str = include_str!("levels.wgsl");
 /// The side of the reduced copy shown without a GPU renderer.
 const FALLBACK_SIDE: usize = 2048;
+/// The longest side images load at on the GPU, which tiles those larger than its largest texture: 16384 pixels, as
+/// large as medium-format cameras' frames (an image of that side takes up to 2 GB as half floats).
+const MAX_LOAD_SIDE: usize = 16384;
 /// The zoom's limits, in device pixels per image pixel.
 const MIN_ZOOM: f32 = 1.0 / 64.0;
 const MAX_ZOOM: f32 = 64.0;
@@ -137,9 +146,10 @@ impl Viewer {
         self.gpu.is_some()
     }
 
-    /// The longest side to load images at: the device's largest texture, or the fallback's size.
+    /// The longest side to load images at: twice the device's largest texture (larger images are tiled), at most
+    /// [`MAX_LOAD_SIDE`] unless the texture itself is larger; or the fallback's size.
     pub fn max_side(&self) -> usize {
-        self.gpu.map_or(FALLBACK_SIDE, |s| s as usize)
+        self.gpu.map_or(FALLBACK_SIDE, |limit| (2 * limit as usize).min(MAX_LOAD_SIDE).max(limit as usize))
     }
 
     /// Shows `image`, fitted.
@@ -358,36 +368,101 @@ pub struct GpuViewer {
     bilinear: wgpu::Sampler,
     /// Whether the shader applies sRGB's curve (the surface doesn't).
     encode: bool,
+    /// The largest texture side: a larger image is tiled.
+    limit: u32,
     /// The images uploaded, by their ids, the most recently used last.
-    textures: Vec<(u64, wgpu::Texture, wgpu::TextureView)>,
-    /// One for each image drawn at once (two when comparing): its view's uniform, and its bind group with the image
-    /// bound now.
+    uploaded: Vec<Uploaded>,
+    /// One for each image drawn at once (two when comparing): what it draws this frame.
     slots: Vec<Slot>,
+    /// Counts the frames prepared, for the tiles least recently drawn.
+    frame: u64,
+    /// The display transform's table after sRGB's curve, and its points a side when it applies (none for sRGB).
+    table: Layer,
+    table_size: Option<u32>,
 }
 
-/// An image drawn: its view's uniform, and the bind group of the uniform with the image it draws, by the image's id.
+/// A texture with its mip levels, and its view.
+struct Layer {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// An image uploaded: whole when it fits in a texture; otherwise a half-size overview, made from its tiles, for the
+/// zoomed-out view, and its tiles at full size, uploaded as they come into view at more than 50%.
+struct Uploaded {
+    id: u64,
+    /// The whole image, or its overview.
+    whole: Layer,
+    /// The overview's size in image pixels (twice its own); the image's size when it isn't tiled.
+    covers: [u32; 2],
+    /// The tiles, none when the image isn't tiled.
+    tiles: Vec<Tile>,
+}
+
+/// A tile: the image pixels it draws (its core, `[x, y, w, h]`), the ones its texture holds (the core and up to
+/// [`BORDER`] pixels of its neighbors on each side, so that filtering across its edges needs nothing it lacks), and
+/// its texture once uploaded, with the frame it was last drawn in.
+struct Tile {
+    core: [u32; 4],
+    held: [u32; 4],
+    layer: Option<Layer>,
+    drawn: u64,
+}
+
+/// What a slot draws this frame: a quad for each texture, each with its uniform and its bind group.
 struct Slot {
-    uniform: wgpu::Buffer,
-    bound: Option<(u64, wgpu::BindGroup)>,
+    uniforms: Vec<wgpu::Buffer>,
+    drawn: Vec<wgpu::BindGroup>,
 }
 
-/// The uniform's size: the 12 floats of `View` in viewer.wgsl.
-const UNIFORM_BYTES: u64 = 48;
+/// The uniform's size: the 20 floats of `View` in viewer.wgsl.
+const UNIFORM_BYTES: u64 = 80;
 /// How many images can be drawn at once, and how many stay uploaded.
 const SLOTS: usize = 2;
 const KEPT_TEXTURES: usize = 4;
+/// A tile's side at most, and how many pixels of its neighbors it holds on each side: two, so that its first mip
+/// level, which tiles use down to 50%, still has one.
+const TILE: u32 = 2048;
+const BORDER: u32 = 2;
+/// The bytes of tiles (with their mip levels) an image keeps uploaded beyond those drawn now.
+const TILE_BUDGET: u64 = 512 << 20;
+
+/// The tiles of an image of `width` x `height` pixels for textures of `limit` pixels a side at most: cores of
+/// [`TILE`] pixels or less, even and at even places, so that each tile's first mip level averages the same 2 x 2
+/// blocks the overview does.
+fn tiles(width: u32, height: u32, limit: u32) -> Vec<Tile> {
+    let side = TILE.min(limit.saturating_sub(2 * BORDER + 1)) & !1;
+    let side = side.max(2);
+    let mut tiles = Vec::new();
+    for y in (0..height).step_by(side as usize) {
+        for x in (0..width).step_by(side as usize) {
+            let (w, h) = (side.min(width - x), side.min(height - y));
+            let (hx, hy) = (x.saturating_sub(BORDER), y.saturating_sub(BORDER));
+            let held = [hx, hy, (x + w + BORDER).min(width) - hx, (y + h + BORDER).min(height) - hy];
+            tiles.push(Tile { core: [x, y, w, h], held, layer: None, drawn: 0 });
+        }
+    }
+    tiles
+}
+
+/// A texture's bytes with its mip levels: a third more than its first.
+fn layer_bytes(layer: &Layer) -> u64 {
+    let size = layer.texture.size();
+    u64::from(size.width) * u64::from(size.height) * 8 * 4 / 3
+}
 
 impl GpuViewer {
     /// Makes the viewer's resources for `state`'s device and surface and keeps them in its renderer; returns the
-    /// largest image side it takes, or `None` when the viewer's shaders don't compile there (the viewer then draws
+    /// largest texture side it takes, or `None` when the viewer's shaders don't compile there (the viewer then draws
     /// through egui). The device then logs its errors instead of panicking, as wgpu does by default: a crash loses
     /// work.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn install(state: &egui_wgpu::RenderState) -> Option<u32> {
         state.device.on_uncaptured_error(Arc::new(|e: wgpu::Error| tracing::error!("the display's GPU reported an error: {e}")));
         let viewer = GpuViewer::new(&state.device, state.target_format)?;
+        let limit = viewer.limit;
         state.renderer.write().callback_resources.insert(viewer);
-        Some(state.device.limits().max_texture_dimension_2d)
+        Some(limit)
     }
 
     /// In a browser built with threads, wgpu's objects can't be shared between threads, which egui's renderer asks of
@@ -446,18 +521,13 @@ impl GpuViewer {
             pixels: sampler("viewer pixels", wgpu::FilterMode::Nearest, wgpu::MipmapFilterMode::Nearest),
             bilinear: sampler("viewer bilinear", wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Nearest),
             encode: !target.is_srgb(),
-            textures: Vec::new(),
-            slots: (0..SLOTS)
-                .map(|_| Slot {
-                    uniform: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("viewer view"),
-                        size: UNIFORM_BYTES,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                    bound: None,
-                })
-                .collect(),
+            limit: device.limits().max_texture_dimension_2d,
+            uploaded: Vec::new(),
+            slots: (0..SLOTS).map(|_| Slot { uniforms: Vec::new(), drawn: Vec::new() }).collect(),
+            frame: 0,
+            // An empty table of 2 points until a profile applies: the shader skips it meanwhile.
+            table: table_texture(device, None, 2, &[]),
+            table_size: None,
         };
         if let Some(e) = pollster::block_on(scope.pop()) {
             tracing::warn!("the viewer's shaders don't compile on this GPU ({e}): images are drawn without them");
@@ -466,103 +536,202 @@ impl GpuViewer {
         Some(resources)
     }
 
-    /// Binds image `id` to `slot`, uploading `image` first when it isn't uploaded yet; nothing for a slot out of range.
-    fn bind(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, slot: usize, id: u64, image: &DisplayImage) {
-        if self.slots.get(slot).is_none_or(|s| s.bound.as_ref().is_some_and(|(bound, _)| *bound == id)) {
-            return;
-        }
-        let (texture, view) = match self.textures.iter().position(|(t, _, _)| *t == id) {
-            Some(i) => {
-                let (_, texture, view) = self.textures.remove(i);
-                (texture, view)
+    /// Uses `lut`, a monitor profile's table, as the display transform after sRGB's curve; `None` for sRGB's curve
+    /// alone.
+    pub fn set_display(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, lut: Option<&DisplayLut>) {
+        match lut {
+            Some(lut) if lut.size >= 2 && lut.rgb.len() == lut.size.pow(3) * 3 => {
+                self.table = table_texture(device, Some(queue), lut.size, &lut.rgb);
+                self.table_size = u32::try_from(lut.size).ok();
             }
-            None => self.upload(device, queue, encoder, image),
-        };
-        let Some(s) = self.slots.get(slot) else { return };
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("viewer image"),
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: s.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.trilinear) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.pixels) },
-            ],
-        });
-        // The most recently used last; the oldest beyond those kept are let go (a bind group holds its own).
-        self.textures.push((id, texture, view));
-        if self.textures.len() > KEPT_TEXTURES {
-            self.textures.remove(0);
-        }
-        if let Some(s) = self.slots.get_mut(slot) {
-            s.bound = Some((id, group));
+            _ => self.table_size = None,
         }
     }
 
-    /// Writes `updates` (regions at their top left corners) into image `id`'s texture, if it is uploaded, and makes
-    /// its levels again.
+    /// The same viewer, tiling images larger than `limit` pixels a side (at most the device's own limit), as tests
+    /// do to tile small images.
+    #[must_use]
+    pub fn with_limit(mut self, limit: u32) -> GpuViewer {
+        self.limit = limit.clamp(2 * BORDER + 3, self.limit);
+        self
+    }
+
+    /// Image `id`, uploaded first when it isn't yet (as the most recently used, the oldest beyond those kept let go).
+    fn uploaded(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        id: u64,
+        image: &DisplayImage,
+    ) -> Option<usize> {
+        let uploaded = match self.uploaded.iter().position(|u| u.id == id) {
+            Some(i) => self.uploaded.remove(i),
+            None => self.upload(device, queue, encoder, id, image)?,
+        };
+        self.uploaded.push(uploaded);
+        if self.uploaded.len() > KEPT_TEXTURES {
+            self.uploaded.remove(0);
+        }
+        Some(self.uploaded.len() - 1)
+    }
+
+    /// Uploads `image`: whole when it fits in a texture; otherwise its overview, made from each tile uploaded in turn
+    /// (the tiles themselves are uploaded again when drawn).
+    fn upload(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        id: u64,
+        image: &DisplayImage,
+    ) -> Option<Uploaded> {
+        let (w, h) = (u32::try_from(image.width).ok()?.max(1), u32::try_from(image.height).ok()?.max(1));
+        if image.rgba.len() < image.width * image.height * 4 {
+            return None;
+        }
+        if w <= self.limit && h <= self.limit {
+            let whole = self.layer(device, queue, encoder, image, [0, 0, w, h], false);
+            return Some(Uploaded { id, whole, covers: [w, h], tiles: Vec::new() });
+        }
+        // Twice the limit at most (the loader's), so that the overview fits.
+        let (ow, oh) = ((w / 2).clamp(1, self.limit), (h / 2).clamp(1, self.limit));
+        let overview = GpuViewer::texture(device, "viewer overview", ow, oh);
+        let tiles = tiles(w, h, self.limit);
+        for tile in &tiles {
+            let layer = self.layer(device, queue, encoder, image, tile.held, true);
+            let [x, y, cw, ch] = tile.core;
+            let (from, to) = ([(x - tile.held[0]) / 2, (y - tile.held[1]) / 2], [x / 2, y / 2]);
+            let (cw, ch) = ((cw / 2).min(ow.saturating_sub(to[0])), (ch / 2).min(oh.saturating_sub(to[1])));
+            if cw == 0 || ch == 0 {
+                continue;
+            }
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &layer.texture,
+                    mip_level: 1,
+                    origin: wgpu::Origin3d { x: from[0], y: from[1], z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &overview,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: to[0], y: to[1], z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+            );
+        }
+        self.levels(device, encoder, &overview);
+        let view = overview.create_view(&wgpu::TextureViewDescriptor::default());
+        Some(Uploaded { id, whole: Layer { texture: overview, view }, covers: [2 * ow, 2 * oh], tiles })
+    }
+
+    /// An `Rgba16Float` texture of `w` x `h` pixels with every mip level.
+    fn texture(device: &wgpu::Device, label: &str, w: u32, h: u32) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 32 - w.max(h).leading_zeros(),
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    }
+
+    /// Uploads region `[x, y, w, h]` of `image` as a mipmapped texture, its levels made by `encoder`. With `even`,
+    /// the texture's sides are made even by repeating the region's last column and row, so that its first mip level
+    /// averages whole 2 x 2 blocks.
+    fn layer(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        image: &DisplayImage,
+        [x, y, w, h]: [u32; 4],
+        even: bool,
+    ) -> Layer {
+        let (tw, th) = if even { (w.next_multiple_of(2), h.next_multiple_of(2)) } else { (w, h) };
+        let texture = GpuViewer::texture(device, "viewer image", tw, th);
+        let write = |at: [u32; 2], from: [u32; 2], size: [u32; 2]| {
+            write_region(queue, &texture, image, at, from, size);
+        };
+        write([0, 0], [x, y], [w, h]);
+        if tw > w {
+            write([w, 0], [x + w - 1, y], [1, h]);
+        }
+        if th > h {
+            write([0, h], [x, y + h - 1], [w, 1]);
+            if tw > w {
+                write([w, h], [x + w - 1, y + h - 1], [1, 1]);
+            }
+        }
+        self.levels(device, encoder, &texture);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Layer { texture, view }
+    }
+
+    /// Writes `updates` (regions at their top left corners) into image `id`'s textures, if it is uploaded, and makes
+    /// their levels again: the whole image's, or the overview's (from `image`, which holds the updates already) and
+    /// the uploaded tiles' they reach.
     fn update(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         id: u64,
+        image: &DisplayImage,
         updates: &[([usize; 2], Arc<DisplayImage>)],
     ) {
-        let Some((_, texture, _)) = self.textures.iter().find(|(t, _, _)| *t == id) else { return };
-        let size = texture.size();
+        let Some(uploaded) = self.uploaded.iter().find(|u| u.id == id) else { return };
         let mut written = false;
+        let mut tiles_written = vec![false; uploaded.tiles.len()];
         for (at, region) in updates {
             let (Ok(x), Ok(y), Ok(w), Ok(h)) =
                 (u32::try_from(at[0]), u32::try_from(at[1]), u32::try_from(region.width), u32::try_from(region.height))
             else {
                 continue;
             };
-            if w == 0 || h == 0 || x + w > size.width || y + h > size.height {
+            if w == 0 || h == 0 || x.saturating_add(w) as usize > image.width || y.saturating_add(h) as usize > image.height {
                 continue;
             }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
-                bytemuck::cast_slice(&region.rgba),
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            );
-            written = true;
+            if uploaded.tiles.is_empty() {
+                write_region(queue, &uploaded.whole.texture, region, [x, y], [0, 0], [w, h]);
+                written = true;
+                continue;
+            }
+            // The overview's 2 x 2 averages over the region, widened to whole blocks.
+            let size = uploaded.whole.texture.size();
+            let (bx, by) = (x / 2, y / 2);
+            let (bw, bh) = ((x + w).div_ceil(2).min(size.width) - bx, (y + h).div_ceil(2).min(size.height) - by);
+            if bw > 0 && bh > 0 {
+                let reduced = halve(image, [bx, by, bw, bh]);
+                write_region(queue, &uploaded.whole.texture, &reduced, [bx, by], [0, 0], [bw, bh]);
+                written = true;
+            }
+            for (tile, touched) in uploaded.tiles.iter().zip(&mut tiles_written) {
+                let Some(layer) = &tile.layer else { continue };
+                let [hx, hy, hw, hh] = tile.held;
+                let (x0, y0, x1, y1) = (x.max(hx), y.max(hy), (x + w).min(hx + hw), (y + h).min(hy + hh));
+                if x0 < x1 && y0 < y1 {
+                    write_region(queue, &layer.texture, image, [x0 - hx, y0 - hy], [x0, y0], [x1 - x0, y1 - y0]);
+                    *touched = true;
+                }
+            }
         }
         if written {
-            self.levels(device, encoder, texture);
+            self.levels(device, encoder, &uploaded.whole.texture);
         }
-    }
-
-    /// Uploads `image` as a mipmapped texture, its levels made by `encoder`.
-    fn upload(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        image: &DisplayImage,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let (w, h) = (u32::try_from(image.width).unwrap_or(1).max(1), u32::try_from(image.height).unwrap_or(1).max(1));
-        let levels = 32 - w.max(h).leading_zeros();
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("viewer image"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            bytemuck::cast_slice(&image.rgba),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        self.levels(device, encoder, &texture);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        for (tile, touched) in uploaded.tiles.iter().zip(tiles_written) {
+            if let (Some(layer), true) = (&tile.layer, touched) {
+                self.levels(device, encoder, &layer.texture);
+            }
+        }
     }
 
     /// Makes `texture`'s mip levels from its first, each level the 2 x 2 averages of the one above.
@@ -598,6 +767,135 @@ impl GpuViewer {
             pass.draw(0..3, 0..1);
         }
     }
+
+    /// Which of image `index`'s textures to draw at `zoom` over the image pixels `visible` (`[x0, y0, x1, y1]`), each
+    /// with the image pixels its quad covers and the part of the texture it shows (`[x, y, w, h]` and `[u0, v0, u1,
+    /// v1]`): the whole image or its overview, or the tiles in view at more than 50%, uploaded first when they aren't.
+    fn quads(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        (index, image): (usize, &DisplayImage),
+        zoom: f32,
+        visible: [f32; 4],
+    ) -> Vec<(usize, [f32; 4], [f32; 4])> {
+        const WHOLE: usize = usize::MAX;
+        let frame = self.frame;
+        let Some(uploaded) = self.uploaded.get(index) else { return Vec::new() };
+        let covers = [0.0, 0.0, uploaded.covers[0] as f32, uploaded.covers[1] as f32];
+        if uploaded.tiles.is_empty() || zoom <= 0.5 {
+            return vec![(WHOLE, covers, [0.0, 0.0, 1.0, 1.0])];
+        }
+        let wanted: Vec<usize> = uploaded
+            .tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                let [x, y, w, h] = t.core.map(|v| v as f32);
+                x < visible[2] && y < visible[3] && x + w > visible[0] && y + h > visible[1]
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for &i in &wanted {
+            let missing = self.uploaded.get(index).and_then(|u| u.tiles.get(i)).is_some_and(|t| t.layer.is_none());
+            if missing && let Some(held) = self.uploaded.get(index).and_then(|u| u.tiles.get(i)).map(|t| t.held) {
+                let layer = self.layer(device, queue, encoder, image, held, true);
+                if let Some(tile) = self.uploaded.get_mut(index).and_then(|u| u.tiles.get_mut(i)) {
+                    tile.layer = Some(layer);
+                }
+            }
+        }
+        let Some(uploaded) = self.uploaded.get_mut(index) else { return Vec::new() };
+        let mut quads = Vec::new();
+        for &i in &wanted {
+            let Some(tile) = uploaded.tiles.get_mut(i) else { continue };
+            tile.drawn = frame;
+            let Some(layer) = &tile.layer else { continue };
+            let size = layer.texture.size();
+            let ([x, y, w, h], [hx, hy, _, _]) = (tile.core, tile.held);
+            let (u0, v0) = ((x - hx) as f32 / size.width as f32, (y - hy) as f32 / size.height as f32);
+            let (u1, v1) = (u0 + w as f32 / size.width as f32, v0 + h as f32 / size.height as f32);
+            quads.push((i, [x as f32, y as f32, w as f32, h as f32], [u0, v0, u1, v1]));
+        }
+        // The tiles least recently drawn go beyond the budget, never those drawn now.
+        let mut kept: u64 = uploaded.tiles.iter().filter(|t| t.drawn != frame).filter_map(|t| t.layer.as_ref()).map(layer_bytes).sum();
+        while kept > TILE_BUDGET {
+            let Some(oldest) = uploaded.tiles.iter_mut().filter(|t| t.layer.is_some() && t.drawn != frame).min_by_key(|t| t.drawn) else { break };
+            kept = kept.saturating_sub(oldest.layer.take().as_ref().map_or(0, layer_bytes));
+        }
+        quads
+    }
+}
+
+/// A display table as an `Rgba16Float` 3D texture of `size` points a side, its RGB values (red fastest) written through
+/// `queue`; left empty without one.
+fn table_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, size: usize, rgb: &[f32]) -> Layer {
+    let points = u32::try_from(size).unwrap_or(2);
+    let extent = wgpu::Extent3d { width: points, height: points, depth_or_array_layers: points };
+    let texels: Vec<u16> = rgb
+        .chunks(3)
+        .flat_map(|v| [v[0], v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0), 1.0])
+        .map(|v| half::f16::from_f32(v).to_bits())
+        .collect();
+    let descriptor = wgpu::TextureDescriptor {
+        label: Some("viewer display table"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    };
+    let texture = device.create_texture(&descriptor);
+    if let Some(queue) = queue {
+        queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(points * 8), rows_per_image: Some(points) },
+            extent,
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    Layer { texture, view }
+}
+
+/// Writes the `size` pixels of `from` at `from_at` into `texture`'s first level at `at`.
+fn write_region(queue: &wgpu::Queue, texture: &wgpu::Texture, from: &DisplayImage, at: [u32; 2], from_at: [u32; 2], size: [u32; 2]) {
+    let Ok(row) = u32::try_from(from.width) else { return };
+    let offset = (u64::from(from_at[1]) * u64::from(row) + u64::from(from_at[0])) * 8;
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x: at[0], y: at[1], z: 0 }, aspect: wgpu::TextureAspect::All },
+        bytemuck::cast_slice(&from.rgba),
+        wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(row * 8), rows_per_image: Some(size[1]) },
+        wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+    );
+}
+
+/// The 2 x 2 averages, in linear light, of `image`'s blocks `[x, y, w, h]` (in blocks), as the overview holds them;
+/// a block cut by the image's edge averages the pixels it has.
+fn halve(image: &DisplayImage, [x, y, w, h]: [u32; 4]) -> DisplayImage {
+    let (w, h) = (w as usize, h as usize);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for by in y as usize..y as usize + h {
+        for bx in x as usize..x as usize + w {
+            let mut sum = [0.0f32; 4];
+            let mut count = 0.0;
+            for (px, py) in [(2 * bx, 2 * by), (2 * bx + 1, 2 * by), (2 * bx, 2 * by + 1), (2 * bx + 1, 2 * by + 1)] {
+                if px >= image.width || py >= image.height {
+                    continue;
+                }
+                let at = (py * image.width + px) * 4;
+                for (c, s) in sum.iter_mut().enumerate() {
+                    *s += image.rgba.get(at + c).map_or(0.0, |&b| half::f16::from_bits(b).to_f32());
+                }
+                count += 1.0;
+            }
+            rgba.extend(sum.map(|s| half::f16::from_f32(s / f32::max(count, 1.0)).to_bits()));
+        }
+    }
+    DisplayImage { width: w, height: h, rgba, alpha: image.alpha }
 }
 
 /// One frame's drawing of an image of the viewer: which, through which slot, and where it lies in the view.
@@ -625,29 +923,89 @@ impl egui_wgpu::CallbackTrait for Paint {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(viewer) = resources.get_mut::<GpuViewer>() else { return Vec::new() };
-        viewer.update(device, queue, encoder, self.id, &self.updates);
-        viewer.bind(device, queue, encoder, self.slot, self.id, &self.image);
-        let Some(slot) = viewer.slots.get(self.slot) else { return Vec::new() };
+        viewer.frame += 1;
+        viewer.update(device, queue, encoder, self.id, &self.image, &self.updates);
+        let Some(index) = viewer.uploaded(device, queue, encoder, self.id, &self.image) else { return Vec::new() };
         // Clip space from image pixels: the view's center shows `center`, `zoom` device pixels to an image pixel.
         let ppp = screen.pixels_per_point;
         let (w, h) = (self.rect.width() * ppp, self.rect.height() * ppp);
         let (sx, sy) = (2.0 * self.zoom / w.max(1.0), -2.0 * self.zoom / h.max(1.0));
         let (ox, oy) = (-self.center.x * sx, -self.center.y * sy);
+        let half_view = Vec2::new(w, h) / (2.0 * self.zoom.max(1e-6));
+        let visible = [self.center.x - half_view.x, self.center.y - half_view.y, self.center.x + half_view.x, self.center.y + half_view.y];
+        let quads = viewer.quads(device, queue, encoder, (index, &self.image), self.zoom, visible);
         let origin = self.rect.min * ppp;
         let nearest = if self.zoom >= 1.0 { 1.0 } else { 0.0 };
         let encode = if viewer.encode { 1.0 } else { 0.0 };
-        let view: [f32; 12] =
-            [sx, sy, ox, oy, self.image.width as f32, self.image.height as f32, origin.x, origin.y, (8.0 * ppp).round(), encode, nearest, self.boost];
-        queue.write_buffer(&slot.uniform, 0, bytemuck::cast_slice(&view));
+        let mut drawn = Vec::with_capacity(quads.len());
+        for (n, (texture, quad, uvs)) in quads.into_iter().enumerate() {
+            let Some(uploaded) = viewer.uploaded.get(index) else { break };
+            let layer = match uploaded.tiles.get(texture) {
+                Some(tile) => tile.layer.as_ref(),
+                None => Some(&uploaded.whole),
+            };
+            let Some(layer) = layer else { continue };
+            let Some(slot) = viewer.slots.get_mut(self.slot) else { break };
+            while slot.uniforms.len() <= n {
+                slot.uniforms.push(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("viewer view"),
+                    size: UNIFORM_BYTES,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            let Some(uniform) = slot.uniforms.get(n) else { break };
+            let (lut, lut_size) = viewer.table_size.map_or((0.0, 2.0), |n| (1.0, n as f32));
+            let view: [f32; 20] = [
+                sx,
+                sy,
+                ox,
+                oy,
+                origin.x,
+                origin.y,
+                (8.0 * ppp).round(),
+                encode,
+                nearest,
+                self.boost,
+                lut,
+                lut_size,
+                quad[0],
+                quad[1],
+                quad[2],
+                quad[3],
+                uvs[0],
+                uvs[1],
+                uvs[2],
+                uvs[3],
+            ];
+            queue.write_buffer(uniform, 0, bytemuck::cast_slice(&view));
+            drawn.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("viewer image"),
+                layout: &viewer.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&layer.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&viewer.trilinear) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&viewer.pixels) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&viewer.table.view) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&viewer.bilinear) },
+                ],
+            }));
+        }
+        if let Some(slot) = viewer.slots.get_mut(self.slot) {
+            slot.drawn = drawn;
+        }
         Vec::new()
     }
 
     fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
         let Some(viewer) = resources.get::<GpuViewer>() else { return };
-        let Some((_, group)) = viewer.slots.get(self.slot).and_then(|s| s.bound.as_ref()) else { return };
+        let Some(slot) = viewer.slots.get(self.slot) else { return };
         pass.set_pipeline(&viewer.pipeline);
-        pass.set_bind_group(0, group, &[]);
-        pass.draw(0..6, 0..1);
+        for group in &slot.drawn {
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..6, 0..1);
+        }
     }
 }
 
@@ -698,10 +1056,51 @@ pub(crate) mod tests {
     /// to its scissor `[x, y, w, h]` when it has one, as egui-wgpu draws a frame's callbacks: every `prepare` first,
     /// then every `paint`; and reads the target back.
     fn render(device: &wgpu::Device, queue: &wgpu::Queue, paints: &[(Paint, Option<[u32; 4]>)], size: u32) -> Vec<u8> {
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let format = wgpu::TextureFormat::Rgba8Unorm;
+        render_with(device, queue, paints, size, None)
+    }
+
+    /// [`render`], tiling images larger than `limit` pixels a side when there is one.
+    fn render_with(device: &wgpu::Device, queue: &wgpu::Queue, paints: &[(Paint, Option<[u32; 4]>)], size: u32, limit: Option<u32>) -> Vec<u8> {
+        render_in(device, queue, &mut resources(device, limit), paints, size)
+    }
+
+    /// The viewer's resources for an `Rgba8Unorm` target, tiling images larger than `limit` when there is one.
+    fn resources(device: &wgpu::Device, limit: Option<u32>) -> egui_wgpu::CallbackResources {
+        resources_for(device, wgpu::TextureFormat::Rgba8Unorm, limit)
+    }
+
+    /// The viewer's resources for a target of `format`.
+    fn resources_for(device: &wgpu::Device, format: wgpu::TextureFormat, limit: Option<u32>) -> egui_wgpu::CallbackResources {
         let mut resources = egui_wgpu::CallbackResources::default();
-        resources.insert(GpuViewer::new(device, format).expect("the viewer's shaders compile"));
+        let viewer = GpuViewer::new(device, format).expect("the viewer's shaders compile");
+        resources.insert(match limit {
+            Some(limit) => viewer.with_limit(limit),
+            None => viewer,
+        });
+        resources
+    }
+
+    /// [`render`] with `resources` kept from earlier draws.
+    fn render_in(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut egui_wgpu::CallbackResources,
+        paints: &[(Paint, Option<[u32; 4]>)],
+        size: u32,
+    ) -> Vec<u8> {
+        render_into(device, queue, resources, paints, size, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    /// [`render_in`] into a target of `format`, which the resources must have been made for.
+    fn render_into(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut egui_wgpu::CallbackResources,
+        paints: &[(Paint, Option<[u32; 4]>)],
+        size: u32,
+        format: wgpu::TextureFormat,
+    ) -> Vec<u8> {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
@@ -716,7 +1115,7 @@ pub(crate) mod tests {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
         for (paint, _) in paints {
-            let _ = egui_wgpu::CallbackTrait::prepare(paint, device, queue, &screen, &mut encoder, &mut resources);
+            let _ = egui_wgpu::CallbackTrait::prepare(paint, device, queue, &screen, &mut encoder, resources);
         }
         {
             let mut pass = encoder
@@ -741,7 +1140,7 @@ pub(crate) mod tests {
                 pass.set_viewport(r.min.x, r.min.y, r.width(), r.height(), 0.0, 1.0);
                 let info =
                     egui::PaintCallbackInfo { viewport: paint.rect, clip_rect: paint.rect, pixels_per_point: 1.0, screen_size_px: [size, size] };
-                egui_wgpu::CallbackTrait::paint(paint, info, &mut pass, &resources);
+                egui_wgpu::CallbackTrait::paint(paint, info, &mut pass, resources);
             }
         }
         // Rows of 256 bytes, as copies want them, hold 64 pixels: the targets are at most that wide.
@@ -870,5 +1269,167 @@ pub(crate) mod tests {
         let at = |x: usize, y: usize| shown[(y * 64 + x) * 4];
         assert!(at(1, 32).abs_diff(128) <= 2 && at(30, 32).abs_diff(128) <= 2, "the first image fills the left half: {}", at(30, 32));
         assert_eq!((at(33, 32), at(62, 32)), (255, 255), "the second fills the right half");
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "pixel positions in a 64-pixel target")]
+    fn a_tiled_image_shows_as_the_whole_one_does_across_its_tiles_edges() {
+        let Ok((device, queue)) = device() else {
+            let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
+            assert!(!required, "FLORASTACK_REQUIRE_GPU is set, but no GPU adapter is usable");
+            florastack_testkit::skip!(Gpu, "no GPU adapter is usable");
+            return;
+        };
+        // 27 x 21 pixels, odd sides, each its own color; tiled at a limit of 16 pixels, in cores of 10 (three by three
+        // tiles), with a half-size overview of 13 x 10.
+        let value = |x: usize, y: usize, c: usize| ((x * 7 + y * 13 + c * 5) % 23) as f32 / 22.0;
+        let make = |w: usize, h: usize| {
+            let rgba = (0..w * h).flat_map(|i| [half(value(i % w, i / w, 0)), half(value(i % w, i / w, 1)), half(value(i % w, i / w, 2)), half(1.0)]);
+            Arc::new(DisplayImage { width: w, height: h, rgba: rgba.collect(), alpha: false })
+        };
+        let (w, h) = (27, 21);
+        let image = make(w, h);
+        assert_eq!(tiles(27, 21, 16).len(), 9);
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
+        let shown = |image: &Arc<DisplayImage>, zoom: f32, center: Vec2, limit: Option<u32>| {
+            let paint = Paint { slot: 0, id: 1, image: Arc::clone(image), updates: Vec::new(), boost: 1.0, rect, zoom, center };
+            render_with(&device, &queue, &[(paint, None)], 64, limit)
+        };
+        let encode = |v: f32| {
+            let e = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+            (e * 255.0).round()
+        };
+        // At 200% and 100%, every image pixel is itself, on both sides of every tile's edge.
+        for (zoom, center) in [(2.0, Vec2::new(16.0, 16.0)), (2.0, Vec2::new(11.0, 5.0)), (1.0, Vec2::new(13.0, 10.0))] {
+            let tiled = shown(&image, zoom, center, Some(16));
+            for (py, px) in (0..64).flat_map(|y| (0..64).map(move |x| (y, x))) {
+                let (ix, iy) = (center.x + (px as f32 + 0.5 - 32.0) / zoom, center.y + (py as f32 + 0.5 - 32.0) / zoom);
+                if ix < 0.0 || iy < 0.0 || ix >= w as f32 || iy >= h as f32 {
+                    continue;
+                }
+                let (x, y) = (ix as usize, iy as usize);
+                for c in 0..3 {
+                    let got = f32::from(tiled[(py * 64 + px) * 4 + c]);
+                    let want = encode(half::f16::from_f32(value(x, y, c)).to_f32());
+                    assert!((got - want).abs() <= 1.0, "zoom {zoom}, pixel ({x}, {y}) channel {c}: {got} against {want}");
+                }
+            }
+        }
+        // Filtered at 75% (the tiles, their first two levels) and at 40% (the overview), as the whole image is: of even
+        // sides, whose mip levels average whole 2 x 2 blocks as the tiles' and the overview's do (an odd side's levels
+        // sample between blocks, a different filter, which a pattern changing at every pixel shows).
+        let even = make(28, 22);
+        for (zoom, tolerance) in [(0.75, 2), (0.4, 2)] {
+            let center = Vec2::new(14.0, 11.0);
+            let (tiled, whole) = (shown(&even, zoom, center, Some(16)), shown(&even, zoom, center, None));
+            let worst = tiled.iter().zip(&whole).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            assert!(worst <= tolerance, "zoom {zoom}: the tiled image differs by {worst}");
+        }
+    }
+
+    #[test]
+    fn an_overview_update_averages_whole_blocks() {
+        let rgba = [0.0f32, 1.0, 0.5, 0.5, 0.25, 0.75].iter().flat_map(|&v| [half(v), half(v), half(v), half(1.0)]).collect();
+        let image = DisplayImage { width: 3, height: 2, rgba, alpha: false };
+        let reduced = halve(&image, [0, 0, 2, 1]);
+        let red: Vec<f32> = reduced.rgba.as_chunks::<4>().0.iter().map(|p| half::f16::from_bits(p[0]).to_f32()).collect();
+        // (0, 1, 0.5, 0.25) and the edge's block (0.5, 0.75) alone.
+        assert_eq!(red, [0.4375, 0.625]);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "pixel positions in a 64-pixel target")]
+    fn a_tiled_image_updated_in_part_shows_it_in_its_tiles_and_overview() {
+        let Ok((device, queue)) = device() else {
+            let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
+            assert!(!required, "FLORASTACK_REQUIRE_GPU is set, but no GPU adapter is usable");
+            florastack_testkit::skip!(Gpu, "no GPU adapter is usable");
+            return;
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
+        let mut resources = resources(&device, Some(16));
+        let mut picture = Picture::new(flat(28, 22, 0.214));
+        let paint = |picture: &mut Picture, zoom: f32| Paint {
+            slot: 0,
+            id: picture.id,
+            image: Arc::clone(&picture.image),
+            updates: std::mem::take(&mut picture.updates),
+            boost: 1.0,
+            rect,
+            zoom,
+            center: Vec2::new(14.0, 11.0),
+        };
+        // Drawn at 200%, which uploads the tiles in view, then white over four tiles' corners, drawn again.
+        let first = paint(&mut picture, 2.0);
+        render_in(&device, &queue, &mut resources, &[(first, None)], 64);
+        picture.update([7, 7], flat(6, 6, 1.0));
+        let second = paint(&mut picture, 2.0);
+        let shown = render_in(&device, &queue, &mut resources, &[(second, None)], 64);
+        let at = |x: f32, y: f32| shown[((32.0 + (y - 11.0) * 2.0) as usize * 64 + (32.0 + (x - 14.0) * 2.0) as usize) * 4];
+        for (x, y) in [(7.5, 7.5), (9.5, 9.5), (10.5, 10.5), (12.5, 12.5)] {
+            assert_eq!(at(x, y), 255, "pixel ({x}, {y}) updated");
+        }
+        assert!(at(6.5, 6.5).abs_diff(128) <= 2 && at(13.5, 13.5).abs_diff(128) <= 2, "the rest as it was");
+        // The overview shows it too, as a new upload of the updated image does.
+        let zoomed_out = paint(&mut picture, 0.4);
+        let kept = render_in(&device, &queue, &mut resources, &[(zoomed_out, None)], 64);
+        let fresh = render_with(&device, &queue, &[(paint(&mut picture, 0.4), None)], 64, Some(16));
+        let worst = kept.iter().zip(&fresh).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "the overview updated in place differs by {worst}");
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "8-bit values from a table's in [0, 1]")]
+    fn the_display_transform_is_applied_once_whether_the_target_encodes_or_not() {
+        use florastack_engine::view::{StandardDisplay, display_lut, standard_display_profile};
+        let Ok((device, queue)) = device() else {
+            let required = std::env::var_os("FLORASTACK_REQUIRE_GPU").is_some_and(|v| !v.is_empty());
+            assert!(!required, "FLORASTACK_REQUIRE_GPU is set, but no GPU adapter is usable");
+            florastack_testkit::skip!(Gpu, "no GPU adapter is usable");
+            return;
+        };
+        // Linear sRGB red, mid gray (sRGB's 0.5) and a dark blue, side by side at 1600%.
+        let colors = [[1.0, 0.0, 0.0], [0.214, 0.214, 0.214], [0.01, 0.02, 0.3], [1.0, 1.0, 1.0]];
+        let rgba = colors.iter().flat_map(|c| [half(c[0]), half(c[1]), half(c[2]), half(1.0)]).collect();
+        let image = Arc::new(DisplayImage { width: 4, height: 1, rgba, alpha: false });
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(64.0));
+        let shown = |format: wgpu::TextureFormat, lut: Option<&DisplayLut>| {
+            let mut resources = resources_for(&device, format, None);
+            resources.get_mut::<GpuViewer>().unwrap().set_display(&device, &queue, lut);
+            let paint =
+                Paint { slot: 0, id: 1, image: Arc::clone(&image), updates: Vec::new(), boost: 1.0, rect, zoom: 16.0, center: Vec2::new(2.0, 0.5) };
+            let pixels = render_into(&device, &queue, &mut resources, &[(paint, None)], 64, format);
+            // Each color's square, at its middle.
+            (0..4)
+                .map(|i| {
+                    let at = (32 * 64 + i * 16 + 8) * 4;
+                    [pixels[at], pixels[at + 1], pixels[at + 2]]
+                })
+                .collect::<Vec<_>>()
+        };
+        let (plain, srgb) = (wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let close = |a: &[[u8; 3]], b: &[[u8; 3]], tolerance: u8, what: &str| {
+            for (x, y) in a.iter().zip(b) {
+                assert!(x.iter().zip(y).all(|(p, q)| p.abs_diff(*q) <= tolerance), "{what}: {a:?} against {b:?}");
+            }
+        };
+        // sRGB's curve once: the shader's into a plain target, the hardware's into an sRGB one, the same values.
+        let reference = shown(plain, None);
+        assert!(reference[1].iter().all(|v| v.abs_diff(128) <= 1), "{reference:?}");
+        close(&shown(srgb, None), &reference, 1, "an sRGB target encodes once");
+        // The sRGB profile's table changes nothing, on either target.
+        let srgb_lut = display_lut(&standard_display_profile(StandardDisplay::Srgb).unwrap()).unwrap();
+        close(&shown(plain, Some(&srgb_lut)), &reference, 2, "the sRGB table into a plain target");
+        close(&shown(srgb, Some(&srgb_lut)), &reference, 2, "the sRGB table into an sRGB target");
+        // Display P3's table: the display gets the table's values for each color, on either target, not the curve
+        // applied to them again (which would make P3's red (234, 51, 35) about (243, 123, 104)).
+        let p3 = display_lut(&standard_display_profile(StandardDisplay::DisplayP3).unwrap()).unwrap();
+        let red = p3.at(32, 0, 0).unwrap().map(|v| (v * 255.0).round() as u8);
+        for format in [plain, srgb] {
+            let got = shown(format, Some(&p3));
+            close(&got[..1], &[red], 2, &format!("P3's red into {format:?}"));
+            close(&got[3..], &[[255, 255, 255]], 1, &format!("white into {format:?}"));
+            assert!(got[1].iter().all(|v| v.abs_diff(128) <= 2), "gray stays gray into {format:?}: {got:?}");
+        }
     }
 }

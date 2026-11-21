@@ -53,7 +53,8 @@ fn percent_decoded(text: &str) -> String {
 }
 
 /// The paths in pasted text that exist: one a line, plain or quoted, or as `file://` URIs (as file managers copy
-/// them on Linux and macOS). A file copied in Windows Explorer isn't text, so it can't be pasted: drop it instead.
+/// them on Linux and macOS). Files copied in a file manager, which put no text on the clipboard, come as a file list
+/// instead (`clipboard.rs`).
 pub fn paths_from_text(text: &str) -> Vec<PathBuf> {
     text.lines()
         .map(|l| l.trim().trim_matches('"').trim_matches('\''))

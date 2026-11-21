@@ -8,7 +8,8 @@ WebP and OpenEXR all work.
 
 ## 1. Add the frames
 
-Start FloraStack and drop the photos, or the folder that holds them, on its window. (Or **File > Add frames…**.) They
+Start FloraStack and drop the photos, or the folder that holds them, on its window, or copy them in Explorer or Finder
+and paste them into the window with Ctrl+V (Cmd+V on a Mac). (Or **File > Add frames…**.) They
 become the frames of a new, temporary project and appear in the frame list on the left, in the order of their file
 names; the viewer in the middle shows the selected one.
 
@@ -37,7 +38,8 @@ settings, and in the viewer.
 
 ![The Stack tab, with the frame list on the left and the output in the viewer](../images/stack.webp)
 
-Zoom to 100% (Ctrl+1, or **View > Zoom to 100%**) and look at the fine detail. If you see halos along edges, smeared
+Zoom to 100% (Ctrl+1, or **View > Zoom to 100%**) and look at the fine detail. Images up to 16,384 pixels on their
+longer side show every pixel at 100%; larger ones show reduced to that size. If you see halos along edges, smeared
 hairs or blotches, [Choosing a method](methods.md) explains what each method does well, and **Both** makes a pyramid
 and a depth-map output to compare: tick **Compare** on two outputs to see them side by side or with a split line.
 
@@ -73,7 +75,9 @@ drag the photos onto `florastack-cli.exe` in Explorer: it stacks them with the d
 ## Next
 
 - **Help > Keyboard shortcuts** (F1) lists the shortcuts, and Ctrl+K (⌘K on macOS) opens the command palette, which
-  runs any of FloraStack's [commands](../reference/commands.md) by name.
+  runs any of FloraStack's [commands](../reference/commands.md) by name. A command with parameters opens them as a
+  form, filled in from an example: tick a setting to change it from its default, or tick **Edit as JSON** to write
+  them as JSON instead.
 - [Retouching](retouching.md) repairs what no method gets right by itself, by painting from the frames.
 - [Adjusting the image](adjusting.md) finishes it: tone, color and detail, for the whole image and within masks such as
   the subject or a range of its depth.

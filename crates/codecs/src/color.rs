@@ -578,7 +578,7 @@ fn tone_curve(curve: &Trc) -> moxcms::ToneReprCurve {
 /// asks: moxcms stamps the current time into the header (bytes 24 to 36, ICC.1 §7.2.8) and packs tag data back to back,
 /// while ICC.1 §7.3.1 wants each tag's data on a 4-byte boundary. LightCraft's codecs make the same two corrections to
 /// the RGB profiles they write.
-fn encode_profile(p: &moxcms::ColorProfile) -> Result<Vec<u8>, CodecError> {
+pub(crate) fn encode_profile(p: &moxcms::ColorProfile) -> Result<Vec<u8>, CodecError> {
     let bytes = std::panic::catch_unwind(|| p.encode()).ok().and_then(Result::ok);
     let Some(mut bytes) = bytes else {
         return Err(CodecError::Profile { source: BackendError::message("moxcms can't write it") });
