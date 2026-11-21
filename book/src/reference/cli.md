@@ -23,6 +23,8 @@ Options for every subcommand:
 |---|---|
 | `--device auto\|cpu\|gpu` | Which device stacks: `auto` (the default) takes the GPU when a hardware adapter passes its self-test and the CPU otherwise; `gpu` takes software adapters too ([GPU, memory and the cache](../user/performance.md)) |
 | `--temporary-projects FOLDER` | Where unnamed projects go (by default a folder named after the app ID in the system's temporary folder) |
+| `--temporary-budget GIB` | The most disk the unnamed projects may take, in GiB (10 by default), or `off`: after `stack`, the least recently used beyond it go to the trash, whatever their age; the newest always stays |
+| `--trash-folder FOLDER` | Move unnamed projects that are cleaned up into this folder, on the same drive, instead of the system's trash (for systems without one) |
 | `--json-progress` | Progress, warnings and errors as JSON lines on standard error, for other programs to read |
 
 Results go to standard output as JSON. Progress goes to standard error: a bar on a terminal, stage messages when
@@ -53,9 +55,16 @@ duplicate input stops it with a diagnostic.
 | `--raw-wb asshot` | The camera's white balance for the whole RAW stack |
 | `--dust-mask FILE` | A defect mask: black spots on white, at the frames' size |
 
-`stack` saves an unnamed project with the alignment and outputs, and its result names it. Run with files and nothing
-else, as when photos are dragged onto the executable in Windows Explorer, it stacks them with the default settings
-into `<first file>-stacked.tif`, beside the first file.
+`stack` saves an unnamed project with the alignment and outputs, and its result names it, so that a run can be
+reopened, retouched or exported again. A 20-megapixel stack's project takes about 0.3 GB, 0.6 GB with `--method both`.
+Then, so that scripted runs don't fill the disk, the unnamed projects beyond `--temporary-budget` move to the trash,
+the least recently used first, and the result's `trashed` lists them. The project just made always stays, and so does
+any that another FloraStack has open. The trash keeps them on the same drive until it is emptied, as the system's
+settings for it say. On a removable or network drive, where the system may delete instead of keeping, nothing is moved
+and a warning says so.
+
+Run with files and nothing else, as when photos are dragged onto the executable in Windows Explorer, `stack` stacks
+them with the default settings into `<first file>-stacked.tif`, beside the first file.
 
 ## batch and watch
 
@@ -110,9 +119,11 @@ florastack-cli project new                          # an unnamed, temporary one
 florastack-cli project info Bee.florastack          # describe it, without locking it
 florastack-cli project clean-orphans --dry-run      # list unnamed projects unused for 30 days
 florastack-cli project clean-orphans --days 30      # move them to the trash
+florastack-cli project clean-orphans --temporary-budget 2 --dry-run   # also those beyond 2 GiB, the least recently used
 ```
 
-Named projects are never cleaned up.
+`clean-orphans` moves the unnamed projects that are older than `--days` or beyond `--temporary-budget`. Named
+projects are never cleaned up, and nothing is deleted: the projects can be restored from the trash.
 
 ## Exit codes
 

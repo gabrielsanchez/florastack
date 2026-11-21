@@ -42,7 +42,9 @@ the computer's memory beyond it.
 - **Temporary projects**, made when you drop photos on the window without naming a project, live in the app's data
   folder (on Windows under `%LOCALAPPDATA%`). After 30 days unused, FloraStack offers to move them to the trash;
   the preferences set another age. `florastack-cli project clean-orphans` does the same from the command line
-  (`--dry-run` lists them first).
+  (`--dry-run` lists them first). The command-line tool keeps its own temporary projects, one per `stack` run, in the
+  system's temporary folder within a disk budget, 10 GiB unless `--temporary-budget` says otherwise: after each run,
+  the least recently used beyond it go to the trash ([The command-line tool](../reference/cli.md#stack)).
 - **Stacking's work on disk**, the tiles beyond the memory budget, goes to the system's temporary folder, and is
   removed when the stack ends. A stack that crashed leaves its folder behind: FloraStack removes those when it
   starts, the command-line tool at every run, and **Clean up** in the preferences at any time.

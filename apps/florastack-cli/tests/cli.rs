@@ -439,6 +439,37 @@ fn clean_orphans_can_preview_without_touching_the_system_trash() {
 }
 
 #[test]
+fn unnamed_projects_beyond_the_disk_budget_go_to_the_trash_after_a_stack() {
+    let dir = TempDir::new().unwrap();
+    let files = frames(dir.path());
+    let bin = dir.path().join("bin");
+    let stack = |out: &str, budget: &str| {
+        let mut command = cli(dir.path());
+        command.args(["--temporary-budget", budget, "--trash-folder"]).arg(&bin).arg("stack").arg(files[0].parent().unwrap());
+        json_output(command.args(["--method", "average", "--out", out]).assert().success().get_output())
+    };
+    // A budget of nothing still keeps the newest project, so that the last run can be recovered.
+    let first = stack("first.tif", "0");
+    assert_eq!(first["trashed"], json!([]));
+    let first = PathBuf::from(first["project"].as_str().unwrap());
+    let second = stack("second.tif", "0");
+    let second_project = PathBuf::from(second["project"].as_str().unwrap());
+    assert_eq!(second["trashed"], json!([first.to_str().unwrap()]), "{second}");
+    assert!(!first.exists() && bin.join(first.file_name().unwrap()).join("project.json").is_file(), "moved, not deleted");
+    // Without a budget, or within one, they stay.
+    let third = stack("third.tif", "off");
+    assert_eq!(third["trashed"], json!([]));
+    assert_eq!(stack("fourth.tif", "0.5")["trashed"], json!([]));
+    assert!(second_project.is_dir() && Path::new(third["project"].as_str().unwrap()).is_dir());
+    // clean-orphans applies the budget too, whatever the projects' age.
+    let listed = cli(dir.path()).args(["--temporary-budget", "0", "project", "clean-orphans", "--dry-run"]).assert().success().get_output().clone();
+    assert_eq!(json_output(&listed)["orphans"].as_array().unwrap().len(), 2, "all but the newest of three");
+    for budget in ["-1", "lots", "NaN", "2000000"] {
+        cli(dir.path()).args(["--temporary-budget", budget, "project", "clean-orphans", "--dry-run"]).assert().code(2);
+    }
+}
+
+#[test]
 fn invalid_inputs_and_parameters_have_documented_exit_codes() {
     let dir = TempDir::new().unwrap();
     for args in [

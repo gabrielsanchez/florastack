@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use florastack_project::{Edit, FrameState, Orphan, Orphans, ProjectFolder, Timestamp, folder_name};
+use florastack_project::{Edit, FrameState, Orphans, ProjectFolder, Timestamp, folder_name};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -98,21 +98,29 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             check_frames,
         ),
         CommandSpec::query(
-            Meta::new("project.findOrphans", "Find old temporary projects", "Lists the temporary projects old enough to be moved to the trash.")
-                .help(
-                    "Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that \
-                     haven't been saved or opened for `days` days (30 by default). `drive` says what the folder is on: \
-                     from a `removable` or `network` drive the system may delete what is moved to the trash instead \
-                     of keeping it (Windows has no Recycle Bin there).",
-                )
-                .examples(&["{}", r#"{ "days": 7 }"#]),
+            Meta::new(
+                "project.findOrphans",
+                "Find old temporary projects",
+                "Lists the temporary projects old enough, or beyond the disk budget, to be moved to the trash.",
+            )
+            .help(
+                "Orphans are unnamed projects in the temporary-projects folder that no FloraStack has open and that \
+                 haven't been saved or opened for `days` days, or that are beyond a disk budget of `budgetMb` MiB: \
+                 the temporary projects are kept from the most recently used, open ones first, until one doesn't \
+                 fit, and it and every older one are orphans, whatever their age; the most recently used closed one \
+                 always stays. With neither, `days` is 30. `drive` says what the folder is on: from a `removable` or \
+                 `network` drive the system may delete what is moved to the trash instead of keeping it (Windows has \
+                 no Recycle Bin there).",
+            )
+            .examples(&["{}", r#"{ "days": 7 }"#, r#"{ "budgetMb": 10240 }"#, r#"{ "days": 30, "budgetMb": 10240 }"#]),
             find_orphans,
         ),
         CommandSpec::instant(
             Meta::new("project.trashOrphans", "Move old temporary projects to the trash", "Moves orphaned temporary projects to the trash.")
                 .help(
                     "Each path is checked again before it is moved: it must still be an orphan in the temporary-projects \
-                     folder. Nothing is deleted; the projects can be restored from the trash.",
+                     folder by `days` and `budgetMb`, as `project.findOrphans` takes them. Nothing is deleted; the \
+                     projects can be restored from the trash.",
                 )
                 .effects(Effects::Files)
                 .examples(&[r#"{ "paths": ["C:/Users/me/AppData/Local/FloraStack/projects/untitled-20260901120000-0.florastack"] }"#]),
@@ -478,16 +486,25 @@ fn check_frames(session: &mut Session, _: NoParams) -> Result<FramesChecked, Com
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FindOrphansParams {
-    /// How many days unused a temporary project must be (30 by default), at most 36500.
+    /// How many days unused a temporary project must be, at most 36500 (30 when `budgetMb` isn't given either).
     #[serde(default)]
     #[schemars(range(max = 36500))]
     days: Option<u32>,
+    /// The MiB the temporary projects may take; those beyond it, the least recently used, are orphans whatever their
+    /// age. At most 1073741824 (1 PiB).
+    #[serde(default)]
+    #[schemars(range(max = 1_073_741_824))]
+    budget_mb: Option<u64>,
 }
+
+/// The largest disk budget, in MiB: 1 PiB.
+const MAX_BUDGET_MB: u64 = 1 << 30;
 
 impl Params for FindOrphansParams {
     fn check(&self) -> Result<(), Invalid> {
-        match self.days {
-            Some(d) if d > 36_500 => Err(Invalid::new("days", "is more than 36500")),
+        match (self.days, self.budget_mb) {
+            (Some(d), _) if d > 36_500 => Err(Invalid::new("days", "is more than 36500")),
+            (_, Some(mb)) if mb > MAX_BUDGET_MB => Err(Invalid::new("budgetMb", "is more than 1073741824 MiB")),
             _ => Ok(()),
         }
     }
@@ -515,13 +532,20 @@ struct OrphanList {
     orphans: Vec<OrphanInfo>,
 }
 
-fn orphans_in(session: &Session, days: Option<u32>) -> Result<Orphans, CommandError> {
+fn orphans_in(session: &Session, days: Option<u32>, budget_mb: Option<u64>) -> Result<Orphans, CommandError> {
     let root = session.temporary_projects().ok_or_else(|| session.unavailable("there is no folder for temporary projects here"))?;
-    Ok(Orphans::new(root, days.unwrap_or(Orphans::DEFAULT_DAYS)))
+    let budget = budget_mb.map(|mb| mb.saturating_mul(1 << 20));
+    Ok(match (days, budget) {
+        (None, Some(bytes)) => Orphans::beyond_budget(root, bytes),
+        (days, budget) => {
+            let orphans = Orphans::new(root, days.unwrap_or(Orphans::DEFAULT_DAYS));
+            if let Some(bytes) = budget { orphans.with_budget(bytes) } else { orphans }
+        }
+    })
 }
 
 fn find_orphans(session: &Session, p: FindOrphansParams) -> Result<OrphanList, CommandError> {
-    let orphans = orphans_in(session, p.days)?;
+    let orphans = orphans_in(session, p.days, p.budget_mb)?;
     let found = orphans.find()?;
     Ok(OrphanList {
         folder: display(orphans.root()),
@@ -539,17 +563,21 @@ fn find_orphans(session: &Session, p: FindOrphansParams) -> Result<OrphanList, C
 struct TrashOrphansParams {
     /// The project folders, as `project.findOrphans` lists them.
     paths: Vec<String>,
-    /// How many days unused each must still be (30 by default).
+    /// How many days unused each must still be (30 when `budgetMb` isn't given either).
     #[serde(default)]
     #[schemars(range(max = 36500))]
     days: Option<u32>,
+    /// The disk budget in MiB beyond which each must still be, as `project.findOrphans` takes it.
+    #[serde(default)]
+    #[schemars(range(max = 1_073_741_824))]
+    budget_mb: Option<u64>,
 }
 
 impl Params for TrashOrphansParams {
     fn check(&self) -> Result<(), Invalid> {
         check_len("paths", &self.paths, 1)?;
         self.paths.iter().try_for_each(|p| check_path("paths", p))?;
-        FindOrphansParams { days: self.days }.check()
+        FindOrphansParams { days: self.days, budget_mb: self.budget_mb }.check()
     }
 }
 
@@ -568,15 +596,15 @@ struct Trashed {
 }
 
 fn trash_orphans(session: &mut Session, p: TrashOrphansParams) -> Result<Trashed, CommandError> {
-    let orphans = orphans_in(session, p.days)?;
+    let orphans = orphans_in(session, p.days, p.budget_mb)?;
+    let paths = p.paths.iter().map(|path| absolute(path)).collect::<Result<Vec<_>, _>>()?;
+    // Everything about each is checked again from its path, against the orphans found again.
+    let results = orphans.trash_all(&paths, session.trash())?;
     let (mut trashed, mut failed) = (Vec::new(), Vec::new());
-    for path in p.paths {
-        let path = absolute(&path)?;
-        // Everything about it is checked again from its path.
-        let orphan = Orphan { path: path.clone(), last_used: florastack_core::time::SystemTime::now(), bytes: 0 };
-        match orphans.trash(&orphan, session.trash()) {
-            Ok(()) => trashed.push(display(&path)),
-            Err(e) => failed.push(NotDone { path: display(&path), reason: reason(&e) }),
+    for (path, result) in paths.iter().zip(results) {
+        match result {
+            Ok(()) => trashed.push(display(path)),
+            Err(e) => failed.push(NotDone { path: display(path), reason: reason(&e) }),
         }
     }
     Ok(Trashed { trashed, failed })

@@ -131,3 +131,86 @@ fn an_orphan_is_checked_again_before_it_goes() {
     assert!(unnamed.is_dir() && path.is_dir(), "nothing was moved");
     assert!(!bin.path().exists(), "the trash was never used");
 }
+
+/// Sets when a closed temporary project was last used: the times of its project file and lock file.
+fn used_at(path: &Path, when: SystemTime) {
+    for file in ["project.json", ".lock"] {
+        if let Ok(file) = std::fs::File::options().write(true).open(path.join(file)) {
+            file.set_modified(when).unwrap();
+        }
+    }
+}
+
+/// A closed temporary project of about `bytes` bytes, last used at `when`.
+fn sized(root: &Path, bytes: usize, when: SystemTime) -> PathBuf {
+    let path = temporary(root);
+    let (folder, _) = ProjectFolder::open(&path).unwrap();
+    folder.store(florastack_project::Area::Cache, "output-1", "tiff", &vec![7; bytes], None).unwrap();
+    drop(folder);
+    used_at(&path, when);
+    path
+}
+
+#[test]
+fn beyond_the_budget_the_least_recently_used_go_whatever_their_age() {
+    const MB: usize = 1_000_000;
+    let dir = TempDir::new("orphans-budget");
+    let root = dir.path().join("temporary");
+    let now = SystemTime::now();
+    // From the oldest to the newest; none is a day old.
+    let oldest = sized(&root, 3 * MB, now - Duration::from_hours(5));
+    let small = sized(&root, MB / 2, now - Duration::from_hours(4));
+    let middle = sized(&root, 3 * MB, now - Duration::from_hours(3));
+    let newer = sized(&root, 3 * MB, now - Duration::from_hours(2));
+    let newest = sized(&root, 3 * MB, now - Duration::from_hours(1));
+    // Named, so neither counted nor offered.
+    let (mut folder, mut named) = ProjectFolder::create_temporary(&root).unwrap();
+    named.set_name("Kept").unwrap();
+    folder.store(florastack_project::Area::Cache, "output-1", "tiff", &vec![7; 20 * MB], None).unwrap();
+    folder.save(&mut named).unwrap();
+    drop(folder);
+    let paths = |found: Vec<florastack_project::Orphan>| found.into_iter().map(|o| o.path).collect::<Vec<_>>();
+
+    assert!(Orphans::new(&root, 1).find_at(now).unwrap().is_empty(), "by age, nothing goes");
+    // 6.5 MB keeps the two newest; the 3 MB before them doesn't fit, so it and everything older go, the small one too.
+    let found = Orphans::beyond_budget(&root, 13 * MB as u64 / 2).find_at(now).unwrap();
+    assert!(found.iter().all(|o| o.bytes >= MB as u64 / 2));
+    assert_eq!(paths(found), [oldest.clone(), small.clone(), middle.clone()], "oldest first");
+    assert_eq!(paths(Orphans::beyond_budget(&root, u64::MAX).find_at(now).unwrap()), Vec::<PathBuf>::new());
+    // The most recently used one stays even when it alone is beyond the budget.
+    let all_but_newest = vec![oldest.clone(), small.clone(), middle.clone(), newer.clone()];
+    assert_eq!(paths(Orphans::beyond_budget(&root, 0).find_at(now).unwrap()), all_but_newest);
+    // Age and budget together: either makes an orphan.
+    let both = Orphans::new(&root, 1).with_budget(13 * MB as u64 / 2);
+    assert_eq!(paths(both.find_at(now).unwrap()).len(), 3);
+    assert_eq!(paths(both.find_at(now + 2 * DAY).unwrap()).len(), 5);
+
+    // An open project counts toward the budget first, but never goes.
+    let (open, _) = ProjectFolder::open(&newest).unwrap();
+    let found = paths(Orphans::beyond_budget(&root, 13 * MB as u64 / 2).find_at(now).unwrap());
+    assert_eq!(found, [oldest.clone(), small.clone(), middle.clone()], "the open one and the next newest fit");
+    let found = paths(Orphans::beyond_budget(&root, 5 * MB as u64).find_at(now).unwrap());
+    assert_eq!(found, [oldest.clone(), small.clone(), middle.clone()], "the newest closed one is kept");
+    drop(open);
+    used_at(&newest, now - Duration::from_hours(1));
+
+    // Moving them checks the budget again: one that fits isn't moved, and those beyond it are.
+    let bin = FolderTrash::new(dir.path().join("bin"));
+    let orphans = Orphans::beyond_budget(&root, 13 * MB as u64 / 2);
+    let results = orphans.trash_all_at(&[newer.clone(), oldest.clone(), small.clone()], &bin, now).unwrap();
+    assert!(
+        matches!(&results[0], Err(ProjectError::NotOrphan { reason: "it was used recently and fits within the disk budget", .. })),
+        "{:?}",
+        results[0]
+    );
+    assert!(results[1].is_ok() && results[2].is_ok(), "{results:?}");
+    assert!(newer.is_dir() && !oldest.exists() && !small.exists() && middle.is_dir());
+    assert!(bin.path().join(oldest.file_name().unwrap()).join("project.json").is_file());
+    // Used again since it was found: no longer the least recently used.
+    let found = orphans.find_at(now).unwrap();
+    assert_eq!(paths(found.clone()), std::slice::from_ref(&middle));
+    used_at(&middle, now);
+    let e = orphans.trash_at(&found[0], &bin, now).unwrap_err();
+    assert!(matches!(e, ProjectError::NotOrphan { .. }), "{e}");
+    assert!(middle.is_dir());
+}

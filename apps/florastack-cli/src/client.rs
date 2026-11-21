@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::time::Duration;
 
+use florastack_engine::model::{FolderTrash, SystemTrash, Trash};
 use florastack_engine::{CommandError, Compute, Device, Dispatched, Engine, EngineConfig, ErrorInfo, Event, JobState, Value, json};
 use serde::Serialize;
 
@@ -79,10 +80,17 @@ impl Client {
         self.engine
     }
 
-    pub fn new(temporary_projects: std::path::PathBuf, json_progress: bool, device: Device) -> Self {
+    /// An engine whose unnamed projects go in `temporary_projects`, and cleaned-up ones to `trash` (a folder) or the
+    /// system's trash.
+    pub fn new(temporary_projects: std::path::PathBuf, trash: Option<std::path::PathBuf>, json_progress: bool, device: Device) -> Self {
         let (tx, wake) = sync_channel(1);
+        let trash: Arc<dyn Trash + Send + Sync> = match trash {
+            Some(folder) => Arc::new(FolderTrash::new(folder)),
+            None => Arc::new(SystemTrash),
+        };
         let config = EngineConfig {
             temporary_projects: Some(temporary_projects),
+            trash,
             waker: Some(Arc::new(move || {
                 let _ = tx.try_send(());
             })),

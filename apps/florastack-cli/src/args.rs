@@ -31,12 +31,40 @@ pub struct Cli {
     /// Folder for unnamed projects (default: the system temporary folder / app ID / projects).
     #[arg(long, global = true, value_name = "FOLDER")]
     pub temporary_projects: Option<PathBuf>,
+    /// The most disk the unnamed projects may take, in GiB, or `off`. After `stack`, the least recently used beyond it
+    /// move to the trash, whatever their age; the newest always stays.
+    #[arg(long, global = true, value_name = "GIB", default_value = "10", value_parser = parse_budget)]
+    pub temporary_budget: Budget,
+    /// Move cleaned-up unnamed projects into this folder, on the same drive, instead of the system's trash.
+    #[arg(long, global = true, value_name = "FOLDER")]
+    pub trash_folder: Option<PathBuf>,
     /// Which device stacks: auto (the GPU when a hardware adapter passes its self-test, else the CPU), cpu, or gpu
     /// (software adapters such as lavapipe and WARP too).
     #[arg(long, global = true, value_enum, default_value = "auto")]
     pub device: DeviceArg,
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// A disk budget in MiB, or none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget(pub Option<u64>);
+
+/// The largest budget, in GiB: 1 PiB, as the engine allows.
+const MAX_BUDGET_GIB: f64 = 1_048_576.0;
+
+fn parse_budget(text: &str) -> Result<Budget, String> {
+    if text.eq_ignore_ascii_case("off") {
+        return Ok(Budget(None));
+    }
+    let gib: f64 = text.trim().parse().map_err(|_| format!("`{text}` is neither a size in GiB nor `off`"))?;
+    if !(0.0..=MAX_BUDGET_GIB).contains(&gib) {
+        return Err(format!("the budget is from 0 to {MAX_BUDGET_GIB} GiB, or `off`"));
+    }
+    // In range and not NaN (`contains` is false for NaN), so the MiB fit a u64 exactly enough.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let mib = (gib * 1024.0).round() as u64;
+    Ok(Budget(Some(mib)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -316,8 +344,12 @@ pub enum ProjectCommand {
     /// Describe a project without taking its editing lock.
     #[command(after_help = examples(&["project info Bee{project}"]))]
     Info { project: PathBuf },
-    /// Move old, closed, unnamed projects to the operating system's trash.
-    #[command(after_help = examples(&["project clean-orphans --dry-run", "project clean-orphans --days 30"]))]
+    /// Move closed, unnamed projects that are old or beyond --temporary-budget to the operating system's trash.
+    #[command(after_help = examples(&[
+        "project clean-orphans --dry-run",
+        "project clean-orphans --days 30",
+        "project clean-orphans --temporary-budget 2 --trash-folder old-projects"
+    ]))]
     CleanOrphans {
         /// Minimum age in days since last use.
         #[arg(long, default_value = "30", value_parser = clap::value_parser!(u32).range(0..=36_500))]
