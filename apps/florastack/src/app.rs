@@ -175,6 +175,11 @@ pub struct FloraStackApp {
     pair_loader: Loader,
     pair: [Option<Arc<florastack_engine::view::DisplayImage>>; 2],
     thumb_loader: Loader,
+    /// The display images of the frames around the selection, and the frames still to read ahead into it, one at a
+    /// time through their own loader (`frame_cache.rs`).
+    pub frame_cache: crate::frame_cache::FrameCache,
+    ahead: std::collections::VecDeque<PathBuf>,
+    ahead_loader: Loader,
     /// What the viewer is loading, which selection it is for, and whether the view stays where it is (an image
     /// replacing one of its size, such as the next preview).
     pub loading: Option<(PathBuf, Selection, bool)>,
@@ -261,6 +266,9 @@ impl FloraStackApp {
             pair_loader: Loader::latest_only("compare", ctx),
             pair: [None, None],
             thumb_loader: Loader::every("thumbnails", ctx),
+            frame_cache: crate::frame_cache::FrameCache::default(),
+            ahead: std::collections::VecDeque::new(),
+            ahead_loader: Loader::every("read ahead", ctx),
             loading: None,
             rendering: None,
             shown_edits: None,
@@ -549,6 +557,18 @@ impl FloraStackApp {
                 return;
             }
         }
+        if let (Selection::Frame(_), Some(path)) = (&selection, &path)
+            && let Some(image) = self.frame_cache.get(path, self.viewer.max_side(), crate::frame_cache::Stamp::of(path))
+        {
+            self.loading = None;
+            if keep {
+                self.viewer.replace(image);
+            } else {
+                self.viewer.show(image);
+            }
+            self.read_ahead();
+            return;
+        }
         if let Some(path) = path {
             // The stack preview is an image the engine holds, not a file.
             let image = if selection == Selection::Preview { self.shell.preview_image.clone() } else { None };
@@ -558,6 +578,50 @@ impl FloraStackApp {
             self.viewer.clear();
             self.loading = None;
         }
+    }
+
+    /// Checks an opened project's frame files once, and says which are missing or changed.
+    fn check_frames(&mut self, project: Option<PathBuf>) {
+        if project.is_none() || self.checked == project {
+            return;
+        }
+        self.checked = project;
+        if let Some(checked) = self.shell.run("project.checkFrames", json!({})) {
+            let states: Vec<&str> = checked["frames"].as_array().into_iter().flatten().filter_map(|f| f["state"].as_str()).collect();
+            let missing = states.iter().filter(|s| **s == "missing").count();
+            if !states.is_empty() {
+                self.banners.push(Banner::Frames { missing, changed: states.len() - missing });
+            }
+        }
+    }
+
+    /// Keeps the frames read ahead, and asks for the next: one at a time, after the selected frame, so that a newer
+    /// selection's come first.
+    fn reading_ahead(&mut self) {
+        for done in self.ahead_loader.done() {
+            if let (Ok(image), Some(stamp)) = (done.image, crate::frame_cache::Stamp::of(&done.request.path)) {
+                self.frame_cache.insert(&done.request.path, done.request.max_side.unwrap_or(0), stamp, image);
+            }
+        }
+        if self.shell.frames.is_empty() {
+            self.frame_cache.clear();
+            self.ahead.clear();
+        }
+        if self.ahead_loader.pending() == 0
+            && self.loading.is_none()
+            && let Some(path) = self.ahead.pop_front()
+            && !self.frame_cache.has(&path, self.viewer.max_side())
+        {
+            self.ahead_loader.request(Request::file(path, Some(self.viewer.max_side())));
+        }
+    }
+
+    /// Reads the selected frame's neighbors ahead, nearest first, in place of those wanted for an earlier selection.
+    fn read_ahead(&mut self) {
+        let Selection::Frame(id) = self.selection else { return };
+        let Some(index) = self.shell.frames.iter().position(|f| f.id == id) else { return };
+        let files: Vec<PathBuf> = self.shell.frames.iter().map(|f| f.file.clone()).collect();
+        self.ahead = self.frame_cache.ahead(&files, index, self.viewer.max_side()).into();
     }
 
     /// Picks output `id` for comparing, or drops it when it was picked: two picked are compared, the older of two
@@ -690,16 +754,7 @@ impl FloraStackApp {
             self.select(Selection::Nothing);
             self.banners.retain(|b| !matches!(b, Banner::Frames { .. }));
         }
-        if project.is_some() && self.checked != project {
-            self.checked.clone_from(&project);
-            if let Some(checked) = self.shell.run("project.checkFrames", json!({})) {
-                let states: Vec<&str> = checked["frames"].as_array().into_iter().flatten().filter_map(|f| f["state"].as_str()).collect();
-                let missing = states.iter().filter(|s| **s == "missing").count();
-                if !states.is_empty() {
-                    self.banners.push(Banner::Frames { missing, changed: states.len() - missing });
-                }
-            }
-        }
+        self.check_frames(project);
         self.found_stacks();
         self.exported();
         self.show_outputs();
@@ -735,6 +790,12 @@ impl FloraStackApp {
                 continue;
             }
             self.loading = None;
+            if let (Ok(image), Selection::Frame(_)) = (&done.image, &selection) {
+                if let Some(stamp) = crate::frame_cache::Stamp::of(&path) {
+                    self.frame_cache.insert(&path, done.request.max_side.unwrap_or(0), stamp, Arc::clone(image));
+                }
+                self.read_ahead();
+            }
             match (done.image, selection) {
                 (Ok(image), Selection::Compare(..)) => self.pair[0] = Some(image),
                 (Ok(image), _) if keep => self.viewer.replace(image),
@@ -755,6 +816,7 @@ impl FloraStackApp {
                 self.viewer.show_pair(first, second, labels);
             }
         }
+        self.reading_ahead();
         for done in self.thumb_loader.done() {
             if let Ok(image) = done.image {
                 let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.to_srgb8());
@@ -773,7 +835,7 @@ impl FloraStackApp {
             ctx.request_repaint_after(film.next.saturating_duration_since(now));
         }
         self.autosave_if_due();
-        let reading = [&self.view_loader, &self.pair_loader, &self.thumb_loader].iter().any(|l| l.pending() > 0);
+        let reading = [&self.view_loader, &self.pair_loader, &self.thumb_loader, &self.ahead_loader].iter().any(|l| l.pending() > 0);
         if self.shell.busy() || self.loading.is_some() || (reading && cfg!(target_arch = "wasm32")) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
