@@ -8,8 +8,13 @@
 //! levels and their local energy, each level folded into the tile's running choice (`select`: picks, or the finest
 //! level's blend), and the range limit's bounds (`bounds`). After the frame's tiles, the whole-canvas levels are
 //! folded the same way and the residual summed (`residual`). The result collapses the levels from the coarsest down
-//! (`coefficients`, EXPAND) and holds each pixel within the frames' range (`limit`). The coarse limit (off by default)
-//! isn't ported: the engine stacks on the CPU when it is set.
+//! (`coefficients`, EXPAND) and holds each pixel within the frames' range (`limit`).
+//!
+//! The coarse limit (off by default): each tile also shares the finest level's energy pooled to level `tiled` (the
+//! luminance's for decisions on every channel), REDUCE after REDUCE, which pastes into a whole-canvas focus plane as
+//! the level does. At each coarse level, just before its `select`, `limit_fold` records which frame each pick comes
+//! from and the frame whose focus, pooled further to that level, is largest so far, with its coefficients; when the
+//! levels collapse, `limit_apply` replaces the picks more than the limit's frames from that frame by its coefficients.
 
 use florastack_core::Rect;
 
@@ -17,8 +22,8 @@ use super::{Patch, Shape, TileMethod, View};
 use crate::batch::{Batch, Bind, Groups, Params};
 use crate::device::Gpu;
 use crate::error::GpuError;
-use crate::levels::{Span, combined, expand, local_energy, reduce_covered};
-use crate::ops::{copy_rect, fill, fill_words};
+use crate::levels::{Span, combined, expand, local_energy, reduce, reduce_covered};
+use crate::ops::{copy_rect, fill, fill_pattern, fill_words};
 use crate::plane::Plane;
 use crate::shaders::Kernel;
 
@@ -28,6 +33,8 @@ pub const TILED_LEVELS: usize = 3;
 pub const MAX_LEVELS: usize = 10;
 /// A range-limit word before any frame: the least bound +inf (low 16 bits), the largest -inf (high 16 bits).
 const EMPTY_BOUNDS: u32 = 0xff80_7f80;
+/// The largest coarse limit, in frames (florastack-stack's `MAX_COARSE_LIMIT`).
+pub const MAX_COARSE_LIMIT: u32 = 1000;
 
 /// The levels a `width` x `height` canvas gets for a `levels` setting (0 chooses): florastack-stack's
 /// `PyramidSettings::levels_for`.
@@ -61,6 +68,18 @@ fn margin(k: usize) -> usize {
     if k == 0 { 0 } else { 3 * (1 << k) - 2 }
 }
 
+/// A frame's place in the stack as the kernels take it, as florastack-stack's `coarse.frames as f32` gives it.
+#[allow(clippy::cast_precision_loss)] // Exact below 2^24 frames, and the same rounding as the CPU's beyond.
+fn index(frame: usize) -> f32 {
+    frame as f32
+}
+
+/// The coarse limit as the kernel compares it, as florastack-stack's `d as f32`.
+#[allow(clippy::cast_precision_loss)] // At most MAX_COARSE_LIMIT: exact.
+fn limit_frames(d: u32) -> f32 {
+    d as f32
+}
+
 fn signed(v: usize) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
@@ -92,6 +111,11 @@ struct Coarse {
     levels: Vec<(Plane, Plane)>,
     residual: Plane,
     weight: Plane,
+    /// With the coarse limit: the frame's pooled focus at level `tiled` as the tiles share it, and each coarse level's
+    /// record (the frame each pick comes from; the best focus, its frame and its coefficients).
+    limit: Option<(Plane, Vec<(Plane, Plane)>)>,
+    /// The frames folded so far: the next one's place in the stack.
+    frames: usize,
 }
 
 pub(crate) struct Pyramid {
@@ -100,6 +124,8 @@ pub(crate) struct Pyramid {
     blend: Option<f32>,
     channel_decisions: bool,
     limit: f32,
+    /// The coarse limit in frames, off when `None`.
+    coarse_limit: Option<u32>,
     canvas: Option<Canvas>,
     coarse: Option<Coarse>,
     /// The fused Gaussian level `tiled`, once prepared.
@@ -107,7 +133,13 @@ pub(crate) struct Pyramid {
 }
 
 impl Pyramid {
-    pub(crate) fn new(levels: u32, blend: Option<f32>, channel_decisions: bool, range_limit: f32) -> Result<Pyramid, GpuError> {
+    pub(crate) fn new(
+        levels: u32,
+        blend: Option<f32>,
+        channel_decisions: bool,
+        range_limit: f32,
+        coarse_limit: Option<u32>,
+    ) -> Result<Pyramid, GpuError> {
         if levels as usize > MAX_LEVELS {
             return Err(GpuError::shape("the pyramid's levels", levels, "from 0 (automatic) to 10"));
         }
@@ -117,7 +149,10 @@ impl Pyramid {
         if !(range_limit.is_finite() && (0.0..=1.0).contains(&range_limit)) {
             return Err(GpuError::shape("the pyramid's range limit", range_limit, "from 0 to 1"));
         }
-        Ok(Pyramid { setting: levels, blend, channel_decisions, limit: range_limit, canvas: None, coarse: None, fused: None })
+        if let Some(d) = coarse_limit.filter(|&d| d > MAX_COARSE_LIMIT) {
+            return Err(GpuError::shape("the pyramid's coarse limit", d, "from 0 to 1000 frames"));
+        }
+        Ok(Pyramid { setting: levels, blend, channel_decisions, limit: range_limit, coarse_limit, canvas: None, coarse: None, fused: None })
     }
 
     fn canvas(&self) -> Result<Canvas, GpuError> {
@@ -219,6 +254,22 @@ impl TileMethod for Pyramid {
             fill(&mut batch, &energy, -1.0)?;
             coarse_levels.push((gpu.plane("a coarse level's coefficients", s.width, s.height, c)?, energy));
         }
+        let limit = if self.coarse_limit.is_some() {
+            let mut records = Vec::new();
+            let mut empty = vec![-1.0, -1.0];
+            empty.resize(c + 2, 0.0);
+            for k in canvas.tiled..canvas.levels {
+                let s = canvas.level(k);
+                let picked = gpu.plane("a coarse level's picked frames", s.width, s.height, d)?;
+                fill(&mut batch, &picked, -1.0)?;
+                let record = gpu.plane("a coarse level's focus record", s.width, s.height, c + 2)?;
+                fill_pattern(&mut batch, &record, &empty)?;
+                records.push((picked, record));
+            }
+            Some((gpu.plane("the frame's pooled focus", base.width, base.height, 1)?, records))
+        } else {
+            None
+        };
         let top = canvas.level(canvas.levels);
         self.coarse = Some(Coarse {
             level: gpu.plane("the frame's coarse level", base.width, base.height, c)?,
@@ -226,6 +277,8 @@ impl TileMethod for Pyramid {
             levels: coarse_levels,
             residual: gpu.plane("the residual's sum", top.width, top.height, c)?,
             weight: gpu.plane("the residual's weights", top.width, top.height, 1)?,
+            limit,
+            frames: 0,
         });
         batch.finish()?;
         self.canvas = Some(canvas);
@@ -289,6 +342,20 @@ impl TileMethod for Pyramid {
             let from = (core.x - s.x, core.y - s.y);
             copy_rect(batch, g, from, &coarse.level, (core.x, core.y), (core.width, core.height))?;
             copy_rect(batch, cov, from, &coarse.coverage, (core.x, core.y), (core.width, core.height))?;
+            // The coarse limit's focus: the finest level's energy, pooled to level `tiled` by plain REDUCE.
+            if let (Some((focus_plane, _)), Some((band, energy)), Some((_, _, span))) = (&coarse.limit, bands.first(), levels.first()) {
+                let luminance = if self.channel_decisions { Some(local_energy(batch, band, *span, true)?) } else { None };
+                let finest = luminance.as_ref().unwrap_or(energy);
+                let mut pooled: Option<(Plane, Span)> = None;
+                for _ in 0..k {
+                    let (src, at) = pooled.as_ref().map_or((finest, *span), |(p, s)| (p, *s));
+                    let next = reduce(batch, src, at)?;
+                    pooled = Some(next);
+                }
+                let (src, at) = pooled.as_ref().map_or((finest, *span), |(p, s)| (p, *s));
+                let from = (core.x - at.x, core.y - at.y);
+                copy_rect(batch, src, from, focus_plane, (core.x, core.y), (core.width, core.height))?;
+            }
         }
         Ok(())
     }
@@ -306,13 +373,39 @@ impl TileMethod for Pyramid {
         batch.copy(&coarse.coverage, &coverage)?;
         let levels = Pyramid::gaussian(batch, level, coverage, base, top)?;
         let bands = self.bands(batch, &levels)?;
-        for ((band, energy), ((_, cov, s), (coefficients, weights))) in bands.iter().zip(levels.iter().zip(&coarse.levels)) {
+        // The frame's pooled focus at each coarse level, from the one the tiles shared.
+        let mut pooled = match &coarse.limit {
+            Some((shared, _)) => {
+                let plane = gpu.plane("the frame's pooled focus", base.width, base.height, 1)?;
+                batch.copy(shared, &plane)?;
+                Some((plane, base))
+            }
+            None => None,
+        };
+        let place = index(coarse.frames);
+        for (i, ((band, energy), ((_, cov, s), (coefficients, weights)))) in bands.iter().zip(levels.iter().zip(&coarse.levels)).enumerate() {
+            if let (Some((records, (focus, at))), true) = (coarse.limit.as_ref().map(|(_, r)| r).zip(pooled.as_ref()), i < top) {
+                let (Some((picked, record)), true) = (records.get(i), (at.width, at.height) == (s.width, s.height)) else {
+                    return Err(GpuError::shape("the coarse limit's records", records.len(), "one per coarse level"));
+                };
+                let n = s.width * s.height;
+                let params = Params::new().u(n).u(band.channels()).u(energy.channels()).f(place);
+                let planes = [band.into(), energy.into(), cov.into(), weights.into(), focus.into(), picked.into(), record.into()];
+                batch.run(Kernel::LimitFold, &params, &planes, Groups::Flat(n))?;
+            }
             self.select(batch, band, energy, cov, *s, *s, (coefficients, weights), false)?;
+            if let Some((focus, at)) = pooled.take() {
+                pooled = Some(if i + 1 < top { reduce(batch, &focus, at)? } else { (focus, at) });
+            }
         }
         let Some((g, cov, s)) = levels.last() else { return Ok(()) };
         let n = s.width * s.height;
         let params = Params::new().u(n).u(canvas.channels);
-        batch.run(Kernel::Residual, &params, &[g.into(), cov.into(), (&coarse.residual).into(), (&coarse.weight).into()], Groups::Flat(n))
+        batch.run(Kernel::Residual, &params, &[g.into(), cov.into(), (&coarse.residual).into(), (&coarse.weight).into()], Groups::Flat(n))?;
+        if let Some(coarse) = self.coarse.as_mut() {
+            coarse.frames += 1;
+        }
+        Ok(())
     }
 
     fn prepare(&mut self, batch: &mut Batch<'_>) -> Result<(), GpuError> {
@@ -333,6 +426,13 @@ impl TileMethod for Pyramid {
         for (i, (coefficients, weights)) in coarse.levels.iter().enumerate().rev() {
             let k = canvas.tiled + i;
             let band = Pyramid::coefficients(batch, coefficients, weights, false)?;
+            if let (Some(d), Some((_, records))) = (self.coarse_limit, &coarse.limit) {
+                let (picked, record) =
+                    records.get(i).ok_or_else(|| GpuError::shape("the coarse limit's records", records.len(), "one per coarse level"))?;
+                let n = band.width() * band.height();
+                let params = Params::new().u(n).u(band.channels()).u(picked.channels()).f(limit_frames(d));
+                batch.run(Kernel::LimitApply, &params, &[picked.into(), record.into(), (&band).into()], Groups::Flat(n))?;
+            }
             let up = expand(batch, &g, canvas.level(k + 1), canvas.level(k))?;
             g = combined(batch, &band, &up, false)?;
         }

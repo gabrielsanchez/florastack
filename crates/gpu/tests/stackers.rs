@@ -192,7 +192,7 @@ fn small_budgets_move_tiles_to_the_host_and_back_without_changing_the_stack() {
     let cases = [
         (Method::Average { radius: 1.0, smoothing: 1.0, power: 3.0 }, (130, 90), 200_000),
         (Method::Focus { radius: 1.0 }, (130, 90), 400_000),
-        (Method::Pyramid { levels: 0, blend: Some(2.0), channel_decisions: false, range_limit: 1.0 }, (800, 420), 10_000_000),
+        (Method::Pyramid { levels: 0, blend: Some(2.0), channel_decisions: false, range_limit: 1.0, coarse_limit: None }, (800, 420), 10_000_000),
     ];
     for (method, (w, h), budget) in cases {
         let frames = frames(w, h, 5, 11);
@@ -225,6 +225,11 @@ fn the_pyramid_agrees_with_the_cpu() {
         PyramidSettings { grit: 0.3, decisions: Decisions::Channels, ..PyramidSettings::default() },
         PyramidSettings { levels: 4, range_limit: 0.0, grit: 1.0, ..PyramidSettings::default() },
         PyramidSettings { levels: 2, range_limit: 0.5, ..PyramidSettings::default() },
+        // The coarse limit, at levels beyond the three tiled ones (the automatic setting gives this canvas two): none
+        // may stray (0), a few frames (1, 3), on luminance and on every channel.
+        PyramidSettings { coarse_limit: Some(0), levels: 6, ..PyramidSettings::default() },
+        PyramidSettings { coarse_limit: Some(1), levels: 5, grit: 0.0, ..PyramidSettings::default() },
+        PyramidSettings { coarse_limit: Some(1), decisions: Decisions::Channels, levels: 6, ..PyramidSettings::default() },
     ];
     for settings in cases {
         assert_eq!(levels_for(settings.levels, canvas.width, canvas.height), settings.levels_for(canvas.width, canvas.height));
@@ -234,8 +239,17 @@ fn the_pyramid_agrees_with_the_cpu() {
             blend: (settings.grit > 0.0).then(|| (1.0 / settings.grit) as f32),
             channel_decisions: settings.decisions == Decisions::Channels,
             range_limit: settings.range_limit as f32,
+            coarse_limit: settings.coarse_limit,
         };
         let want = cpu_warped(&mut *settings.stacker(&Tiling::default()).unwrap(), &frames, &align, &canvas);
+        if settings.coarse_limit.is_some() {
+            // The limit must change these stacks, or agreeing with them would show nothing.
+            let off = PyramidSettings { coarse_limit: None, ..settings.clone() };
+            let without = cpu_warped(&mut *off.stacker(&Tiling::default()).unwrap(), &frames, &align, &canvas);
+            let (_, _, changed) = apart(&want.image, &without.image, 1e-3);
+            println!("{settings:?}: the limit changes {:.2}% of the samples", 100.0 * changed);
+            assert!(changed > 0.01, "{settings:?}: the coarse limit changes only {changed} of the samples");
+        }
         for tile in [1536, 64] {
             let mut stacker = GpuStacker::new(gpu, method.clone(), tiling(tile, 1 << 30)).unwrap();
             let got = gpu_warped(&mut stacker, &frames, &align, &canvas);
@@ -251,7 +265,7 @@ fn the_pyramid_agrees_with_the_cpu() {
     let on_canvas = covered(&frames);
     let settings = PyramidSettings::default();
     let want = stack(&mut *settings.stacker(&Tiling::default()).unwrap(), &on_canvas, &Unmonitored).unwrap();
-    let method = Method::Pyramid { levels: 0, blend: Some(2.0), channel_decisions: false, range_limit: 1.0 };
+    let method = Method::Pyramid { levels: 0, blend: Some(2.0), channel_decisions: false, range_limit: 1.0, coarse_limit: None };
     let got = gpu_covered(&mut GpuStacker::new(gpu, method, tiling(64, 1 << 30)).unwrap(), &on_canvas);
     same_coverage(&got, &want);
     let (max, mean, over) = apart(&got.image, &want.image, 1e-4);
@@ -321,7 +335,16 @@ fn hostile_settings_and_frames_are_errors() {
     let tiling = GpuTiling::default();
     assert!(GpuStacker::new(gpu, Method::Average { radius: -1.0, smoothing: 8.0, power: 3.0 }, tiling.clone()).is_err());
     assert!(GpuStacker::new(gpu, Method::Average { radius: 3.0, smoothing: 8.0, power: f64::NAN }, tiling.clone()).is_err());
-    assert!(GpuStacker::new(gpu, Method::Pyramid { levels: 11, blend: None, channel_decisions: false, range_limit: 1.0 }, tiling.clone()).is_err());
+    assert!(
+        GpuStacker::new(
+            gpu,
+            Method::Pyramid { levels: 11, blend: None, channel_decisions: false, range_limit: 1.0, coarse_limit: None },
+            tiling.clone()
+        )
+        .is_err()
+    );
+    let limit = Method::Pyramid { levels: 5, blend: None, channel_decisions: false, range_limit: 1.0, coarse_limit: Some(1001) };
+    assert!(GpuStacker::new(gpu, limit, tiling.clone()).is_err(), "a coarse limit beyond 1000 frames");
     assert!(GpuStacker::new(gpu, Method::Focus { radius: f64::INFINITY }, tiling.clone()).is_err());
     let depth = Arc::new(Image::new(10, 10, 1, ColorSpace::LINEAR).unwrap());
     assert!(GpuStacker::new(gpu, Method::Composite { depth: Arc::clone(&depth), blend: None, frames: 0 }, tiling.clone()).is_err());

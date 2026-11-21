@@ -1,7 +1,7 @@
 //! The depth map's two passes on the GPU: its focus statistics ([`Focus`], florastack-stack's `FocusKernel` in
 //! `depth/focus.rs`) and its composite ([`Composite`], `CompositeKernel` in `depth/composite.rs`), whose module
-//! documentation describes them. The depth map between them (`FocusStats::resolve`: the edge-aware smoothing and the
-//! fill) stays on the CPU: it reads no frame, and runs once per threshold.
+//! documentation describes them. The depth map between them (`FocusStats::resolve`) reads no frame: its whole-canvas
+//! filling (the edge-aware smoothing and push-pull) is `crate::resolve`'s, and the rest stays on the CPU.
 //!
 //! Pass 1, per frame and tile: luminance and coverage (`luma`), the luminance blurred over the radius by normalized
 //! convolution (`blur`, `focus_normalize`), its modified Laplacian squared where its taps are covered (`energy`),

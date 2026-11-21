@@ -19,6 +19,8 @@
 //! values are summed down a pyramid of 2x2 blocks, each level's weights clamped to 1, and pulled back up, each pixel
 //! keeping its own value as much as its weight says and taking the rest from the coarser level, bilinearly
 //! interpolated. A hole of any size is filled smoothly from its edges, and a pixel of weight 1 keeps its value.
+//!
+//! Public as the CPU references of florastack-gpu's kernels for them (AGENTS.md, CPU oracle).
 
 use florastack_core::{ColorSpace, Image};
 use rayon::prelude::*;
@@ -34,7 +36,7 @@ const STRIP: usize = 64;
 /// What the domain transform's recursive filter needs of a guide, made once for every plane smoothed with it: the
 /// spatial standard deviation and, when it is above 0, the distance from each pixel to the one before it in its row
 /// (`across`) and in its column (`down`), `1 + (sigma_s / sigma_r) |guide difference|` (the first's is unused).
-pub(crate) struct Domain {
+pub struct Domain {
     width: usize,
     height: usize,
     sigma_s: f64,
@@ -43,7 +45,7 @@ pub(crate) struct Domain {
 
 impl Domain {
     /// The domain of `guide` for a smoothing of `sigma_s` pixels that stops at edges of `sigma_r` in the guide's units.
-    pub(crate) fn new(guide: &Image<f32>, sigma_s: f64, sigma_r: f64) -> Result<Domain, StackError> {
+    pub fn new(guide: &Image<f32>, sigma_s: f64, sigma_r: f64) -> Result<Domain, StackError> {
         let (width, height) = (guide.width(), guide.height());
         if sigma_s <= 0.0 {
             return Ok(Domain { width, height, sigma_s, distances: None });
@@ -74,6 +76,29 @@ impl Domain {
         Ok(Domain { width, height, sigma_s, distances: Some((across, down)) })
     }
 
+    /// The distances to the pixel before in each row and in each column, when the smoothing is above 0.
+    pub fn distances(&self) -> Option<(&Image<f32>, &Image<f32>)> {
+        self.distances.as_ref().map(|(a, d)| (a, d))
+    }
+
+    /// The feedback of each of the recursive filter's passes, from the first: `exp(-sqrt(2) / sigma)` for that pass's
+    /// standard deviation; none when the smoothing is 0.
+    pub fn feedback(&self) -> Vec<f32> {
+        if self.distances.is_none() {
+            return Vec::new();
+        }
+        let n = f64::from(PASSES);
+        (0..PASSES)
+            .map(|pass| {
+                // Gastal and Oliveira's equation 14: the passes' deviations halve, their variances summing to sigma_s^2.
+                let sigma = self.sigma_s * 3.0_f64.sqrt() * 2.0_f64.powi(PASSES - pass - 1) / (4.0_f64.powf(n) - 1.0).sqrt();
+                #[allow(clippy::cast_possible_truncation)] // Between 0 and 1.
+                let a = (-(2.0_f64.sqrt()) / sigma).exp() as f32;
+                a
+            })
+            .collect()
+    }
+
     /// An error unless `plane` is a plane of one channel of the guide's size.
     fn check(&self, plane: &Image<f32>) -> Result<(), StackError> {
         if (plane.width(), plane.height(), plane.channels()) == (self.width, self.height, 1) {
@@ -92,12 +117,7 @@ impl Domain {
     /// The recursive filter's passes over `f`, a plane of the guide's size, in place.
     fn filter(&self, f: &mut Image<f32>) {
         let Some((across, down)) = &self.distances else { return };
-        let n = f64::from(PASSES);
-        for pass in 0..PASSES {
-            // Gastal and Oliveira's equation 14: the passes' deviations halve, their variances summing to sigma_s^2.
-            let sigma = self.sigma_s * 3.0_f64.sqrt() * 2.0_f64.powi(PASSES - pass - 1) / (4.0_f64.powf(n) - 1.0).sqrt();
-            #[allow(clippy::cast_possible_truncation)] // Between 0 and 1.
-            let a = (-(2.0_f64.sqrt()) / sigma).exp() as f32;
+        for a in self.feedback() {
             recursive_rows(f, across, a);
             recursive_columns(f, down, a);
         }
@@ -177,7 +197,7 @@ fn recursive_columns(f: &mut Image<f32>, down: &Image<f32>, a: f32) {
 /// Edge-aware normalized smoothing of `values` weighted by `weights` (both one channel, the size of the `domain`'s
 /// guide), guided by that guide: the smoothed values (0 where no weight reaches) and the smoothed weights. See the
 /// module documentation.
-pub(crate) fn smooth(values: &Image<f32>, weights: &Image<f32>, domain: &Domain) -> Result<(Image<f32>, Image<f32>), StackError> {
+pub fn smooth(values: &Image<f32>, weights: &Image<f32>, domain: &Domain) -> Result<(Image<f32>, Image<f32>), StackError> {
     let (w, h) = (domain.width, domain.height);
     domain.check(values)?;
     domain.check(weights)?;
@@ -200,7 +220,7 @@ pub(crate) fn smooth(values: &Image<f32>, weights: &Image<f32>, domain: &Domain)
 
 /// The weights [`smooth`] gives for `weights`, alone: each channel's recursion is its own, so the weights smoothed
 /// without values are the same, bit for bit, for half the work.
-pub(crate) fn smooth_weights(weights: &Image<f32>, domain: &Domain) -> Result<Image<f32>, StackError> {
+pub fn smooth_weights(weights: &Image<f32>, domain: &Domain) -> Result<Image<f32>, StackError> {
     domain.check(weights)?;
     let mut f = weights.clone();
     domain.filter(&mut f);
@@ -264,7 +284,7 @@ fn upsampled(level: &[f32], width: usize, height: usize, x: usize, y: usize) -> 
 
 /// `values` filled where `weights` (from 0 to 1) is below 1, from coarser scales: see the module documentation. Where
 /// no pixel has any weight, the result is 0.
-pub(crate) fn push_pull(values: &Image<f32>, weights: &Image<f32>) -> Result<Image<f32>, StackError> {
+pub fn push_pull(values: &Image<f32>, weights: &Image<f32>) -> Result<Image<f32>, StackError> {
     let (w, h) = (values.width(), values.height());
     let mut base = vec![0.0; 2 * w * h];
     base.par_chunks_mut(2 * w).zip(values.par_rows().zip(weights.par_rows())).for_each(|(out, (v, k))| {

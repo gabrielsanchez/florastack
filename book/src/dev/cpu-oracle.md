@@ -54,7 +54,11 @@ A device that computes wrong results always fails them.
 The engine doesn't trust a GPU because it has one. On first use, `compute` probes the best adapter, compiles every
 kernel and runs `Gpu::self_test`, which compares the kernels' results on small inputs with the CPU's; only an adapter
 that passes stacks, and with the `auto` preference a software adapter is never taken. A GPU that fails during a stack
-makes the stack start again on the CPU. The engine's and the quality runner's tests stack on the CPU
+makes the stack start again on the CPU. `crates/engine/tests/gpu_fallback.rs` checks it with faults injected on
+purpose: florastack-gpu's `testutil` feature, which only dev-dependencies may enable (`cargo xtask check-layers`), adds
+`testutil::fail_after(n)`, which makes every device fail at its check after the next `n`. The test fails each method's
+stack at a range of checks and expects the CPU's result bit for bit; the fault is the process's, so that test has a
+binary of its own. The engine's and the quality runner's tests stack on the CPU
 (`Compute::CPU`) unless a test is about the GPU, so that their results and memory are the same on every machine.
 
 ## Writing a kernel

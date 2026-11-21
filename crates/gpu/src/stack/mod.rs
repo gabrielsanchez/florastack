@@ -59,8 +59,8 @@ pub enum Method {
     Average { radius: f64, smoothing: f64, power: f64 },
     /// The pyramid method: florastack-stack's `Pyramid`, with its `levels` setting (0 chooses from the canvas, as
     /// [`levels_for`] does), the finest level's blend power (`1 / grit`; `None` picks), decisions on every channel or
-    /// on luminance, and the range limit (0 off).
-    Pyramid { levels: u32, blend: Option<f32>, channel_decisions: bool, range_limit: f32 },
+    /// on luminance, the range limit (0 off) and the coarse limit (in frames, `None` off).
+    Pyramid { levels: u32, blend: Option<f32>, channel_decisions: bool, range_limit: f32, coarse_limit: Option<u32> },
     /// The depth map's pass 1: florastack-stack's `FocusKernel` with its estimation `radius`. Its result has three
     /// channels: each pixel's interpolated depth, its confidence and its guide luminance.
     Focus { radius: f64 },
@@ -396,8 +396,8 @@ impl GpuStacker {
         let name = method.name();
         let method: Box<dyn TileMethod> = match method {
             Method::Average { radius, smoothing, power } => Box::new(average::Average::new(gpu, radius, smoothing, power)?),
-            Method::Pyramid { levels, blend, channel_decisions, range_limit } => {
-                Box::new(pyramid::Pyramid::new(levels, blend, channel_decisions, range_limit)?)
+            Method::Pyramid { levels, blend, channel_decisions, range_limit, coarse_limit } => {
+                Box::new(pyramid::Pyramid::new(levels, blend, channel_decisions, range_limit, coarse_limit)?)
             }
             Method::Focus { radius } => Box::new(depth::Focus::new(gpu, radius)?),
             Method::Composite { depth, blend, frames } => Box::new(depth::Composite::new(depth, blend, frames)?),

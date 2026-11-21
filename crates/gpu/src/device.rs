@@ -276,6 +276,10 @@ impl Gpu {
 
     /// The first error the device reported since the last check, or its loss.
     pub fn check(&self) -> Result<(), GpuError> {
+        #[cfg(feature = "testutil")]
+        if crate::testutil::fault_now() {
+            return Err(GpuError::Device { message: "an injected fault (testutil::fail_after)".into() });
+        }
         if let Some(message) = self.inner.lost.lock().unwrap_or_else(PoisonError::into_inner).clone() {
             return Err(GpuError::Lost { message });
         }
