@@ -48,7 +48,7 @@
 
 mod composite;
 mod contribution;
-mod filter;
+pub mod filter;
 mod focus;
 mod resolve;
 
@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 pub use composite::CompositeKernel;
 pub use contribution::Contributions;
 pub use focus::{Estimator, FocusKernel, FocusStats};
-pub use resolve::DepthMap;
+pub use resolve::{DepthMap, EDGE, FILL_BLEND, Fill, Filled, MIN_SUPPORT, REACHED, fill};
 
 use crate::average::MAX_RADIUS;
 use crate::error::StackError;

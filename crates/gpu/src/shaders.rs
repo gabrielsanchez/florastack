@@ -39,6 +39,15 @@ pub(crate) enum Kernel {
     Stats,
     Composite,
     CompositeResult,
+    Domain,
+    Recursive,
+    SmoothPack,
+    SmoothUnpack,
+    Support,
+    FillBase,
+    PpReduce,
+    PpPull,
+    FillFinish,
 }
 
 impl Kernel {
@@ -77,6 +86,15 @@ impl Kernel {
             Kernel::Stats => "stats",
             Kernel::Composite => "composite",
             Kernel::CompositeResult => "composite_result",
+            Kernel::Domain => "domain",
+            Kernel::Recursive => "recursive",
+            Kernel::SmoothPack => "smooth_pack",
+            Kernel::SmoothUnpack => "smooth_unpack",
+            Kernel::Support => "support",
+            Kernel::FillBase => "fill_base",
+            Kernel::PpReduce => "pp_reduce",
+            Kernel::PpPull => "pp_pull",
+            Kernel::FillFinish => "fill_finish",
         }
     }
 
@@ -114,6 +132,15 @@ impl Kernel {
             Kernel::Stats => include_str!("shaders/stats.wgsl"),
             Kernel::Composite => include_str!("shaders/composite.wgsl"),
             Kernel::CompositeResult => include_str!("shaders/composite_result.wgsl"),
+            Kernel::Domain => include_str!("shaders/domain.wgsl"),
+            Kernel::Recursive => include_str!("shaders/recursive.wgsl"),
+            Kernel::SmoothPack => include_str!("shaders/smooth_pack.wgsl"),
+            Kernel::SmoothUnpack => include_str!("shaders/smooth_unpack.wgsl"),
+            Kernel::Support => include_str!("shaders/support.wgsl"),
+            Kernel::FillBase => include_str!("shaders/fill_base.wgsl"),
+            Kernel::PpReduce => include_str!("shaders/pp_reduce.wgsl"),
+            Kernel::PpPull => include_str!("shaders/pp_pull.wgsl"),
+            Kernel::FillFinish => include_str!("shaders/fill_finish.wgsl"),
         }
     }
 
@@ -123,7 +150,7 @@ impl Kernel {
     }
 
     /// Every kernel, for the test that compiles them all.
-    pub(crate) const ALL: [Kernel; 32] = [
+    pub(crate) const ALL: [Kernel; 41] = [
         Kernel::Fill,
         Kernel::FillU32,
         Kernel::CopyRect,
@@ -156,5 +183,14 @@ impl Kernel {
         Kernel::Stats,
         Kernel::Composite,
         Kernel::CompositeResult,
+        Kernel::Domain,
+        Kernel::Recursive,
+        Kernel::SmoothPack,
+        Kernel::SmoothUnpack,
+        Kernel::Support,
+        Kernel::FillBase,
+        Kernel::PpReduce,
+        Kernel::PpPull,
+        Kernel::FillFinish,
     ];
 }

@@ -123,6 +123,89 @@ pub struct DepthMap {
     pub blend: Option<Arc<Image<f32>>>,
 }
 
+/// The whole-canvas filtering of [`FocusStats::resolve`], between the choice of the confident pixels and the depth
+/// map: what [`fill`] does on the CPU, and florastack-gpu's kernels on the GPU (`FocusStats::resolve_with`).
+pub struct Fill<'a> {
+    /// Each pixel's measured depth, in frames.
+    pub depth: &'a Image<f32>,
+    /// 1 where the depth is confident, 0 elsewhere.
+    pub weights: Image<f32>,
+    /// How many of `weights` are 1.
+    pub confident: usize,
+    /// The sharpest frames' luminance, which guides the smoothing (its cube root, as [`fill`] takes it).
+    pub guide: &'a Image<f32>,
+    /// Where some frame covers (above 0), or `None` when every pixel is covered.
+    pub covered: Option<&'a Image<f32>>,
+    /// The smoothing radius, in pixels.
+    pub smoothing: f64,
+    /// The frames the depth indexes.
+    pub frames: usize,
+}
+
+/// What [`Fill`] gives.
+pub struct Filled {
+    /// The depth smoothed, filled and held within the frames, 0 where no frame covers.
+    pub depth: Image<f32>,
+    /// Each pixel's blend width ([`DepthMap::blend`]), `None` when it is 1 everywhere.
+    pub blend: Option<Image<f32>>,
+    /// How many pixels stayed confident after the support test.
+    pub confident: usize,
+}
+
+/// [`Fill`] on the CPU: the support test, the edge-aware smoothing, push-pull, and the blend width (steps 2 to 5 of
+/// the module documentation).
+pub fn fill(input: Fill<'_>) -> Result<Filled, StackError> {
+    let Fill { depth, mut weights, mut confident, guide, covered, smoothing, frames } = input;
+    let mut guide = guide.clone();
+    guide.par_rows_mut().for_each(|row| row.iter_mut().for_each(|g| *g = g.max(0.0).cbrt()));
+    // The guide's distances, made once for both smoothings.
+    let domain = Domain::new(&guide, smoothing, EDGE)?;
+    drop(guide);
+    if smoothing > 0.0 && confident > 0 {
+        // The support: the confident share of each pixel's neighborhood, as the smoothing sees it.
+        let support = smooth_weights(&weights, &domain)?;
+        confident = weights
+            .par_rows_mut()
+            .zip(support.par_rows())
+            .map(|(k, s)| {
+                let mut n = 0;
+                for (k, &s) in k.iter_mut().zip(s) {
+                    if *k > 0.0 && s < MIN_SUPPORT {
+                        *k = 0.0;
+                    }
+                    n += usize::from(*k > 0.0);
+                }
+                n
+            })
+            .sum();
+    }
+    let (smoothed, mut reach) = smooth(depth, &weights, &domain)?;
+    drop((weights, domain));
+    reach.par_rows_mut().for_each(|row| row.iter_mut().for_each(|k| *k = (*k / REACHED).min(1.0)));
+    let mut depth = push_pull(&smoothed, &reach)?;
+    drop(smoothed);
+    // The blend width: 1 where the depth kept its smoothed value whole, exactly, so that those pixels composite as
+    // they would from the two frames around their depth.
+    let mut blend = reach;
+    blend.par_rows_mut().enumerate().for_each(|(y, row)| {
+        let cov = covered.and_then(|i| i.row(y));
+        for (x, k) in row.iter_mut().enumerate() {
+            let filled = if FocusStats::covers(cov, x) && k.is_finite() { 1.0 - k.clamp(0.0, 1.0) } else { 0.0 };
+            *k = 1.0 + (FILL_BLEND - 1.0) * filled;
+        }
+    });
+    let blend = if blend.par_rows().any(|row| row.iter().any(|&k| k > 1.0)) { Some(blend) } else { None };
+    #[allow(clippy::cast_precision_loss)] // At most MAX_FRAMES.
+    let last = frames.saturating_sub(1) as f32;
+    depth.par_rows_mut().enumerate().for_each(|(y, d)| {
+        let cov = covered.and_then(|i| i.row(y));
+        for (x, d) in d.iter_mut().enumerate() {
+            *d = if FocusStats::covers(cov, x) && d.is_finite() { d.clamp(0.0, last) } else { 0.0 };
+        }
+    });
+    Ok(Filled { depth, blend, confident })
+}
+
 /// A sample in `[0, 1]` as a 16-bit one.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped to [0, 65535] first.
 fn to_u16(v: f32) -> u16 {
@@ -285,9 +368,20 @@ impl FocusStats {
     /// The depth map for `threshold` and `smoothing` (in pixels), with the pixels `mask` marks treated as
     /// low-confidence (one channel, the canvas's size; a value of at least 0.5 marks). See the module documentation.
     pub fn resolve(&self, threshold: Threshold, smoothing: f64, mask: Option<&Image<f32>>) -> Result<DepthMap, StackError> {
+        self.resolve_with(threshold, smoothing, mask, fill)
+    }
+
+    /// [`FocusStats::resolve`], with the whole-canvas filtering done by `filling`: [`fill`] on the CPU, or the GPU's.
+    pub fn resolve_with<E: From<StackError>>(
+        &self,
+        threshold: Threshold,
+        smoothing: f64,
+        mask: Option<&Image<f32>>,
+        filling: impl FnOnce(Fill<'_>) -> Result<Filled, E>,
+    ) -> Result<DepthMap, E> {
         threshold.validate()?;
         if !(smoothing.is_finite() && (0.0..=MAX_SMOOTHING).contains(&smoothing)) {
-            return Err(StackError::Setting { name: "smoothing", value: smoothing, expected: "from 0 to 256 pixels" });
+            return Err(StackError::Setting { name: "smoothing", value: smoothing, expected: "from 0 to 256 pixels" }.into());
         }
         let (w, h) = (self.width(), self.height());
         if let Some(m) = mask
@@ -300,11 +394,12 @@ impl FocusStats {
                 channels: m.channels(),
                 expected_width: w,
                 expected_height: h,
-            });
+            }
+            .into());
         }
         let level = self.level(threshold);
         let covered = self.covered.as_ref();
-        let mut weights = Image::new(w, h, 1, ColorSpace::LINEAR)?;
+        let mut weights = Image::new(w, h, 1, ColorSpace::LINEAR).map_err(StackError::from)?;
         let confident: usize = weights
             .par_rows_mut()
             .zip(self.confidence.par_rows())
@@ -328,54 +423,8 @@ impl FocusStats {
                 k.iter_mut().enumerate().for_each(|(x, k)| *k = if FocusStats::covers(cov, x) { 1.0 } else { 0.0 });
             });
         }
-        let mut guide = self.guide.clone();
-        guide.par_rows_mut().for_each(|row| row.iter_mut().for_each(|g| *g = g.max(0.0).cbrt()));
-        // The guide's distances, made once for both smoothings.
-        let domain = Domain::new(&guide, smoothing, EDGE)?;
-        drop(guide);
-        let mut confident = confident;
-        if smoothing > 0.0 && confident > 0 {
-            // The support: the confident share of each pixel's neighborhood, as the smoothing sees it.
-            let support = smooth_weights(&weights, &domain)?;
-            confident = weights
-                .par_rows_mut()
-                .zip(support.par_rows())
-                .map(|(k, s)| {
-                    let mut n = 0;
-                    for (k, &s) in k.iter_mut().zip(s) {
-                        if *k > 0.0 && s < MIN_SUPPORT {
-                            *k = 0.0;
-                        }
-                        n += usize::from(*k > 0.0);
-                    }
-                    n
-                })
-                .sum();
-        }
-        let (smoothed, mut reach) = smooth(&self.depth, &weights, &domain)?;
-        drop((weights, domain));
-        reach.par_rows_mut().for_each(|row| row.iter_mut().for_each(|k| *k = (*k / REACHED).min(1.0)));
-        let mut depth = push_pull(&smoothed, &reach)?;
-        drop(smoothed);
-        // The blend width: 1 where the depth kept its smoothed value whole, exactly, so that those pixels composite as
-        // they would from the two frames around their depth.
-        let mut blend = reach;
-        blend.par_rows_mut().enumerate().for_each(|(y, row)| {
-            let cov = covered.and_then(|i| i.row(y));
-            for (x, k) in row.iter_mut().enumerate() {
-                let filled = if FocusStats::covers(cov, x) && k.is_finite() { 1.0 - k.clamp(0.0, 1.0) } else { 0.0 };
-                *k = 1.0 + (FILL_BLEND - 1.0) * filled;
-            }
-        });
-        let blend = if blend.par_rows().any(|row| row.iter().any(|&k| k > 1.0)) { Some(Arc::new(blend)) } else { None };
-        #[allow(clippy::cast_precision_loss)] // At most MAX_FRAMES.
-        let last = self.frames.saturating_sub(1) as f32;
-        depth.par_rows_mut().enumerate().for_each(|(y, d)| {
-            let cov = covered.and_then(|i| i.row(y));
-            for (x, d) in d.iter_mut().enumerate() {
-                *d = if FocusStats::covers(cov, x) && d.is_finite() { d.clamp(0.0, last) } else { 0.0 };
-            }
-        });
+        let input = Fill { depth: &self.depth, weights, confident, guide: &self.guide, covered, smoothing, frames: self.frames };
+        let Filled { depth, blend, confident } = filling(input)?;
         let mut confidence = self.confidence.clone();
         confidence.par_rows_mut().for_each(|row| {
             for c in row.iter_mut() {
@@ -388,6 +437,13 @@ impl FocusStats {
                 };
             }
         });
-        Ok(DepthMap { frames: self.frames, depth: Arc::new(depth), confidence, level, filled: covered_pixels.saturating_sub(confident), blend })
+        Ok(DepthMap {
+            frames: self.frames,
+            depth: Arc::new(depth),
+            confidence,
+            level,
+            filled: covered_pixels.saturating_sub(confident),
+            blend: blend.map(Arc::new),
+        })
     }
 }

@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "compositors"
 harness = false
+
+[[bench]]
+name = "resolve"
+harness = false

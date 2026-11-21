@@ -18,6 +18,7 @@ mod error;
 pub mod levels;
 pub mod ops;
 mod plane;
+pub mod resolve;
 mod selftest;
 mod shaders;
 mod stack;

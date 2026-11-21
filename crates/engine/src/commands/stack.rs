@@ -1844,7 +1844,7 @@ fn gpu_pass(stacker: &mut DeviceStacker, feed: &mut dyn Feed, ctx: &dyn Monitor,
 }
 
 /// [`stack_feed`] on the GPU (florastack-gpu's stackers, with the depth map between the depth-map method's passes
-/// made on the CPU). Never called for the methods [`cpu_only`] names, which have no stacker there: the wavelet method
+/// filled on the GPU too, [`resolve_on`]). Never called for the methods [`cpu_only`] names, which have no stacker there: the wavelet method
 /// is a GPU error, so that it would stack again on the CPU.
 #[allow(clippy::too_many_arguments)] // As stack_feed's.
 fn stack_gpu(
@@ -1881,7 +1881,7 @@ fn stack_gpu(
                 Arc::new(focus_stats(estimator.finish(finishing)?, depth.radius)?)
             };
             ctx.checkpoint().map_err(CommandError::from)?;
-            let map = stats.resolve(depth.contrast_threshold(), depth.smoothing, None)?;
+            let map = resolve_on(gpu, &stats, depth)?;
             drop(stats);
             stage(1, units);
             let method = GpuMethod::Composite { depth: std::sync::Arc::clone(&map.depth), blend: map.blend.clone(), frames: map.frames };
@@ -1896,6 +1896,40 @@ fn stack_gpu(
     gpu_pass(&mut stacker, feed, ctx, units)?;
     stage(1, units);
     Ok((stacked(stacker.finish(finishing)?), None))
+}
+
+/// The depth map of `stats` for `depth`'s threshold and smoothing, with its whole-canvas filling on the GPU
+/// (florastack-gpu's `resolve::fill`, against florastack-stack's `depth::fill`); on the CPU when the GPU can't (planes
+/// beyond the device's limits, or a device error, which the composite's pass then meets again if the device is gone).
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_on(gpu: &GpuDevice, stats: &FocusStats, depth: &DepthSettings) -> Result<DepthMap, StackError> {
+    use florastack_gpu::resolve::{self, FillPlanes, FillSettings};
+    use florastack_stack::depth::{EDGE, FILL_BLEND, Fill, Filled, MIN_SUPPORT, REACHED, fill};
+    stats.resolve_with(depth.contrast_threshold(), depth.smoothing, None, |input: Fill<'_>| {
+        let planes =
+            FillPlanes { depth: input.depth, weights: &input.weights, confident: input.confident, guide: input.guide, covered: input.covered };
+        let settings = FillSettings {
+            smoothing: input.smoothing,
+            edge: EDGE,
+            min_support: MIN_SUPPORT,
+            reached: REACHED,
+            fill_blend: FILL_BLEND,
+            frames: input.frames,
+        };
+        match resolve::fill(gpu, &planes, &settings) {
+            Ok(filled) => Ok(Filled { depth: filled.depth, blend: filled.blend, confident: filled.confident }),
+            Err(e) => {
+                tracing::warn!("the depth map's filling failed on the GPU ({e}): filling it on the CPU");
+                fill(input)
+            }
+        }
+    })
+}
+
+/// In a browser, the depth map is resolved on the CPU: the GPU's worker has no filling yet.
+#[cfg(target_arch = "wasm32")]
+fn resolve_on(_gpu: &GpuDevice, stats: &FocusStats, depth: &DepthSettings) -> Result<DepthMap, StackError> {
+    stats.resolve(depth.contrast_threshold(), depth.smoothing, None)
 }
 
 /// `image` with `alpha`, if there is one: an extra channel for gray and color images, the alpha channel they have
