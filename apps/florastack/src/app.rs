@@ -227,6 +227,7 @@ pub struct FloraStackApp {
     /// The display transform, following the window from display to display, and the window's renderer, whose viewer
     /// it goes to (`display_profile.rs`).
     pub display: crate::display_profile::Follower,
+    #[cfg(not(target_arch = "wasm32"))]
     render_state: Option<egui_wgpu::RenderState>,
 }
 
@@ -239,13 +240,17 @@ impl FloraStackApp {
         let prefs = Prefs::load(cc.storage);
         let mut app = FloraStackApp::with_context(&ctx, options, prefs, gpu);
         app.parallax.gpu = relief_gpu;
-        app.render_state = cc.wgpu_render_state.clone().filter(|_| gpu.is_some());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.render_state = cc.wgpu_render_state.clone().filter(|_| gpu.is_some());
+        }
         app
     }
 
-    /// Follows the window to the display it is on, and gives the viewer that display's transform when it, or the
+    /// Follows the window to the display it is on (on the desktop: in a browser the viewer draws through egui), and gives the viewer that display's transform when it, or the
     /// preference, changed: the table to the GPU viewer, the space to the window's tag (macOS), and a notice when the
     /// profile can't be used.
+    #[cfg(not(target_arch = "wasm32"))]
     fn follow_display(&mut self, ctx: &egui::Context, window: &impl raw_window_handle::HasWindowHandle) {
         let Some(state) = &self.render_state else { return };
         let point = ctx.input(|i| {
@@ -335,6 +340,7 @@ impl FloraStackApp {
             shown_preview_revision: 0,
             temporary,
             display: crate::display_profile::Follower::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             render_state: None,
         };
         app.set_autosave();
@@ -1041,7 +1047,10 @@ pub(crate) fn apply_theme(ctx: &egui::Context, theme: Theme) {
 impl eframe::App for FloraStackApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.tick(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
         self.follow_display(ctx, frame);
+        #[cfg(target_arch = "wasm32")]
+        let _ = frame;
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             if self.shell.engine().is_dirty() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
