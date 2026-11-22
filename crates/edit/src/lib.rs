@@ -5,6 +5,7 @@
 //!   brush strokes, luminance and color ranges, and the stack's own subject, background and depth ranges) with
 //!   [`Local`] adjustments.
 //! - [`render`]: a [`Renderer`] holds one image and renders any adjustments at full size or reduced for a view.
+//! - `gpu` (not in the browser build): LightCraft's GPU renderer, which previews use when a request asks for it.
 //! - [`subject`]: the sharp areas of a stacked image, where it has fine detail, for the sharp, soft and depth masks.
 //! - `segment` (not in the browser build): AI selections, Meta's SAM 3 model run on an output from clicks or a
 //!   description, kept with their masks so that rendering needs no model.
@@ -14,6 +15,8 @@
 //! own primaries.
 
 pub mod error;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gpu;
 pub mod render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod segment;
@@ -21,5 +24,5 @@ pub mod settings;
 pub mod subject;
 
 pub use error::EditError;
-pub use render::{Renderer, Request, Size};
+pub use render::{Renderer, Request, Size, Window};
 pub use settings::{Adjustments, Click, Component, Global, Local, Mask, Op, Selection, Shape, Stroke};

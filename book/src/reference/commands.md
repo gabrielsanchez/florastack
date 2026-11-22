@@ -297,7 +297,7 @@ Example:
 
 **Preview adjustments.** Renders the output open for adjusting with its adjustments, reduced to fit a view.
 
-The preview fits in `width` by `height` pixels (never enlarged). When the output's retouch strokes changed since it was read, it is read again first. `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; `before` also renders the output without its adjustments at the same size, for comparing. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
+The preview fits in `width` by `height` pixels (never enlarged), or is the `window` of that preview a zoomed view shows. It renders on the GPU unless `compute.set` chose the CPU, and on the CPU when the GPU can't. When the output's retouch strokes changed since it was read, it is read again first. `draft` renders quickly while a slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; `before` also renders the output without its adjustments at the same size, for comparing. Apps draw the result; the job's result gives its size. Runs beside other jobs; a newer call replaces one still running.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -312,14 +312,23 @@ Parameters:
 | `height` | integer, from 1 to 16384 | **Required.** The largest height, in pixels, from 1 to 16384. |
 | `overlay` | integer | A mask whose region is shown tinted red, by id. |
 | `width` | integer, from 1 to 16384 | **Required.** The largest width, in pixels, from 1 to 16384. |
+| `window` | object | Renders only this part of the image that `width` and `height` give, in its pixels: a zoomed view. Spatial adjustments read around each pixel, so a view asks for a margin around what it shows. |
+| `window.height` | integer, from 1 to 16384 | **Required.** Its height, from 1 to 16384. |
+| `window.width` | integer, from 1 to 16384 | **Required.** Its width, from 1 to 16384. |
+| `window.x` | integer, from 0 to 16383 | **Required.** Its left edge, from 0 to 16383. |
+| `window.y` | integer, from 0 to 16383 | **Required.** Its top edge, from 0 to 16383. |
 
 Result:
 
 | Name | Type | Description |
 |---|---|---|
+| `fullHeight` | integer |  |
+| `fullWidth` | integer |  |
 | `height` | integer |  |
 | `output` | integer | An output's id in its project. |
-| `width` | integer |  |
+| `width` | integer | Its size, in pixels. |
+| `x` | integer | Where it lies in the whole preview, which is `fullWidth` by `fullHeight`: its top left corner (0 and 0, and the same size, without a window). |
+| `y` | integer |  |
 
 Examples:
 
@@ -327,6 +336,7 @@ Examples:
 {"height":1000,"width":1600}
 {"draft":true,"height":600,"overlay":2,"width":800}
 {"before":true,"height":1000,"width":1600}
+{"height":4000,"width":6000,"window":{"height":1000,"width":1600,"x":2000,"y":1500}}
 ```
 
 ### `adjust.removeMask`
@@ -1646,6 +1656,7 @@ Result:
 
 | Name | Type | Description |
 |---|---|---|
+| `bytes` | integer | What the steps hold, in bytes, roughly: beyond the history's budget the oldest steps go. |
 | `dirty` | boolean | Whether the project has unsaved changes. |
 | `redo` | array of object | The redo steps, the next to redo first. |
 | `undo` | array of object | The undo steps, the next to undo first. |

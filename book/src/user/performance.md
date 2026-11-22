@@ -21,6 +21,10 @@ through a stack makes the stack start again on the CPU.
 **Test the GPU** runs the self-test again, after a driver update say. From the command line, `--device auto|cpu|gpu`
 does the same, and `compute.info` says which device was chosen, and why the CPU stacks when it does.
 
+The same choice applies to the Adjust tab's previews, which LightCraft's renderer draws on the graphics card (a hardware
+one: it never uses a software renderer) unless the CPU is chosen; exported files are always rendered on the CPU, so that
+they are the same on every machine.
+
 How much faster the GPU is depends on the card and the method. On a laptop RTX 3060 against 16 CPU threads, 100 frames
 of 24 megapixels took 17 s rather than 94 s by weighted average, 19 s rather than 238 s by pyramid, and 31 s rather
 than 112 s by depth map. The wavelet method has no GPU version: it stacks on the CPU whatever the setting.

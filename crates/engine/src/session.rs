@@ -233,6 +233,11 @@ impl Session {
         self.open.as_ref().map(|o| o.history.steps()).unwrap_or_default()
     }
 
+    /// What the undo and redo steps hold, in bytes, roughly (florastack-project's `Edit::weight`).
+    pub fn history_bytes(&self) -> usize {
+        self.open.as_ref().map_or(0, |o| o.history.weight())
+    }
+
     /// Refuses an edit of what a running job depends on.
     fn check_locks(&self, aspects: Aspects) -> Result<(), CommandError> {
         match self.jobs.conflict(aspects) {

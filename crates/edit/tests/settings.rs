@@ -185,7 +185,7 @@ proptest! {
         let maps = Image::from_fn(w, h, 1, ColorSpace::LINEAR, |x, _, _| x as f32 / w as f32).unwrap();
         let r = Renderer::new(&image).unwrap().with_depth(&maps).unwrap();
         prop_assume!(a.validate().is_ok());
-        for request in [Request::FULL, Request { size: Size::Fit { width: 16, height: 16 }, draft: true, overlay: Some(1) }] {
+        for request in [Request::FULL, Request { size: Size::Fit { width: 16, height: 16 }, draft: true, overlay: Some(1), window: None, gpu: false }] {
             let out = r.render(&a, &request).unwrap();
             let (ew, eh) = r.output_size(request.size);
             prop_assert_eq!((out.width(), out.height()), (ew, eh));

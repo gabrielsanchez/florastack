@@ -190,10 +190,11 @@ fn renders_repeat_exactly() {
 fn a_reduced_render_fits_and_keeps_the_aspect_ratio() {
     let r = renderer();
     let a = Adjustments { global: Global { exposure: 0.5, ..Global::default() }, ..Adjustments::default() };
-    let out = r.render(&a, &Request { size: Size::Fit { width: 96, height: 96 }, draft: true, overlay: None }).unwrap();
+    let out = r.render(&a, &Request { size: Size::Fit { width: 96, height: 96 }, draft: true, overlay: None, window: None, gpu: false }).unwrap();
     assert_eq!((out.width(), out.height()), (96, 64));
     // Never enlarged.
-    let out = r.render(&a, &Request { size: Size::Fit { width: 1000, height: 1000 }, draft: false, overlay: None }).unwrap();
+    let out =
+        r.render(&a, &Request { size: Size::Fit { width: 1000, height: 1000 }, draft: false, overlay: None, window: None, gpu: false }).unwrap();
     assert_eq!((out.width(), out.height()), (W, H));
 }
 
@@ -209,7 +210,12 @@ fn coverage_is_kept() {
     for (i, p) in out.as_raw().as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(p[3], if i % W < 20 { 0.0 } else { 1.0 });
     }
-    let small = r.render(&Adjustments::default(), &Request { size: Size::Fit { width: 96, height: 64 }, draft: false, overlay: None }).unwrap();
+    let small = r
+        .render(
+            &Adjustments::default(),
+            &Request { size: Size::Fit { width: 96, height: 64 }, draft: false, overlay: None, window: None, gpu: false },
+        )
+        .unwrap();
     assert_eq!(small.channels(), 4);
 }
 
@@ -425,7 +431,7 @@ fn an_overlay_shows_the_mask() {
     let (image, _) = scene();
     let r = Renderer::new(&image).unwrap();
     let a = masked(Shape::Linear { start: [0.0, 0.2], end: [0.0, 0.5] }, Local::default());
-    let out = r.render(&a, &Request { size: Size::Full, draft: false, overlay: Some(1) }).unwrap();
+    let out = r.render(&a, &Request { size: Size::Full, draft: false, overlay: Some(1), window: None, gpu: false }).unwrap();
     // The selected top is tinted red; the bottom isn't.
     let redness = |img: &Image<f32>, y0: usize, y1: usize| {
         let m = channel_means(&img.crop(florastack_core::Rect::new(0, y0, W, y1 - y0)).unwrap());
@@ -516,4 +522,39 @@ fn a_stored_ai_selection_renders_without_the_model() {
     // Damaged data that passes the checks selects nothing rather than failing.
     let damaged = Shape::Object { clicks: vec![], selection: Some(Selection { side: 8, data: "not base64!".into() }) };
     r.render(&masked(damaged, darker), &Request::FULL).unwrap();
+}
+
+#[test]
+fn a_window_is_that_part_of_the_whole_render() {
+    let (image, _) = scene();
+    let data: Vec<f32> =
+        image.as_raw().as_chunks::<3>().0.iter().enumerate().flat_map(|(i, p)| [p[0], p[1], p[2], if i % W < 50 { 0.0 } else { 1.0 }]).collect();
+    let rgba = Image::from_vec(W, H, 4, ColorSpace::LINEAR, data).unwrap();
+    let mut a = masked(Shape::Radial { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.15, angle: 0.0, feather: 50.0 }, brighter());
+    a.global = Global { clarity: 40.0, texture: 30.0, sharpening: 60.0, ..Global::default() };
+    for (r, channels) in [(renderer(), 3), (Renderer::new(&rgba).unwrap(), 4)] {
+        for size in [Size::Full, Size::Fit { width: 120, height: 80 }] {
+            let whole = r.render(&a, &Request { size, draft: false, overlay: None, window: None, gpu: false }).unwrap();
+            let window = florastack_edit::Window { x: 30, y: 20, width: 60, height: 50 };
+            let part = r.render(&a, &Request { size, draft: false, overlay: None, window: Some(window), gpu: false }).unwrap();
+            assert_eq!((part.width(), part.height(), part.channels()), (60, 50, channels));
+            // Spatial adjustments read around each pixel, and a window has only its own: within 12 pixels of its
+            // edges it differs (by up to 0.17 here, clarity reaching furthest), which is why a view asks for a
+            // margin. (Clarity's reach grows with the image: at 1536 pixels it leaves differences of 0.008 a hundred
+            // pixels in.)
+            let inner = |image: &Image<f32>, x: usize, y: usize| image.crop(florastack_core::Rect::new(x, y, 36, 26)).unwrap();
+            let d = max_difference(&inner(&part, 12, 12), &inner(&whole, 42, 32));
+            assert!(d < 1e-3, "{size:?}, {channels} channels: {d}");
+            if channels == 4 {
+                let coverage = |image: &Image<f32>, x0: usize, y0: usize| -> Vec<f32> {
+                    (0..50).flat_map(|y| (0..60).map(move |x| (x, y))).map(|(x, y)| image.pixel(x0 + x, y0 + y).unwrap()[3]).collect()
+                };
+                assert_eq!(coverage(&part, 0, 0), coverage(&whole, 30, 20), "the coverage is the whole render's");
+            }
+        }
+        // A window reaching past the image is cut back to it.
+        let past = florastack_edit::Window { x: W - 10, y: H - 10, width: 40, height: 30 };
+        let cut = r.render(&a, &Request { size: Size::Full, draft: false, overlay: None, window: Some(past), gpu: false }).unwrap();
+        assert_eq!((cut.width(), cut.height()), (10, 10));
+    }
 }

@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::stack::{Chosen, StackPlan, Units};
-use crate::adjust::{AdjustChanges, AdjustSession, FOCUS_DEPTH, adjustments, renderer};
+use crate::adjust::{AdjustChanges, AdjustSession, FOCUS_DEPTH, Placement, adjustments, renderer};
 use crate::error::{CommandError, Invalid};
 use crate::jobs::{JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
@@ -142,7 +142,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::job(
             Meta::new("adjust.preview", "Preview adjustments", "Renders the output open for adjusting with its adjustments, reduced to fit a view.")
                 .help(
-                    "The preview fits in `width` by `height` pixels (never enlarged). When the output's retouch strokes \
+                    "The preview fits in `width` by `height` pixels (never enlarged), or is the `window` of that \
+                     preview a zoomed view shows. It renders on the GPU unless `compute.set` chose the CPU, and on the \
+                     CPU when the GPU can't. When the output's retouch strokes \
                      changed since it was read, it is read again first. `draft` renders quickly while a \
                      slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; \
                      `before` also renders the output without its adjustments at the same size, for comparing. \
@@ -155,6 +157,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                     r#"{ "width": 1600, "height": 1000 }"#,
                     r#"{ "width": 800, "height": 600, "draft": true, "overlay": 2 }"#,
                     r#"{ "width": 1600, "height": 1000, "before": true }"#,
+                    r#"{ "width": 6000, "height": 4000, "window": { "x": 2000, "y": 1500, "width": 1600, "height": 1000 } }"#,
                 ]),
             Lane::Preview,
             preview,
@@ -297,12 +300,17 @@ fn change(
 ) -> Result<Adjustments, CommandError> {
     let mut adjustments = adjustments(find(session, id)?)?;
     change(&mut adjustments)?;
+    validated(session, &adjustments)?;
+    store(session, id, &adjustments)?;
+    Ok(adjustments)
+}
+
+/// Refuses adjustments that aren't valid.
+fn validated(session: &Session, adjustments: &Adjustments) -> Result<(), CommandError> {
     adjustments.validate().map_err(|e| {
         let Invalid { field, reason } = invalid(&e);
         session.invalid(field, reason)
-    })?;
-    store(session, id, &adjustments)?;
-    Ok(adjustments)
+    })
 }
 
 fn add_mask(session: &mut Session, p: MaskParams) -> Result<MaskChanged, CommandError> {
@@ -410,9 +418,12 @@ struct Stroked {
 }
 
 fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandError> {
+    let before = find(session, p.output)?.adjustments.clone();
+    let mut adjustments = adjustments(find(session, p.output)?)?;
     let (mut component, mut strokes) = (0, 0);
-    change(session, p.output, |a| {
-        let mask = a.mask_mut(p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+    let position = adjustments.masks.iter().position(|m| m.id == p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+    {
+        let mask = adjustments.masks.get_mut(position).ok_or_else(|| no_mask(p.output, p.mask))?;
         let brush = |c: &Component| matches!(c.shape, Shape::Brush { .. });
         let index = match p.component {
             Some(i) if mask.components.get(i).is_some_and(brush) => i,
@@ -430,8 +441,20 @@ fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandErro
             list.push(p.stroke);
             (component, strokes) = (index, list.len());
         }
-        Ok(())
-    })?;
+    }
+    validated(session, &adjustments)?;
+    // A stroke onto a brush that was there is an undo step of that stroke alone, not of the whole adjustments.
+    let after = florastack_project::to_data("adjustments", &adjustments)?;
+    let pointer = format!("/masks/{position}/components/{component}/shape/strokes");
+    let pushed = after.pointer(&pointer).and_then(serde_json::Value::as_array).and_then(|list| list.last()).cloned();
+    let one_more = before.zip(pushed).and_then(|(mut before, stroke)| {
+        before.pointer_mut(&pointer)?.as_array_mut()?.push(stroke.clone());
+        (before == after).then_some(stroke)
+    });
+    match one_more {
+        Some(value) => session.apply(Edit::PushAdjustment { output: p.output, pointer, value })?,
+        None => store(session, p.output, &adjustments)?,
+    }
     Ok(Stroked { mask: p.mask, component, strokes })
 }
 
@@ -628,6 +651,7 @@ fn open(session: &Session, p: OutputParams) -> Result<JobPlan<Opened>, CommandEr
                 base,
                 preview: None,
                 before: None,
+                placement: Placement::default(),
                 shown: None,
                 changes: AdjustChanges { opened: true, ..AdjustChanges::default() },
             });
@@ -671,14 +695,41 @@ struct PreviewParams {
     /// Also renders the output without its adjustments, at the same size, for comparing.
     #[serde(default)]
     before: bool,
+    /// Renders only this part of the image that `width` and `height` give, in its pixels: a zoomed view. Spatial
+    /// adjustments read around each pixel, so a view asks for a margin around what it shows.
+    #[serde(default)]
+    window: Option<WindowParams>,
+}
+
+/// A rectangle of a preview's pixels.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WindowParams {
+    /// Its left edge, from 0 to 16383.
+    #[schemars(range(max = 16383))]
+    x: usize,
+    /// Its top edge, from 0 to 16383.
+    #[schemars(range(max = 16383))]
+    y: usize,
+    /// Its width, from 1 to 16384.
+    #[schemars(range(min = 1, max = 16384))]
+    width: usize,
+    /// Its height, from 1 to 16384.
+    #[schemars(range(min = 1, max = 16384))]
+    height: usize,
 }
 
 impl Params for PreviewParams {
     fn check(&self) -> Result<(), Invalid> {
-        for (field, v) in [("width", self.width), ("height", self.height)] {
+        let window = self.window.map(|w| [("window.width", w.width), ("window.height", w.height)]);
+        for (field, v) in [("width", self.width), ("height", self.height)].into_iter().chain(window.into_iter().flatten()) {
             if !(1..=MAX_PREVIEW_SIDE).contains(&v) {
                 return Err(Invalid::new(field, format!("must be from 1 to {MAX_PREVIEW_SIDE} pixels")));
             }
+        }
+        if let Some(w) = self.window.filter(|w| w.x >= MAX_PREVIEW_SIDE || w.y >= MAX_PREVIEW_SIDE) {
+            let field = if w.x >= MAX_PREVIEW_SIDE { "window.x" } else { "window.y" };
+            return Err(Invalid::new(field, format!("must be less than {MAX_PREVIEW_SIDE}")));
         }
         Ok(())
     }
@@ -689,8 +740,15 @@ impl Params for PreviewParams {
 #[serde(rename_all = "camelCase")]
 struct Previewed {
     output: OutputId,
+    /// Its size, in pixels.
     width: usize,
     height: usize,
+    /// Where it lies in the whole preview, which is `fullWidth` by `fullHeight`: its top left corner (0 and 0, and
+    /// the same size, without a window).
+    x: usize,
+    y: usize,
+    full_width: usize,
+    full_height: usize,
 }
 
 fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, CommandError> {
@@ -701,7 +759,11 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
     let reading = if current == open.base { None } else { Some(Reading::plan(session, open.output, "adjust.preview")?) };
     let adjustments = adjustments(output)?;
     let (renderer, working, id) = (Arc::clone(&open.renderer), Arc::clone(&open.working), open.output);
-    let request = Request { size: Size::Fit { width: p.width, height: p.height }, draft: p.draft, overlay: p.overlay };
+    let size = Size::Fit { width: p.width, height: p.height };
+    let window = p.window.map(|w| florastack_edit::Window { x: w.x, y: w.y, width: w.width, height: w.height });
+    // On the GPU unless the preference is the CPU: a preview needn't be the same on every machine.
+    let gpu = session.compute().device != crate::compute::Device::Cpu;
+    let request = Request { size, draft: p.draft, overlay: p.overlay, window, gpu };
     let with_before = p.before;
     let job = JobPlan::new(move |ctx| {
         let reread = match reading {
@@ -721,7 +783,14 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
         let display = shown(&adjustments, &request)?;
         ctx.checkpoint()?;
         let before = if with_before { Some(Arc::new(shown(&Adjustments::default(), &Request { overlay: None, ..request })?)) } else { None };
-        let previewed = Previewed { output: id, width: display.width, height: display.height };
+        let full = renderer.output_size(size);
+        let at = window.map_or((0, 0), |w| {
+            let w = w.within(full.0, full.1);
+            (w.x, w.y)
+        });
+        let placement = Placement { full, x: at.0, y: at.1 };
+        let previewed =
+            Previewed { output: id, width: display.width, height: display.height, x: at.0, y: at.1, full_width: full.0, full_height: full.1 };
         Ok(commit(move |session: &mut Session| {
             if let Some(open) = session.adjust.as_mut().filter(|s| s.output == id) {
                 if let Some((renderer, working, base)) = reread {
@@ -729,6 +798,7 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
                     open.before = None;
                 }
                 open.preview = Some(Arc::new(display));
+                open.placement = placement;
                 if before.is_some() {
                     open.before = before;
                 }

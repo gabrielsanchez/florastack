@@ -75,6 +75,9 @@ fn main() -> ExitCode {
     } else {
         run(options).map_err(|e| e.to_string())
     };
+    // No GPU work may be in flight when the process ends.
+    #[cfg(not(target_arch = "wasm32"))]
+    florastack_engine::end_gpu_work(std::time::Duration::from_secs(2));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

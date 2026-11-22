@@ -199,6 +199,13 @@ pub(crate) fn result_key(output: &florastack_project::Output) -> Result<Option<S
     Ok(Some(format!("result {}", florastack_project::ContentHash::of(text.as_bytes()))))
 }
 
+/// The result `output.render` kept for `output`, when it is still what its strokes and adjustments make.
+fn cached_result(output: &florastack_project::Output) -> Result<Option<florastack_project::CacheRef>, CommandError> {
+    let Some(key) = result_key(output)? else { return Ok(None) };
+    let name = crate::retouch::map_name(RESULT)?;
+    Ok(output.maps.get(&name).filter(|r| r.key.as_deref() == Some(key.as_str())).cloned())
+}
+
 /// The output rendered.
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -220,7 +227,7 @@ fn render(session: &Session, p: OutputParams) -> Result<JobPlan<Rendered>, Comma
         return Ok(JobPlan::new(move |_| Ok(commit(move |_: &mut Session| Ok(rendered)))));
     };
     let name = crate::retouch::map_name(RESULT)?;
-    if let Some(cached) = output.maps.get(&name).filter(|r| r.key.as_deref() == Some(key.as_str())) {
+    if let Some(cached) = cached_result(output)? {
         let rendered = done(&cached.path.resolve(&root), "cached");
         return Ok(JobPlan::new(move |_| Ok(commit(move |_: &mut Session| Ok(rendered)))));
     }
@@ -462,6 +469,19 @@ impl Pixels {
     /// The pixels of output `id` for a file with `spec`: `map`, or the result (see [`Pixels`]); what the choice
     /// leaves out goes into `notes`.
     pub(crate) fn of(session: &Session, id: OutputId, map: Option<&str>, spec: OutputSpec, notes: &mut Vec<String>) -> Result<Pixels, CommandError> {
+        Pixels::choose(session, id, map, spec, notes, true)
+    }
+
+    /// [`Pixels::of`], reading the result `output.render` keeps (the [`RESULT`] map) when it is still what the
+    /// output's strokes and adjustments make, and `reuse` allows it.
+    fn choose(
+        session: &Session,
+        id: OutputId,
+        map: Option<&str>,
+        spec: OutputSpec,
+        notes: &mut Vec<String>,
+        reuse: bool,
+    ) -> Result<Pixels, CommandError> {
         let output = find(session, id)?;
         // "Retain extended range": the output's result from before its tone compression, when it has one.
         let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();
@@ -486,6 +506,14 @@ impl Pixels {
             }
             (None, _) => output.image.clone(),
         };
+        // The result rendered before, which is what painting and adjusting again would give, bit for bit.
+        if reuse
+            && map.is_none()
+            && image == output.image
+            && let Some(result) = cached_result(output)?
+        {
+            return Ok(Pixels { image: result.clone(), base: result, retouched: None, adjust: None, depth: None });
+        }
         // A retouched output is written with its visible strokes: the result open for retouching, the result cached,
         // or the strokes painted again.
         let strokes = crate::retouch::visible_strokes(output);
@@ -518,7 +546,7 @@ impl Pixels {
     /// Output `id`'s result with its visible strokes and without its adjustments: what adjusting starts from.
     pub(crate) fn base(session: &Session, id: OutputId, notes: &mut Vec<String>) -> Result<Pixels, CommandError> {
         let spec = OutputSpec::new(florastack_codecs::Format::Tiff)?;
-        let mut pixels = Pixels::of(session, id, None, OutputSpec { extended_range: false, ..spec }, notes)?;
+        let mut pixels = Pixels::choose(session, id, None, OutputSpec { extended_range: false, ..spec }, notes, false)?;
         pixels.adjust = None;
         pixels.depth = None;
         Ok(pixels)

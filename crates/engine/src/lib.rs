@@ -87,6 +87,14 @@ pub use florastack_stack::{
 // The RAW develop settings.
 pub use florastack_raw::{ChromaticAberration, Demosaic, DevelopSettings, Highlights, NoiseReduction, Quality, RawDevelop, Resolved, WhiteBalance};
 
+/// Before the process ends: lets no new GPU work start in the adjust previews' renderer (LightCraft's, which keeps a
+/// device of its own) and waits up to `timeout` for what is in flight, which would crash inside the driver if the
+/// process ended under it. Whether it all finished. The apps call it last.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn end_gpu_work(timeout: std::time::Duration) -> bool {
+    florastack_edit::gpu::shutdown(timeout)
+}
+
 /// The project model, as the apps show it (read from [`Engine::project`]; changed only through commands). The
 /// retouch crate has no types yet; its brushes and strokes join these in roadmap 5.3.
 pub mod model {

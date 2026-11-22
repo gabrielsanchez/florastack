@@ -13,7 +13,10 @@ its retouch strokes and before its annotations.
    shows it with its adjustments. **Output** picks another one.
 2. **Set the whole image.** The sliders under **Light**, **Color** and **Detail** adjust the whole image. The view
    follows as you drag, with a quick preview while the slider moves and a full one when you let go. A slider's whole
-   drag is one undo step.
+   drag is one undo step. To look closer, zoom with the mouse wheel (or a pinch), and pan with the middle or right
+   button (or Space and the left button), as in the Retouch tab; a double click fits the output in the view again.
+   Zoomed in, only the part in view is rendered, at the zoom's size, so sharpening and noise reduction show as they
+   will be written.
 3. **Add a mask.** **Add mask** adds a mask of one shape (below) and selects it. The panel then shows the mask: its
    shapes, their settings, and its own sliders under **Mask adjustments**, which apply only where the mask selects.
    **Show mask** tints the selected mask's region red.
@@ -58,7 +61,9 @@ a brushed mask needs most.
 - **Sharp areas** and **Soft areas**: where the stack has fine detail, and where it hasn't, found without a model. A
   focus stack brings everything its frames had in focus into one sharp image and leaves the rest as soft as the frames
   saw it, so these separate a subject from a blurred background well. They can't when the subject stands on a surface
-  that was in focus too, a textured floor or a leaf: use Subject (AI) there.
+  that was in focus too, a textured floor or a leaf, which they take in; and they leave out a smooth part of the
+  subject wider than about a hundredth of the image, a shiny shell or a wing's clear membrane, which has no fine
+  detail to find. Use Subject (AI) there.
 - **Depth range**: the part of the sharp areas in focus in a range of the stack's frames, **From** 0, the first frame, **To**
   1, the last (the nearest and the farthest, or the other way round, as the stack was shot), fading over **Feather**.
   It needs the stack's depth map: a depth-map output has its own; for the other methods, **Map the depth** measures the

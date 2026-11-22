@@ -140,6 +140,20 @@ pub enum Edit {
         output: OutputId,
         adjustments: Option<Value>,
     },
+    /// Adds `value` at the end of the list that `pointer` names in an output's adjustments, a JSON pointer (RFC 6901)
+    /// such as a brush's `/masks/0/components/1/shape/strokes`: one brush stroke, which an undo step then keeps alone
+    /// rather than the whole adjustments.
+    PushAdjustment {
+        output: OutputId,
+        pointer: String,
+        value: Value,
+    },
+    /// Removes the last value of the list that `pointer` names in an output's adjustments (the inverse of
+    /// [`Edit::PushAdjustment`]).
+    PopAdjustment {
+        output: OutputId,
+        pointer: String,
+    },
     /// Sets one of an output's maps (`Some`), such as its retouched result cached, or removes it (`None`).
     SetOutputMap {
         output: OutputId,
@@ -181,6 +195,8 @@ pub enum EditError {
     Order,
     #[error("{layer} of {output} has no stroke to remove")]
     NoStroke { output: OutputId, layer: LayerId },
+    #[error("the adjustments of {output} have no list at {pointer} to add to or take from")]
+    NoList { output: OutputId, pointer: String },
     #[error(transparent)]
     Invalid(#[from] Problem),
 }
@@ -356,6 +372,8 @@ impl Edit {
             Edit::SetAnnotations { layers, .. } => layers.iter().map(json_bytes).sum(),
             Edit::InsertLayer { layer, .. } => json_bytes(layer),
             Edit::PushStroke { stroke, .. } => json_bytes(stroke),
+            Edit::PushAdjustment { pointer, value, .. } => pointer.len() + json_bytes(value),
+            Edit::PopAdjustment { pointer, .. } => pointer.len(),
             Edit::SetAdjustments { adjustments, .. } => adjustments.as_ref().map_or(0, json_bytes),
             Edit::Batch(edits) => edits.iter().map(Edit::weight).sum(),
             Edit::RemoveFrame(_)
@@ -396,7 +414,7 @@ impl Edit {
             Edit::AddOutput(_) | Edit::InsertOutput { .. } | Edit::RemoveOutput(_) => Aspects::OUTPUTS.union(Aspects::RETOUCH),
             // An output's maps (its retouched result cached) are part of it.
             Edit::RenameOutput { .. } | Edit::SetOutputMap { .. } | Edit::SetAnnotations { .. } => Aspects::OUTPUTS,
-            Edit::SetAdjustments { .. } => Aspects::ADJUST,
+            Edit::SetAdjustments { .. } | Edit::PushAdjustment { .. } | Edit::PopAdjustment { .. } => Aspects::ADJUST,
             Edit::AddLayer { .. }
             | Edit::InsertLayer { .. }
             | Edit::RemoveLayer { .. }
@@ -404,6 +422,19 @@ impl Edit {
             | Edit::PopStroke { .. }
             | Edit::SetLayerVisible { .. } => Aspects::RETOUCH,
             Edit::Batch(edits) => edits.iter().fold(Aspects::NONE, |a, e| a.union(e.aspects())),
+        }
+    }
+
+    /// The output whose own fields the edit changes: its name, annotations, adjustments or maps.
+    fn own_output(&self) -> Option<OutputId> {
+        match self {
+            Edit::RenameOutput { output, .. }
+            | Edit::SetAnnotations { output, .. }
+            | Edit::SetAdjustments { output, .. }
+            | Edit::PushAdjustment { output, .. }
+            | Edit::PopAdjustment { output, .. }
+            | Edit::SetOutputMap { output, .. } => Some(*output),
+            _ => None,
         }
     }
 
@@ -433,9 +464,19 @@ impl Edit {
     }
 }
 
+/// The list that `pointer` names in output `output`'s `adjustments`.
+fn adjustment_list<'a>(adjustments: &'a mut Option<Value>, output: OutputId, pointer: &str) -> Result<&'a mut Vec<Value>, EditError> {
+    adjustments
+        .as_mut()
+        .and_then(|a| a.pointer_mut(pointer))
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| EditError::NoList { output, pointer: pointer.to_owned() })
+}
+
 impl Project {
     /// Makes `edit` and returns its inverse, or changes nothing and returns why it can't be made. See the module
     /// documentation.
+    #[allow(clippy::too_many_lines)] // One arm for each kind of edit.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, EditError> {
         match edit {
             Edit::Batch(edits) => self.apply_batch(edits),
@@ -503,9 +544,12 @@ impl Project {
                 let output = self.outputs.remove(index);
                 Ok(Edit::InsertOutput { index, output: Box::new(output) })
             }
-            edit @ (Edit::RenameOutput { .. } | Edit::SetAnnotations { .. } | Edit::SetAdjustments { .. } | Edit::SetOutputMap { .. }) => {
-                self.apply_to_output(edit)
-            }
+            edit @ (Edit::RenameOutput { .. }
+            | Edit::SetAnnotations { .. }
+            | Edit::SetAdjustments { .. }
+            | Edit::PushAdjustment { .. }
+            | Edit::PopAdjustment { .. }
+            | Edit::SetOutputMap { .. }) => self.apply_to_output(edit),
             Edit::AddLayer { output, name } => {
                 check_name("retouch layer name", &name)?;
                 let layer = self.add_layer(output, &name).ok_or(EditError::NoOutput(output))?;
@@ -539,13 +583,7 @@ impl Project {
 
     /// Makes an edit of one output's own fields: its name, annotations, adjustments and maps.
     fn apply_to_output(&mut self, edit: Edit) -> Result<Edit, EditError> {
-        let output = match &edit {
-            Edit::RenameOutput { output, .. }
-            | Edit::SetAnnotations { output, .. }
-            | Edit::SetAdjustments { output, .. }
-            | Edit::SetOutputMap { output, .. } => *output,
-            other => return self.apply(other.clone()),
-        };
+        let Some(output) = edit.own_output() else { return self.apply(edit) };
         if let Edit::RenameOutput { name, .. } = &edit {
             check_name("output name", name)?;
         }
@@ -555,6 +593,16 @@ impl Project {
             Edit::SetAnnotations { layers, .. } => Edit::SetAnnotations { output, layers: std::mem::replace(&mut o.annotations, layers) },
             Edit::SetAdjustments { adjustments, .. } => {
                 Edit::SetAdjustments { output, adjustments: std::mem::replace(&mut o.adjustments, adjustments) }
+            }
+            Edit::PushAdjustment { pointer, value, .. } => {
+                adjustment_list(&mut o.adjustments, output, &pointer)?.push(value);
+                Edit::PopAdjustment { output, pointer }
+            }
+            Edit::PopAdjustment { pointer, .. } => {
+                let value = adjustment_list(&mut o.adjustments, output, &pointer)?
+                    .pop()
+                    .ok_or_else(|| EditError::NoList { output, pointer: pointer.clone() })?;
+                Edit::PushAdjustment { output, pointer, value }
             }
             Edit::SetOutputMap { name, map, .. } => {
                 let old = match map {
@@ -797,6 +845,12 @@ mod tests {
             Edit::SetOutputMap { output, name: retouched.clone(), map: Some(cache_ref(2)) },
             Edit::SetAlignedImage { frame: a, aligned: Some(cache_ref(3)) },
             Edit::PushStroke { output, layer, stroke: serde_json::json!({ "brush": "eraser" }) },
+            Edit::Batch(vec![
+                Edit::SetAdjustments { output, adjustments: Some(serde_json::json!({"masks": [{"strokes": [1]}]})) },
+                Edit::PushAdjustment { output, pointer: "/masks/0/strokes".into(), value: serde_json::json!(2) },
+                Edit::PopAdjustment { output, pointer: "/masks/0/strokes".into() },
+                Edit::PopAdjustment { output, pointer: "/masks/0/strokes".into() },
+            ]),
         ] {
             let mut q = before.clone();
             let inverse = q.apply(edit.clone()).unwrap();
@@ -811,6 +865,12 @@ mod tests {
         assert!(matches!(q.apply(Edit::SetOutputMap { output: missing, name: retouched, map: None }), Err(EditError::NoOutput(_))));
         assert!(matches!(q.apply(Edit::SetAlignedImage { frame: FrameId(99), aligned: None }), Err(EditError::NoFrame(_))));
         assert!(matches!(q.apply(Edit::SetLayerVisible { output, layer: LayerId(99), visible: true }), Err(EditError::NoLayer { .. })));
+        let pop = |pointer: &str| Edit::PopAdjustment { output, pointer: pointer.into() };
+        assert!(matches!(q.apply(pop("/masks")), Err(EditError::NoList { .. })), "no adjustments");
+        q.apply(Edit::SetAdjustments { output, adjustments: Some(serde_json::json!({"masks": [], "global": {}})) }).unwrap();
+        for pointer in ["/masks", "/global", "/none", "masks"] {
+            assert!(matches!(q.apply(pop(pointer)), Err(EditError::NoList { .. })), "{pointer}: an empty list, or none");
+        }
         assert_eq!(Edit::SetLayerVisible { output, layer, visible: true }.aspects(), Aspects::RETOUCH);
         assert!(Edit::SetAlignedImage { frame: a, aligned: None }.overwrites(&Edit::SetAlignedImage { frame: a, aligned: Some(cache_ref(3)) }));
     }
@@ -827,6 +887,7 @@ mod tests {
             (Edit::SetName(Some(" ".into())), EditError::Invalid(Problem::Text { what: "project name", reason: "is empty" })),
             (Edit::Batch(vec![Edit::SetName(Some("Ok".into())), Edit::RemoveFrame(a), Edit::RemoveFrame(a)]), EditError::NoFrame(a)),
             (Edit::PopStroke { output: OutputId(5), layer: LayerId(6) }, EditError::NoOutput(OutputId(5))),
+            (Edit::PopAdjustment { output: OutputId(5), pointer: String::new() }, EditError::NoOutput(OutputId(5))),
             (Edit::SetPreviews { frame: FrameId(99), preview: None, aligned_preview: None }, EditError::NoFrame(FrameId(99))),
             (Edit::SetFrameMap { frame: FrameId(99), name: MapName::new("motion").unwrap(), map: None }, EditError::NoFrame(FrameId(99))),
             (Edit::SetFrameModified { frame: FrameId(99), modified: None }, EditError::NoFrame(FrameId(99))),

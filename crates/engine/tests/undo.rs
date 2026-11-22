@@ -205,6 +205,8 @@ fn cases(fixture: &common::Fixture, dir: &std::path::Path) -> Vec<Case> {
             name: "adjust.stroke",
             setup: vec![
                 ("adjust.addMask", format!(r#"{{ "output": {output}, "mask": {{ "components": [ {{ "shape": {{ "kind": "whole" }} }} ] }} }}"#)),
+                // Onto a brush that has a stroke: the undo step holds the new stroke alone (`Edit::PushAdjustment`).
+                ("adjust.stroke", format!(r#"{{ "output": {output}, "mask": 1, "stroke": {{ "points": [[0.2, 0.2]], "size": 0.1 }} }}"#)),
                 ("project.save", "{}".into()),
             ],
             params: format!(r#"{{ "output": {output}, "mask": 1, "stroke": {{ "points": [[0.1, 0.1], [0.5, 0.5]], "size": 0.1, "erase": true }} }}"#),
