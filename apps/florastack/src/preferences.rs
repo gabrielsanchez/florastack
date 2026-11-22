@@ -33,6 +33,8 @@ pub struct Form {
     opened: (u32, Device, String),
     /// Days unused before a temporary project is offered for the trash.
     pub orphan_days: u32,
+    /// The disk the temporary projects may take, in GiB, 0 for no limit.
+    pub temporary_gib: u32,
     /// The disk the frames warped for retouching may take in a project's cache, in MiB (`cache.setSourceLimit`).
     pub source_limit_mb: u32,
     pub autosave_minutes: u32,
@@ -61,6 +63,7 @@ impl Form {
             opened: (memory_mb, device, cache_folder.clone()),
             cache_folder,
             orphan_days: app.prefs.orphan_days.unwrap_or(Orphans::DEFAULT_DAYS),
+            temporary_gib: app.prefs.temporary_gib.unwrap_or(crate::prefs::DEFAULT_TEMPORARY_GIB),
             source_limit_mb: app.prefs.source_limit_mb.unwrap_or(DEFAULT_SOURCE_LIMIT_MB),
             autosave_minutes: app.prefs.autosave_minutes.unwrap_or(DEFAULT_AUTOSAVE_MINUTES),
             theme: app.prefs.theme,
@@ -244,6 +247,15 @@ fn cache(app: &mut FloraStackApp, ui: &mut egui::Ui, form: &mut Form) {
     .response
     .on_hover_text(tr("tip-orphan-days"));
     ui.horizontal(|ui| {
+        ui.label(tr("prefs-temporary-limit"));
+        ui.add(egui::DragValue::new(&mut form.temporary_gib).range(0..=1_048_576).suffix(" GiB"));
+        if form.temporary_gib == 0 {
+            ui.weak(tr("prefs-no-limit"));
+        }
+    })
+    .response
+    .on_hover_text(tr("tip-temporary-limit"));
+    ui.horizontal(|ui| {
         ui.label(tr("prefs-source-limit"));
         ui.add(egui::DragValue::new(&mut form.source_limit_mb).range(SOURCE_LIMIT_RANGE).speed(64).suffix(" MiB"));
     })
@@ -313,6 +325,7 @@ impl FloraStackApp {
             }
         }
         self.prefs.orphan_days = (form.orphan_days != Orphans::DEFAULT_DAYS).then_some(form.orphan_days);
+        self.prefs.temporary_gib = (form.temporary_gib != crate::prefs::DEFAULT_TEMPORARY_GIB).then_some(form.temporary_gib);
         self.prefs.autosave_minutes = (form.autosave_minutes != DEFAULT_AUTOSAVE_MINUTES).then_some(form.autosave_minutes);
         self.set_autosave();
         self.prefs.language = Some(form.language.clone()).filter(|l| l != crate::i18n::LANGUAGES[0].0);

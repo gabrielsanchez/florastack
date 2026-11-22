@@ -415,10 +415,11 @@ impl FloraStackApp {
         self.autosave = self.prefs.autosave().map(Autosave::new);
     }
 
-    /// The startup cleanup: abandoned tile folders, and old temporary projects offered for the trash.
+    /// The startup cleanup: abandoned tile folders, and temporary projects unused for long or beyond the disk limit
+    /// offered for the trash.
     fn startup(&mut self) {
         let _ = self.shell.run("cache.removeAbandoned", json!({}));
-        if let Some(found) = self.shell.run("project.findOrphans", json!({ "days": self.prefs.orphan_days })) {
+        if let Some(found) = self.shell.run("project.findOrphans", self.prefs.orphans()) {
             let orphans = found["orphans"].as_array().cloned().unwrap_or_default();
             if !orphans.is_empty() {
                 let bytes = orphans.iter().filter_map(|o| o["bytes"].as_u64()).sum();

@@ -566,6 +566,9 @@ prefs-cache-clean = Clean up
 prefs-orphan-days = Offer unnamed projects for the trash after
 prefs-days = {" "}days
 tip-orphan-days = Projects you never named stay in the cache folder. Once one has gone unused this long, you are asked at startup whether to move it to the trash. Nothing goes without your say.
+prefs-temporary-limit = Keep unnamed projects up to
+prefs-no-limit = no limit
+tip-temporary-limit = When the projects you never named take more than this, the least recently used are offered for the trash at startup too, whatever their age: the open one and the most recently used one always stay. Nothing goes without your say. 0 for no limit.
 drive-removable = The cache folder is on a removable drive: what is moved to the trash from there may be deleted for good.
 drive-network = The cache folder is on a network drive: what is moved to the trash from there may be deleted for good.
 tip-cache-clean = Removes what stacks that crashed left on disk.
@@ -603,9 +606,9 @@ drop-hint = Drop to open or add
 ## Banners
 
 orphans-found = { $count ->
-    [one] One old temporary project
-   *[other] { $count } old temporary projects
-} take { $size } MB.
+    [one] One temporary project you haven't used lately takes
+   *[other] { $count } temporary projects you haven't used lately take
+} { $size } MB.
 orphans-trash = Move to the trash
 orphans-keep = Keep
 

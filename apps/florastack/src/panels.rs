@@ -545,7 +545,9 @@ fn banners(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                         ui.colored_label(ui.visuals().warn_fg_color, tr(crate::preferences::drive_warning(drive)));
                     }
                     if ui.button(tr("orphans-trash")).clicked() {
-                        app.shell.run("project.trashOrphans", json!({ "paths": paths, "days": app.prefs.orphan_days }));
+                        let mut params = app.prefs.orphans();
+                        params["paths"] = json!(paths);
+                        app.shell.run("project.trashOrphans", params);
                         gone.push(i);
                     }
                     if ui.button(tr("orphans-keep")).clicked() {

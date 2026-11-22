@@ -43,8 +43,10 @@ Retouching keeps the output, its retouched result and up to three sources the sa
 ## The cache and temporary files
 
 - **Temporary projects**, made when you drop photos on the window without naming a project, live in the app's data
-  folder (on Windows under `%LOCALAPPDATA%`). After 30 days unused, FloraStack offers to move them to the trash;
-  the preferences set another age. `florastack-cli project clean-orphans` does the same from the command line
+  folder (on Windows under `%LOCALAPPDATA%`). After 30 days unused, or when together they take more than 10 GiB (the
+  least recently used beyond it, whatever their age), FloraStack offers at startup to move them to the trash; the
+  preferences set another age and another limit, 0 for none. The open project and the most recently used one always
+  stay. `florastack-cli project clean-orphans` does the same from the command line
   (`--dry-run` lists them first). The command-line tool keeps its own temporary projects, one per `stack` run, in the
   system's temporary folder within a disk budget, 10 GiB unless `--temporary-budget` says otherwise: after each run,
   the least recently used beyond it go to the trash ([The command-line tool](../reference/cli.md#stack)).
@@ -52,7 +54,8 @@ Retouching keeps the output, its retouched result and up to three sources the sa
   removed when the stack ends. A stack that crashed leaves its folder behind: FloraStack removes those when it
   starts, the command-line tool at every run, and **Clean up** in the preferences at any time.
 - **A project's cache**, in its `cache/` and `previews/` folders, keeps developed frames, previews and results, so that
-  nothing is computed twice. It is cleaned of what the project no longer uses when the project closes.
+  nothing is computed twice. It is cleaned of what the project no longer uses when the project closes. The frames
+  warped for retouching, the largest of it, are kept within 4 GiB ([Retouching](retouching.md#what-is-kept)).
 
 **File > Preferences > Cache** shows how much each takes and can move temporary projects and stacking's work to
 another folder: a fast local drive with room to spare is best. On a removable or a network drive the system may

@@ -200,6 +200,7 @@ fn preferences_reach_the_engine_and_say_nothing_is_sent() {
     changed.cache_folder = cache.display().to_string();
     changed.autosave_minutes = 0;
     changed.orphan_days = 7;
+    changed.temporary_gib = 3;
     changed.source_limit_mb = 1024;
     let ctx = harness.ctx.clone();
     assert!(harness.state_mut().apply_preferences(&ctx, &changed));
@@ -214,6 +215,8 @@ fn preferences_reach_the_engine_and_say_nothing_is_sent() {
         (Some(2048), Some(florastack_engine::Device::Cpu), Some(cache.as_path()), None)
     );
     assert_eq!(prefs.orphan_days, Some(7), "the age at which temporary projects are offered for the trash");
+    assert_eq!(prefs.temporary_gib, Some(3), "the temporary projects' disk limit");
+    assert_eq!(prefs.orphans(), json!({ "days": 7, "budgetMb": 3072 }), "both go to the engine");
     assert_eq!(prefs.source_limit_mb, Some(1024), "the retouch sources' disk limit");
     // A new project goes into the cache folder's temporary projects.
     harness.state_mut().shell.run("project.new", json!({}));

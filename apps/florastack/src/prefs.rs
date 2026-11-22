@@ -121,6 +121,9 @@ pub enum Compare {
     SideBySide,
 }
 
+/// The disk the temporary projects may take by default, in GiB: the command-line tool's default too.
+pub const DEFAULT_TEMPORARY_GIB: u32 = 10;
+
 /// The app's remembered settings. See the module documentation.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -146,6 +149,9 @@ pub struct Prefs {
     pub source_limit_mb: Option<u32>,
     /// Days a temporary project must be unused before it is offered for the trash; `None` for the engine's 30.
     pub orphan_days: Option<u32>,
+    /// The disk the temporary projects may take, in GiB, beyond which the least recently used are offered for the
+    /// trash; `None` for [`DEFAULT_TEMPORARY_GIB`], 0 for no limit.
+    pub temporary_gib: Option<u32>,
     /// Minutes between a project's first unsaved change and its autosave, 0 for none; `None` for the default.
     pub autosave_minutes: Option<u32>,
     /// The UI's language (`en-US`); `None` for the first the app has.
@@ -158,6 +164,18 @@ pub struct Prefs {
 pub const DEFAULT_AUTOSAVE_MINUTES: u32 = 2;
 
 impl Prefs {
+    /// The parameters that find the temporary projects to offer for the trash (`project.findOrphans`,
+    /// `project.trashOrphans`): those unused for the days set, and those beyond the disk limit.
+    pub fn orphans(&self) -> florastack_engine::Value {
+        let days = self.orphan_days.unwrap_or(florastack_engine::model::Orphans::DEFAULT_DAYS);
+        let gib = self.temporary_gib.unwrap_or(DEFAULT_TEMPORARY_GIB);
+        let mut params = florastack_engine::json!({ "days": days });
+        if gib > 0 {
+            params["budgetMb"] = florastack_engine::json!(u64::from(gib) * 1024);
+        }
+        params
+    }
+
     /// The preferences eframe stored, or the defaults.
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Prefs {
         let mut prefs: Prefs = storage.and_then(|s| s.get_string(KEY)).and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();

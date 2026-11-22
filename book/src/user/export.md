@@ -85,7 +85,8 @@ keys, and `develop.get`, `align.get`, `stack.get` and `export.get` show them all
 - **Processing**: the GPU when it passes its test, the CPU only, or any GPU (software ones too, for testing); **Test the
   GPU** runs its self-test again, after a driver update for example.
 - **Cache**: where temporary projects and stacking's work on disk go, how much each takes, after how many days
-  unused a temporary project is offered for the trash, how much disk the frames warped for retouching may take in a
+  unused a temporary project is offered for the trash and how much disk the temporary projects may take before the
+  least recently used are (10 GiB by default, 0 for no limit), how much disk the frames warped for retouching may take in a
   project's cache (4 GiB by default; the least recently used go beyond it), and **Clean up**, which removes what
   crashed stacks left behind.
 - **Autosave**: saves the project a few minutes after the first unsaved change (0 for never).
