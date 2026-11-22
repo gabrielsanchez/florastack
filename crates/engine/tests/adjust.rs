@@ -463,3 +463,29 @@ fn files_are_written_from_the_result_rendered_before() {
     saved(&mut engine, output, &second);
     assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap(), "the same bytes as rendering again");
 }
+
+#[test]
+fn a_brush_strokes_undo_step_holds_the_stroke_alone() {
+    let dir = TempDir::new("adjust-stroke-undo");
+    let (mut engine, output) = stacked(dir.path());
+    run(&mut engine, "adjust.addMask", &json!({"output": output, "mask": {"components": [], "adjust": {"exposure": -1}}}).to_string());
+    let points: Vec<[f64; 2]> = (0..400).map(|i| [f64::from(i) / 400.0, 0.5]).collect();
+    let stroke = |engine: &mut Engine| {
+        run(engine, "adjust.stroke", &json!({"output": output, "mask": 1, "stroke": {"points": points, "size": 0.05}}).to_string());
+        run(engine, "edit.history", "{}")["bytes"].as_u64().unwrap()
+    };
+    // Each stroke of 400 points is some 6 kB of JSON: its undo step, which removes it, holds less than 1 kB, where
+    // one that put the adjustments back would hold every earlier stroke.
+    let mut last = stroke(&mut engine);
+    for _ in 0..20 {
+        let bytes = stroke(&mut engine);
+        assert!(bytes - last < 1024, "a step of {} bytes", bytes - last);
+        last = bytes;
+    }
+    let count = |engine: &mut Engine| run(engine, "adjust.get", &json!({"output": output}).to_string())["adjustments"]["masks"][0]["components"][0]["shape"]["strokes"].as_array().unwrap().len();
+    assert_eq!(count(&mut engine), 21);
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(count(&mut engine), 20, "undo takes the last stroke back");
+    run(&mut engine, "edit.redo", "{}");
+    assert_eq!(count(&mut engine), 21);
+}

@@ -1646,6 +1646,7 @@ Result:
 
 | Name | Type | Description |
 |---|---|---|
+| `bytes` | integer | What the steps hold, in bytes, roughly: beyond the history's budget the oldest steps go. |
 | `dirty` | boolean | Whether the project has unsaved changes. |
 | `redo` | array of object | The redo steps, the next to redo first. |
 | `undo` | array of object | The undo steps, the next to undo first. |

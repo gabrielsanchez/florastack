@@ -297,12 +297,17 @@ fn change(
 ) -> Result<Adjustments, CommandError> {
     let mut adjustments = adjustments(find(session, id)?)?;
     change(&mut adjustments)?;
+    validated(session, &adjustments)?;
+    store(session, id, &adjustments)?;
+    Ok(adjustments)
+}
+
+/// Refuses adjustments that aren't valid.
+fn validated(session: &Session, adjustments: &Adjustments) -> Result<(), CommandError> {
     adjustments.validate().map_err(|e| {
         let Invalid { field, reason } = invalid(&e);
         session.invalid(field, reason)
-    })?;
-    store(session, id, &adjustments)?;
-    Ok(adjustments)
+    })
 }
 
 fn add_mask(session: &mut Session, p: MaskParams) -> Result<MaskChanged, CommandError> {
@@ -410,9 +415,12 @@ struct Stroked {
 }
 
 fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandError> {
+    let before = find(session, p.output)?.adjustments.clone();
+    let mut adjustments = adjustments(find(session, p.output)?)?;
     let (mut component, mut strokes) = (0, 0);
-    change(session, p.output, |a| {
-        let mask = a.mask_mut(p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+    let position = adjustments.masks.iter().position(|m| m.id == p.mask).ok_or_else(|| no_mask(p.output, p.mask))?;
+    {
+        let mask = adjustments.masks.get_mut(position).ok_or_else(|| no_mask(p.output, p.mask))?;
         let brush = |c: &Component| matches!(c.shape, Shape::Brush { .. });
         let index = match p.component {
             Some(i) if mask.components.get(i).is_some_and(brush) => i,
@@ -430,8 +438,20 @@ fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandErro
             list.push(p.stroke);
             (component, strokes) = (index, list.len());
         }
-        Ok(())
-    })?;
+    }
+    validated(session, &adjustments)?;
+    // A stroke onto a brush that was there is an undo step of that stroke alone, not of the whole adjustments.
+    let after = florastack_project::to_data("adjustments", &adjustments)?;
+    let pointer = format!("/masks/{position}/components/{component}/shape/strokes");
+    let pushed = after.pointer(&pointer).and_then(serde_json::Value::as_array).and_then(|list| list.last()).cloned();
+    let one_more = before.zip(pushed).and_then(|(mut before, stroke)| {
+        before.pointer_mut(&pointer)?.as_array_mut()?.push(stroke.clone());
+        (before == after).then_some(stroke)
+    });
+    match one_more {
+        Some(value) => session.apply(Edit::PushAdjustment { output: p.output, pointer, value })?,
+        None => store(session, p.output, &adjustments)?,
+    }
     Ok(Stroked { mask: p.mask, component, strokes })
 }
 

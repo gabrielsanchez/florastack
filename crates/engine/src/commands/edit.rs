@@ -64,10 +64,12 @@ struct History {
     redo: Vec<HistoryStep>,
     /// Whether the project has unsaved changes.
     dirty: bool,
+    /// What the steps hold, in bytes, roughly: beyond the history's budget the oldest steps go.
+    bytes: usize,
 }
 
 fn history(session: &Session, _: NoParams) -> Result<History, CommandError> {
     let (undo, redo) = session.history_steps();
     let list = |steps: Vec<(String, &'static str)>| steps.into_iter().map(|(label, command)| HistoryStep { label, command }).collect();
-    Ok(History { undo: list(undo), redo: list(redo), dirty: session.is_dirty() })
+    Ok(History { undo: list(undo), redo: list(redo), dirty: session.is_dirty(), bytes: session.history_bytes() })
 }
