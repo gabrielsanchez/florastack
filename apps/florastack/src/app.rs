@@ -102,6 +102,8 @@ const PAIRED_PREVIEW: &str = "pyramid preview";
 const FILM_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
 /// The longest side the filmstrip's frames are read at: the previews' own (at most 512 pixels).
 pub const FILM_SIDE: usize = 512;
+/// The largest crop the filmstrip plays at 100%, in pixels: each frame's is kept as a texture while it plays.
+pub const FILM_CROP: [usize; 2] = [1280, 1024];
 
 /// A dialog open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -152,6 +154,7 @@ pub enum Banner {
 }
 
 /// See the module documentation.
+#[allow(clippy::struct_excessive_bools, reason = "independent states of the view and the session, not one state spread over flags")]
 pub struct FloraStackApp {
     /// The system's clipboard, for the shortcuts the app handles, and the files a paste found, to be opened.
     #[cfg(not(target_arch = "wasm32"))]
@@ -192,8 +195,10 @@ pub struct FloraStackApp {
     shown_edits: Option<(u64, u64)>,
     /// The outputs picked for comparing, at most two.
     pub compare: Vec<u64>,
-    /// The filmstrip, while it is shown instead of the viewer.
+    /// The filmstrip, while it is shown instead of the viewer; and whether it plays the crops at 100%
+    /// (`crop_film`) rather than the previews.
     pub film: Option<Film>,
+    pub film_crop: bool,
     /// Whether the depth map's contrast-threshold step is open, before the stack.
     pub threshold_step: bool,
     /// The threshold picture shown last.
@@ -320,6 +325,7 @@ impl FloraStackApp {
             shown_edits: None,
             compare: Vec::new(),
             film: None,
+            film_crop: false,
             threshold_step: false,
             shown_threshold: None,
             preview_only: None,
@@ -764,10 +770,58 @@ impl FloraStackApp {
         self.film = Some(Film { index, playing, next: Instant::now() + FILM_FRAME });
     }
 
-    /// The filmstrip's frame `index`: its preview as shot or aligned, as the preferences say.
-    pub fn film_frame(&self, index: usize) -> Option<PathBuf> {
+    /// The filmstrip's frame `index`: its crop at 100% while the crops play (none until it is made), or its preview
+    /// as shot or aligned, as the preferences say; and the longest side to read it at.
+    pub fn film_frame(&self, index: usize) -> Option<(PathBuf, usize)> {
         let frame = self.shell.frames.get(index)?;
-        if self.prefs.film_as_shot { frame.preview.clone() } else { frame.aligned_preview.clone().or_else(|| frame.preview.clone()) }
+        if self.film_crop {
+            return self.shell.film_crops.get(&frame.id).map(|p| (p.clone(), FILM_CROP[0].max(FILM_CROP[1])));
+        }
+        let path = if self.prefs.film_as_shot { frame.preview.clone() } else { frame.aligned_preview.clone().or_else(|| frame.preview.clone()) };
+        path.map(|p| (p, FILM_SIDE))
+    }
+
+    /// Plays the filmstrip as crops at 100% of the region the viewer shows (`filmstrip.crop`): the viewer's size in
+    /// device pixels, at most [`FILM_CROP`], around the point at its middle, found in the master frame's pixels
+    /// through what it shows (an output's canvas, the preview's, a frame's alignment); the canvas's middle when it
+    /// shows none of them.
+    pub fn crop_film(&mut self) {
+        let [w, h] = self.viewer.view_pixels();
+        let center = self.view_center_in_master();
+        let mut params = json!({ "width": w.clamp(16, FILM_CROP[0]), "height": h.clamp(16, FILM_CROP[1]) });
+        if let Some(center) = center {
+            params["center"] = json!(center);
+        }
+        self.shell.film_crops.clear();
+        self.film_crop = true;
+        self.shell.run("filmstrip.crop", params);
+        let at = self.film.as_ref().map_or(0, |f| f.index);
+        self.film_at(at, false);
+    }
+
+    /// The point at the viewer's middle in the master frame's pixels, when what it shows is placed there.
+    fn view_center_in_master(&self) -> Option<[f64; 2]> {
+        let (center, shown) = self.viewer.view_center()?;
+        let run = &self.shell.alignment["run"];
+        let canvas = match &self.selection {
+            Selection::Output(id) | Selection::Compare(id, _) => self.shell.outputs.iter().find(|o| o.id == *id)?.canvas?,
+            // The preview is the canvas of the framing set, reduced.
+            Selection::Preview => {
+                let framing = &self.shell.align_settings["framing"];
+                let f = run["framings"].as_array()?.iter().find(|f| f["framing"] == *framing)?;
+                let size = |k: &str| f[k].as_u64().and_then(|v| usize::try_from(v).ok());
+                crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: serde_json::from_value(f["toMaster"].clone()).ok()? }
+            }
+            // A frame's pixels go to the master's by the inverse of its alignment.
+            Selection::Frame(id) => {
+                let f = run["frames"].as_array()?.iter().find(|f| f["frame"] == *id)?;
+                let transform: [[f64; 3]; 2] = serde_json::from_value(f["transform"].clone()).ok()?;
+                let size = |k: &str| run[k].as_u64().and_then(|v| usize::try_from(v).ok());
+                crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: crate::viewer::inverse(&transform)? }
+            }
+            _ => return None,
+        };
+        canvas.to_master_point(shown, center)
     }
 
     /// Selects the frame `step` places after (or before) the one selected, or the filmstrip's while it is shown.

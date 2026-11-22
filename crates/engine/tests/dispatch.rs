@@ -189,6 +189,14 @@ fn every_command_dispatches_from_json() {
     let updated = calls.run("filmstrip.update", "{}");
     assert_eq!((&updated["previews"], &updated["alignedPreviews"]), (&json!(6), &json!(6)), "{updated}");
     assert_eq!(calls.run("filmstrip.list", "{}")["stale"], 0);
+    // Crops at full size of a region of the canvas, each frame's published as it is made; the next call's replace them.
+    let first = calls.run("filmstrip.crop", r#"{ "width": 64, "height": 48 }"#);
+    assert_eq!((first["frames"].as_array().unwrap().len(), &first["width"], &first["framing"]), (6, &json!(64), &json!("wide")), "{first}");
+    let crops = calls.run("filmstrip.crop", r#"{ "center": [0, 0], "width": 32, "height": 32 }"#);
+    assert_eq!((&crops["x"], &crops["y"], &crops["height"]), (&json!(0), &json!(0), &json!(32)), "a corner of the canvas: {crops}");
+    for (old, new) in first["frames"].as_array().unwrap().iter().zip(crops["frames"].as_array().unwrap()) {
+        assert!(!Path::new(old["path"].as_str().unwrap()).exists() && Path::new(new["path"].as_str().unwrap()).is_file());
+    }
     assert_eq!(calls.run("defects.clear", "{}")["cleared"], true);
     // Stacking: the settings, a quarter-size preview, and a weighted average, a pyramid and a depth map, which become
     // outputs.

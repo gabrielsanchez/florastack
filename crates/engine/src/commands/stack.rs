@@ -1382,6 +1382,26 @@ impl StackPlan {
         Ok(image)
     }
 
+    /// The `k`-th frame to stack, read at full size and warped onto `rect` of the canvas as the full stack warps it,
+    /// its brightness and white balance matched, black where it doesn't cover the canvas; and its id.
+    pub(super) fn crop(&mut self, k: usize, rect: Rect) -> Result<(FrameId, Image<f32>), CommandError> {
+        let image = self.read(k)?;
+        let Some(f) = self.frames.get(k) else { return Err(self.internal()) };
+        let mut crop = warp_to_canvas(&image, &f.transform, &self.canvas, rect, DEFAULT_FEATHER)?.image;
+        drop(image);
+        let gained = florastack_stack::Gained { frame: (), gain: f.gain, white_balance: f.white_balance };
+        let c = crop.channels().max(1);
+        let colors = c.min(3);
+        for row in crop.rows_mut() {
+            for pixel in row.chunks_exact_mut(c) {
+                for (i, v) in pixel.iter_mut().take(colors).enumerate() {
+                    *v *= gained.factor(i, c);
+                }
+            }
+        }
+        Ok((f.id, crop))
+    }
+
     /// Reads the `k`-th frame to stack, at full size or, `reduced`, at a quarter of it, with what puts it on the
     /// canvas: its alignment, gain and coverage's feather.
     pub(super) fn load(&mut self, k: usize, reduced: bool) -> Result<Loaded, CommandError> {

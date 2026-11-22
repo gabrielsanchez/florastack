@@ -150,6 +150,8 @@ Frames in which part of the subject moved at least this many pixels against the 
 
 Drag up and down over the thumbnails in the frame list to play the stack frame by frame in the viewer, or press **Play**. Frames play aligned by default, so that whatever still moves is the subject: an insect's leg, a leaf in the wind. **As shot** plays them before alignment. Press Escape to return to the viewer.
 
+The thumbnails are small, so movement of a few pixels doesn't show in them. Zoom the viewer onto the place to check, on a frame, the preview or an output, and press **Crop at 100%**: FloraStack reads every frame at full size and crops that region, aligned, and the filmstrip then plays the crops at 100% (**100% crop**). It takes about as long as reading the frames once; the crops play as they come. Untick **100% crop** to play the thumbnails again, and press **Crop at 100%** again for another region.
+
 ## Outputs
 
 Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared. Outputs stacked with different framings line up by what they show, not by their pixels.

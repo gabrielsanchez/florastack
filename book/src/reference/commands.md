@@ -22,7 +22,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [develop](#develop) | [`develop.get`](#developget), [`develop.reset`](#developreset), [`develop.set`](#developset) |
 | [edit](#edit) | [`edit.history`](#edithistory), [`edit.redo`](#editredo), [`edit.undo`](#editundo) |
 | [export](#export) | [`export.estimate`](#exportestimate), [`export.get`](#exportget), [`export.reproduce`](#exportreproduce), [`export.reset`](#exportreset), [`export.run`](#exportrun), [`export.set`](#exportset) |
-| [filmstrip](#filmstrip) | [`filmstrip.list`](#filmstriplist), [`filmstrip.update`](#filmstripupdate) |
+| [filmstrip](#filmstrip) | [`filmstrip.crop`](#filmstripcrop), [`filmstrip.list`](#filmstriplist), [`filmstrip.update`](#filmstripupdate) |
 | [job](#job) | [`job.cancel`](#jobcancel), [`job.list`](#joblist) |
 | [output](#output) | [`output.list`](#outputlist), [`output.remove`](#outputremove), [`output.rename`](#outputrename), [`output.render`](#outputrender), [`output.save`](#outputsave) |
 | [parallax](#parallax) | [`parallax.animate`](#parallaxanimate), [`parallax.mesh`](#parallaxmesh), [`parallax.preview`](#parallaxpreview), [`parallax.stereo`](#parallaxstereo) |
@@ -1922,6 +1922,42 @@ Examples:
 ```
 
 ## filmstrip
+
+### `filmstrip.crop`
+
+**Crop filmstrip at 100%.** Makes every frame's aligned crop of one region at full size, for the filmstrip.
+
+Reads every frame to stack at full size (developed with the fast demosaic, its defects inpainted) and warps the region of `width` x `height` pixels around `center` (a point in the master frame's pixels; the canvas's center when left out) of the canvas of the framing set onto a crop, as the full stack warps it: its brightness and white balance matched, black where the frame doesn't cover it. The region is moved inside the canvas when it would leave it, and made smaller when the canvas is. Each crop is an sRGB JPEG in the project's `previews/` folder, published as soon as it is made in a `partial` event (`{"frame", "path"}`), so that a filmstrip can play the movement of a few pixels that its small previews hide. Runs beside other jobs as a preview; a newer call replaces an older one still running, and the crops of the call before are removed when one ends. Nothing in the project refers to them: no undo step, and they go when the project is closed.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `center` | array of number | The region's center, in the master frame's pixels (as `align.info`'s framings map the canvas to them); the canvas's center when left out. |
+| `height` | integer, from 16 to 4096 | The region's height, in pixels, from 16 to 4096; 768 when left out. Default: `768`. |
+| `width` | integer, from 16 to 4096 | The region's width, in pixels, from 16 to 4096; 1024 when left out. Default: `1024`. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `frames` | array of object | Each frame stacked, in the stack's order, with its crop. |
+| `framing` | `"narrow"` \| `"wide"` \| `"common"` | The framing whose canvas it is. |
+| `height` | integer |  |
+| `width` | integer |  |
+| `x` | integer | The region cropped, in the canvas's pixels: its top left corner and size. |
+| `y` | integer |  |
+
+Examples:
+
+```json
+{}
+{"center":[2000,1500],"height":600,"width":800}
+```
 
 ### `filmstrip.list`
 

@@ -90,6 +90,8 @@ pub struct Shell {
     /// The latest stack preview of each method, by its name: with both methods chosen, the pyramid's and the depth
     /// map's are shown side by side.
     pub previews: std::collections::BTreeMap<String, Arc<florastack_engine::Image<f32>>>,
+    /// Each frame's crop at full size that `filmstrip.crop` made, by frame, as they come in.
+    pub film_crops: BTreeMap<u64, PathBuf>,
     /// Advances when a running capture replaces the contents at its preview path.
     pub preview_revision: u64,
     /// The output a stacking job just made, for the viewer to show.
@@ -148,6 +150,7 @@ impl Shell {
             preview: None,
             preview_image: None,
             previews: std::collections::BTreeMap::new(),
+            film_crops: BTreeMap::new(),
             preview_revision: 0,
             made: None,
             stacks_found: None,
@@ -299,6 +302,7 @@ impl Shell {
                         self.preview = None;
                         self.preview_image = None;
                         self.previews.clear();
+                        self.film_crops.clear();
                         self.threshold = None;
                         self.relief = None;
                         self.previews_made.clear();
@@ -314,6 +318,10 @@ impl Shell {
                 Event::Partial { command, item, .. } => {
                     if command == "filmstrip.update" {
                         self.preview_made(&item);
+                    } else if command == "filmstrip.crop"
+                        && let (Some(frame), Some(path)) = (item["frame"].as_u64(), item["path"].as_str())
+                    {
+                        self.film_crops.insert(frame, PathBuf::from(path));
                     }
                 }
             }

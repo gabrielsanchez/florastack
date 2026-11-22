@@ -9,20 +9,20 @@ use std::path::PathBuf;
 
 use florastack_align::{Canvas, DefectMask, Flag, Framing, Status, inpaint};
 use florastack_codecs::ReadOptions;
-use florastack_core::{Affine, Monitor};
+use florastack_core::{Affine, Monitor, Rect};
 use florastack_project::{CacheRef, Edit, Frame, FrameId, Project};
 use florastack_raw::{DevelopSettings, Quality};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::error::CommandError;
+use crate::error::{CommandError, Invalid};
 use crate::frames::FrameReader;
 use crate::jobs::{JobPlan, Lane, commit};
 use crate::project::{
     FrameMotion, PREVIEW_SIDE, ProjectDataError, align_settings, aligned_preview_key, defect_mask_ref, develop_settings, frame_report, motion_map,
-    preview_key, read_defect_mask, stored_alignment, write_aligned_preview, write_frame_preview,
+    preview_key, read_defect_mask, stored_alignment, write_aligned_preview, write_frame_preview, write_jpeg_preview,
 };
-use crate::registry::{CommandSpec, Meta, NoParams, Requires};
+use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::session::Session;
 
 pub(crate) fn specs() -> Vec<CommandSpec> {
@@ -57,7 +57,137 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
             Lane::Preview,
             update,
         ),
+        CommandSpec::job(
+            Meta::new("filmstrip.crop", "Crop filmstrip at 100%", "Makes every frame's aligned crop of one region at full size, for the filmstrip.")
+                .help(
+                    "Reads every frame to stack at full size (developed with the fast demosaic, its defects \
+                     inpainted) and warps the region of `width` x `height` pixels around `center` (a point in the \
+                     master frame's pixels; the canvas's center when left out) of the canvas of the framing set onto \
+                     a crop, as the full stack warps it: its brightness and white balance matched, black where the \
+                     frame doesn't cover it. The region is moved inside the canvas when it would leave it, and made \
+                     smaller when the canvas is. Each crop is an sRGB JPEG in the project's `previews/` folder, \
+                     published as soon as it is made in a `partial` event (`{\"frame\", \"path\"}`), so that a \
+                     filmstrip can play the movement of a few pixels that its small previews hide. Runs beside other \
+                     jobs as a preview; a newer call replaces an older one still running, and the crops of the call \
+                     before are removed when one ends. Nothing in the project refers to them: no undo step, and \
+                     they go when the project is closed.",
+                )
+                .requires(Requires::Project)
+                .supersede()
+                .examples(&["{}", r#"{ "center": [2000, 1500], "width": 800, "height": 600 }"#]),
+            Lane::Preview,
+            crop,
+        ),
     ]
+}
+
+/// The region to crop.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CropParams {
+    /// The region's center, in the master frame's pixels (as `align.info`'s framings map the canvas to them); the
+    /// canvas's center when left out.
+    #[serde(default)]
+    center: Option<[f64; 2]>,
+    /// The region's width, in pixels, from 16 to 4096; 1024 when left out.
+    #[serde(default = "default_crop_width")]
+    #[schemars(range(min = 16, max = 4096))]
+    width: usize,
+    /// The region's height, in pixels, from 16 to 4096; 768 when left out.
+    #[serde(default = "default_crop_height")]
+    #[schemars(range(min = 16, max = 4096))]
+    height: usize,
+}
+
+fn default_crop_width() -> usize {
+    1024
+}
+
+fn default_crop_height() -> usize {
+    768
+}
+
+impl Params for CropParams {
+    fn check(&self) -> Result<(), Invalid> {
+        for (name, side) in [("width", self.width), ("height", self.height)] {
+            if !(16..=4096).contains(&side) {
+                return Err(Invalid::new(name, format!("is {side}, but it must be from 16 to 4096 pixels")));
+            }
+        }
+        if self.center.is_some_and(|c| c.iter().any(|v| !v.is_finite() || v.abs() > 1e9)) {
+            return Err(Invalid::new("center", "must be a point of finite coordinates"));
+        }
+        Ok(())
+    }
+}
+
+/// A frame's crop, as published while the job runs.
+#[derive(Debug, Serialize, JsonSchema)]
+struct Cropped {
+    frame: FrameId,
+    /// The crop, an sRGB JPEG.
+    path: String,
+}
+
+/// The crops made.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Crops {
+    /// The region cropped, in the canvas's pixels: its top left corner and size.
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    /// The framing whose canvas it is.
+    framing: Framing,
+    /// Each frame stacked, in the stack's order, with its crop.
+    frames: Vec<Cropped>,
+}
+
+/// The region of `canvas` to crop: `size` (no larger than the canvas) around `center` (the master frame's pixels), moved
+/// inside the canvas.
+fn crop_region(canvas: &Canvas, center: Option<[f64; 2]>, (width, height): (usize, usize)) -> Rect {
+    let (w, h) = (width.min(canvas.width), height.min(canvas.height));
+    let middle = (canvas.width as f64 / 2.0, canvas.height as f64 / 2.0);
+    let (cx, cy) =
+        center.and_then(|[x, y]| canvas.to_master.inverse().map(|to_canvas| to_canvas.apply(x, y))).map_or(middle, |(x, y)| (x + 0.5, y + 0.5));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "clamped to the canvas first")]
+    let corner = |c: f64, side: usize, limit: usize| (c - side as f64 / 2.0).round().clamp(0.0, (limit - side) as f64) as usize;
+    Rect::new(corner(cx, w, canvas.width), corner(cy, h, canvas.height), w, h)
+}
+
+fn crop(session: &Session, p: CropParams) -> Result<JobPlan<Crops>, CommandError> {
+    let settings = super::stack::Chosen::Average(florastack_stack::AverageSettings::default());
+    let mut plan = super::stack::StackPlan::new(session, "filmstrip.crop", settings, Quality::Preview)?;
+    let rect = crop_region(&plan.canvas, p.center, (p.width, p.height));
+    let previous = session.film_crops.clone();
+    let job = JobPlan::new(move |ctx| {
+        let total = plan.frames.len() as u64;
+        let mut frames = Vec::with_capacity(plan.frames.len());
+        let mut paths = Vec::with_capacity(plan.frames.len());
+        for k in 0..plan.frames.len() {
+            ctx.checkpoint()?;
+            let (frame, image) = plan.crop(k, rect)?;
+            let reference = write_jpeg_preview(&plan.cache, &format!("film-crop-{}", frame.get()), &image, None)?;
+            let path = reference.path.resolve(plan.cache.path());
+            let cropped = Cropped { frame, path: path.display().to_string() };
+            ctx.partial(&cropped);
+            frames.push(cropped);
+            paths.push(path);
+            ctx.step(k as u64 + 1, total)?;
+        }
+        let crops = Crops { x: rect.x, y: rect.y, width: rect.width, height: rect.height, framing: plan.framing, frames };
+        Ok(commit(move |session: &mut Session| {
+            for old in previous.iter().filter(|old| !paths.contains(old)) {
+                if let Err(e) = florastack_core::fs::remove_file(old) {
+                    tracing::debug!("cannot remove the old filmstrip crop {}: {e}", old.display());
+                }
+            }
+            session.film_crops = paths;
+            Ok(crops)
+        }))
+    });
+    Ok(job.stages(&[("Cropping frames", 1.0)]))
 }
 
 /// What a frame's previews should be made from now.

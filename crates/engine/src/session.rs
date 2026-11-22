@@ -57,6 +57,8 @@ pub struct Session {
     events: Vec<Event>,
     /// The picture `stack.threshold` showed last, which the next call removes; forgotten with the project.
     pub(crate) threshold_shown: Option<std::path::PathBuf>,
+    /// The crops `filmstrip.crop` made last, which the next call removes; forgotten with the project.
+    pub(crate) film_crops: Vec<std::path::PathBuf>,
     /// The latest stack preview (`stack.preview`), linear with the frames' color space and an alpha channel where
     /// frames leave pixels uncovered, for a viewer to read; dropped with the project.
     pub(crate) stack_preview: Option<std::sync::Arc<florastack_core::Image<f32>>>,
@@ -113,6 +115,7 @@ impl Session {
             history_changed: false,
             events: Vec::new(),
             threshold_shown: None,
+            film_crops: Vec::new(),
             stack_preview: None,
             stack_previews: std::collections::BTreeMap::new(),
             reduced: crate::commands::stack::SharedReduced::default(),
@@ -358,6 +361,7 @@ impl Session {
         };
         let path = folder.path().display().to_string();
         self.threshold_shown = None;
+        self.film_crops.clear();
         self.stack_preview = None;
         self.stack_previews.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
@@ -421,6 +425,7 @@ impl Session {
         self.close_retouch();
         let Some(open) = self.open.take() else { return Ok(None) };
         self.threshold_shown = None;
+        self.film_crops.clear();
         self.stack_preview = None;
         self.stack_previews.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();

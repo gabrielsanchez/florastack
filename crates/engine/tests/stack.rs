@@ -171,6 +171,48 @@ fn outputs_list_the_canvases_that_map_one_onto_the_other() {
     assert!(mapped < 0.03 && mapped * 3.0 < unmapped, "through the canvases {mapped}, by pixels {unmapped}");
 }
 
+/// An 8-bit image file's samples, from 0 to 1.
+fn eight_bit(path: &str) -> Image<f32> {
+    match florastack_codecs::read_file(Path::new(path), &florastack_codecs::ReadOptions::default()).unwrap().image {
+        AnyImage::U8(image) => {
+            let values = image.as_raw().iter().map(|&v| f32::from(v) / 255.0).collect();
+            Image::from_vec(image.width(), image.height(), image.channels(), ColorSpace::SRGB, values).unwrap()
+        }
+        other => panic!("an 8-bit picture, not {:?}", other.format()),
+    }
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)] // Sums of a few thousand samples.
+fn filmstrip_crops_are_the_frames_aligned_at_full_size() {
+    let dir = TempDir::new("stack-film-crop");
+    // Each frame 2% larger than the one before: as shot, they don't line up.
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.02, None, 30));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    // Frames this small have previews at their own size, aligned or as shot: the crop of the whole canvas is the
+    // aligned preview at full quality.
+    let crops = run(&mut engine, "stack.preview", "{}");
+    let canvas = (crops["width"].as_u64().unwrap() * 4, crops["height"].as_u64().unwrap() * 4);
+    let crops = run(&mut engine, "filmstrip.crop", &format!(r#"{{ "width": {}, "height": {} }}"#, canvas.0.min(160), canvas.1.min(120)));
+    let film = run(&mut engine, "filmstrip.list", "{}");
+    let difference = |a: &Image<f32>, b: &Image<f32>| {
+        let n = a.as_raw().len().min(b.as_raw().len());
+        a.as_raw().iter().zip(b.as_raw()).map(|(x, y)| f64::from((x - y).abs())).sum::<f64>() / n as f64
+    };
+    for crop in crops["frames"].as_array().unwrap() {
+        let row = film["frames"].as_array().unwrap().iter().find(|f| f["frame"] == crop["frame"]).unwrap();
+        let image = eight_bit(crop["path"].as_str().unwrap());
+        let (aligned, shot) = (eight_bit(row["alignedPreview"].as_str().unwrap()), eight_bit(row["preview"].as_str().unwrap()));
+        assert_eq!((image.width(), image.height()), (aligned.width(), aligned.height()));
+        let (to_aligned, to_shot) = (difference(&image, &aligned), difference(&image, &shot));
+        assert!(to_aligned < 0.02, "frame {}: {to_aligned} from its aligned preview", crop["frame"]);
+        if row["master"] != true {
+            assert!(to_aligned * 2.0 < to_shot, "frame {}: {to_aligned} aligned, {to_shot} as shot", crop["frame"]);
+        }
+    }
+}
+
 #[test]
 fn the_preview_is_a_quarter_of_the_stack_and_changes_nothing() {
     let dir = TempDir::new("stack-preview");

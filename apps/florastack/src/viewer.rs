@@ -140,6 +140,19 @@ impl PairMap {
     }
 }
 
+impl Canvas {
+    /// The master frame's pixel at `point` (pixel edges at whole numbers) of an image of this canvas shown at `shown`
+    /// pixels.
+    pub fn to_master_point(&self, shown: [usize; 2], point: Vec2) -> Option<[f64; 2]> {
+        let ratio = |canvas: usize, shown: usize| (canvas > 0 && shown > 0).then(|| canvas as f64 / shown as f64);
+        let (kx, ky) = (ratio(self.size[0], shown[0])?, ratio(self.size[1], shown[1])?);
+        let (x, y) = (f64::from(point.x) * kx - 0.5, f64::from(point.y) * ky - 0.5);
+        let [[a, b, c], [d, e, f]] = self.to_master;
+        let master = [a * x + b * y + c, d * x + e * y + f];
+        master.iter().all(|v| v.is_finite()).then_some(master)
+    }
+}
+
 /// `first` then `next`, as affine maps.
 fn then(first: &[[f64; 3]; 2], next: &[[f64; 3]; 2]) -> [[f64; 3]; 2] {
     let [[a, b, c], [d, e, f]] = *first;
@@ -148,7 +161,7 @@ fn then(first: &[[f64; 3]; 2], next: &[[f64; 3]; 2]) -> [[f64; 3]; 2] {
 }
 
 /// The inverse of an affine map, if it has one.
-fn inverse(m: &[[f64; 3]; 2]) -> Option<[[f64; 3]; 2]> {
+pub fn inverse(m: &[[f64; 3]; 2]) -> Option<[[f64; 3]; 2]> {
     let [[a, b, c], [d, e, f]] = *m;
     let det = a * e - b * d;
     if !det.is_finite() || det == 0.0 {
@@ -183,6 +196,8 @@ pub struct Viewer {
     fit: bool,
     /// Whether the GPU renderer is installed; the largest image side it takes.
     gpu: Option<u32>,
+    /// The view's size when last drawn, in device pixels.
+    view_pixels: Vec2,
 }
 
 impl Viewer {
@@ -201,7 +216,21 @@ impl Viewer {
             anchor: Vec2::ZERO,
             fit: true,
             gpu,
+            view_pixels: Vec2::ZERO,
         }
+    }
+
+    /// The view's size when last drawn, in device pixels: what a crop at 100% of it takes.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a window's size in pixels")]
+    pub fn view_pixels(&self) -> [usize; 2] {
+        [self.view_pixels.x.max(0.0) as usize, self.view_pixels.y.max(0.0) as usize]
+    }
+
+    /// The image point at the view's middle (pixel edges at whole numbers) and the image's size, when an image is
+    /// shown.
+    pub fn view_center(&self) -> Option<(Vec2, [usize; 2])> {
+        let shown = self.shown.as_ref()?;
+        Some((self.center, [shown.image.width, shown.image.height]))
     }
 
     /// Whether images are drawn on the GPU (the window's renderer is wgpu and the viewer's shaders compiled there).
@@ -296,6 +325,7 @@ impl Viewer {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
         let ppp = ui.ctx().pixels_per_point();
+        self.view_pixels = rect.size() * ppp;
         let Some(size) = self.shown.as_ref().map(|s| Vec2::new(s.image.width as f32, s.image.height as f32)) else { return };
         let side_by_side = self.other.is_some() && self.compare == Compare::SideBySide;
         // Side by side, each image has half the view, with a gap between them.
@@ -1332,6 +1362,9 @@ pub(crate) mod tests {
         let flat = Canvas { size: [10, 10], to_master: [[0.0; 3], [0.0; 3]] };
         assert!(PairMap::between(&first, [100, 80], &flat, [10, 10]).is_none());
         assert!(PairMap::between(&first, [0, 80], &second, [120, 100]).is_none());
+        // A point of an image, in the master frame: the second canvas's middle, shown at half size.
+        assert_eq!(second.to_master_point([60, 50], Vec2::new(30.0, 25.0)), Some([49.5, 39.5]));
+        assert_eq!(second.to_master_point([0, 50], Vec2::new(30.0, 25.0)), None);
     }
 
     #[test]

@@ -232,5 +232,23 @@ fn the_filmstrip_plays_the_aligned_frames() {
     assert_eq!(&seen[..names.len()], (0..names.len()).collect::<Vec<_>>(), "each frame in turn, down: {seen:?}");
     assert!(seen.len() > names.len() && seen.last() < Some(&(names.len() - 1)), "and back up: {seen:?}");
     assert_eq!(harness.state().film.as_ref().map(|f| f.index), seen.last().copied(), "the frame stays shown");
+    // Crops at 100% of what the viewer shows, one for each frame stacked (the rejected one has none), played in place of
+    // the previews.
+    harness.key_press(Key::Escape);
+    harness.step();
+    harness.get_by_label("Crop at 100%").click();
+    let stacked = harness.state().shell.frames.iter().filter(|f| f.alignment.as_ref().is_some_and(|a| a["status"] != "rejected")).count();
+    until(&mut harness, "the crops", |app| app.shell.film_crops.len() == stacked && !app.shell.busy());
+    assert!(harness.state().film_crop && harness.state().film.is_some(), "the filmstrip plays the crops");
+    let frames = harness.state().shell.frames.clone();
+    for (i, frame) in frames.iter().enumerate() {
+        let shown = harness.state().film_frame(i).map(|(path, _)| path);
+        assert_eq!(shown.as_ref(), harness.state().shell.film_crops.get(&frame.id), "frame {i} plays its crop, or nothing");
+    }
+    harness.get_by_label_contains("(100% crop)");
+    // Unticked, the previews play again.
+    harness.get_by_label("100% crop").click();
+    harness.step();
+    assert_eq!(harness.state().film_frame(0).map(|(path, _)| path), frames[0].aligned_preview.clone());
     done(dir, harness);
 }
