@@ -546,6 +546,17 @@ fn draw_panes(app: &mut FloraStackApp, ui: &egui::Ui, pointer: &Pointer) {
         names.galley(back.min + Vec2::splat(4.0), galley, egui::Color32::WHITE);
     };
     label(left, if standing_in { tr("retouch-standin") } else { tr("retouch-source") });
+    if app.shell.engine().retouch().is_some_and(|v| v.repainting()) {
+        let text = tr("retouch-repainting");
+        names.text(
+            right.center_bottom() - Vec2::new(0.0, 16.0),
+            egui::Align2::CENTER_BOTTOM,
+            text,
+            egui::FontId::proportional(14.0),
+            egui::Color32::WHITE,
+        );
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
     label(right, output_name);
 }
 
@@ -596,6 +607,10 @@ fn pick_source(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response
 
 /// Painting: a drag with the left button on the result paints live and commits when let go; a click paints a dab.
 fn paint(app: &mut FloraStackApp, response: &egui::Response, pointer: &Pointer, current: Option<RetouchSource>) {
+    // While the strokes are painted again after an undo (`retouch.repaint`), no new stroke starts.
+    if !app.retouch.drawing() && app.shell.engine().retouch().is_some_and(|v| v.repainting()) {
+        return;
+    }
     let s = sample(&app.retouch, pointer);
     let r = &mut app.retouch;
     if response.drag_started_by(egui::PointerButton::Primary) && !pointer.space && pointer.on_result() {

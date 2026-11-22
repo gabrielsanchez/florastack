@@ -359,6 +359,7 @@ retouch-nothing = Stack the frames first: retouching paints onto an output.
 retouch-output = Output
 retouch-pick-output = Pick an output
 retouch-opening = Opening the output for retouching…
+retouch-repainting = Loading the sources to paint the strokes again…
 retouch-hint = Pick an output to retouch in the panel on the right.
 retouch-layers = Layers
 retouch-no-layers = No layers yet: the first stroke makes one.

@@ -28,7 +28,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [parallax](#parallax) | [`parallax.animate`](#parallaxanimate), [`parallax.mesh`](#parallaxmesh), [`parallax.preview`](#parallaxpreview), [`parallax.stereo`](#parallaxstereo) |
 | [preset](#preset) | [`preset.apply`](#presetapply), [`preset.list`](#presetlist), [`preset.read`](#presetread), [`preset.save`](#presetsave) |
 | [project](#project) | [`project.addFrames`](#projectaddframes), [`project.checkFrames`](#projectcheckframes), [`project.close`](#projectclose), [`project.findOrphans`](#projectfindorphans), [`project.findStacks`](#projectfindstacks), [`project.frames`](#projectframes), [`project.info`](#projectinfo), [`project.moveFrames`](#projectmoveframes), [`project.new`](#projectnew), [`project.open`](#projectopen), [`project.removeFrames`](#projectremoveframes), [`project.rename`](#projectrename), [`project.save`](#projectsave), [`project.saveAs`](#projectsaveas), [`project.setFramesEnabled`](#projectsetframesenabled), [`project.trashOrphans`](#projecttrashorphans) |
-| [retouch](#retouch) | [`retouch.addLayer`](#retouchaddlayer), [`retouch.cancelPaint`](#retouchcancelpaint), [`retouch.close`](#retouchclose), [`retouch.mapFocus`](#retouchmapfocus), [`retouch.open`](#retouchopen), [`retouch.paint`](#retouchpaint), [`retouch.removeLayer`](#retouchremovelayer), [`retouch.setLayerVisible`](#retouchsetlayervisible), [`retouch.setSource`](#retouchsetsource), [`retouch.sharpest`](#retouchsharpest), [`retouch.stroke`](#retouchstroke) |
+| [retouch](#retouch) | [`retouch.addLayer`](#retouchaddlayer), [`retouch.cancelPaint`](#retouchcancelpaint), [`retouch.close`](#retouchclose), [`retouch.mapFocus`](#retouchmapfocus), [`retouch.open`](#retouchopen), [`retouch.paint`](#retouchpaint), [`retouch.removeLayer`](#retouchremovelayer), [`retouch.repaint`](#retouchrepaint), [`retouch.setLayerVisible`](#retouchsetlayervisible), [`retouch.setSource`](#retouchsetsource), [`retouch.sharpest`](#retouchsharpest), [`retouch.stroke`](#retouchstroke) |
 | [stack](#stack) | [`stack.average`](#stackaverage), [`stack.depthMap`](#stackdepthmap), [`stack.get`](#stackget), [`stack.preview`](#stackpreview), [`stack.pyramid`](#stackpyramid), [`stack.reset`](#stackreset), [`stack.set`](#stackset), [`stack.slabbed`](#stackslabbed), [`stack.threshold`](#stackthreshold), [`stack.wavelet`](#stackwavelet) |
 | [watch](#watch) | [`watch.run`](#watchrun) |
 
@@ -3227,6 +3227,31 @@ Example:
 
 ```json
 {"layer":5,"output":3}
+```
+
+### `retouch.repaint`
+
+**Paint strokes again.** Loads the sources the visible strokes need and paints them again where they changed.
+
+After an undo, a redo or a layer shown or hidden, the region where the visible strokes changed is painted again from the output. When a stroke there paints from a frame or output that isn't in memory, loading it takes seconds, so the engine starts this job instead of waiting: it loads the sources (a frame from its warped image in the cache, or decoded and warped again), and the region is painted when it ends. Until then the result keeps the strokes as they were, and `retouch.paint` and `retouch.stroke` wait. A source that can't be loaded is left out of the painting, with a warning, and not asked for again while the output is open. Runs beside other jobs; a newer call replaces one still running.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | The project or the session |
+
+Parameters: none.
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `failed` | array of object |  |
+| `loaded` | array of object | The sources loaded, and those that couldn't be (their strokes are left out). |
+
+Example:
+
+```json
+{}
 ```
 
 ### `retouch.setLayerVisible`

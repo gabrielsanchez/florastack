@@ -321,3 +321,38 @@ fn retouching_in_small_tiles_spilled_to_disk_gives_the_same_bits() {
     assert!(whole.1 == tiled.1, "the cached result differs in small tiles");
     assert!(whole.0.windows(2).any(|w| w[0] != w[1]), "the steps changed the result");
 }
+
+#[test]
+fn an_undo_that_needs_a_source_out_of_memory_paints_again_in_a_job() {
+    let dir = TempDir::new("retouch-repaint");
+    let (mut engine, pyramid, _, frames) = stacked(dir.path());
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let source = |frame: u64| format!(r#""source": {{ "frame": {frame} }},"#);
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[0]));
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &source(frames[0]), "[[30, 60, 1], [130, 60, 1]]")));
+    let one = result(&engine);
+    // Three more frames as sources push the first out of memory; a stroke from the last crosses the first stroke.
+    for &frame in &frames[1..4] {
+        run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {frame} }}"#));
+    }
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &source(frames[3]), "[[80, 10, 1], [80, 110, 1]]")));
+    let two = result(&engine);
+    assert_ne!(one, two);
+    // Undoing it paints its region again with the first stroke, whose frame isn't in memory: a job loads it, and the
+    // undo returns at once.
+    run(&mut engine, "edit.undo", "{}");
+    assert!(engine.retouch().unwrap().repainting());
+    let job = engine.jobs().iter().find(|j| j.command == "retouch.repaint" && !j.state.is_finished()).map(|j| j.id).expect("a repaint job");
+    assert_eq!(result(&engine), two, "the result keeps the strokes as they were until the job ends");
+    let early = engine.dispatch_json("retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("eraser", "", "[[10, 10, 1]]")));
+    assert!(early.is_err(), "painting waits for the job");
+    let repainted = engine.wait(job).unwrap();
+    assert_eq!(repainted["loaded"], serde_json::json!([{ "frame": frames[0] }]), "{repainted}");
+    assert!(!engine.retouch().unwrap().repainting());
+    assert_eq!(result(&engine), one, "the same pixels as before the stroke undone");
+    // Redoing it needs only the last frame, which is in memory: painted at once.
+    run(&mut engine, "edit.redo", "{}");
+    assert!(!engine.retouch().unwrap().repainting());
+    assert_eq!(result(&engine), two);
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("eraser", "", "[[10, 10, 1]]")));
+}

@@ -60,6 +60,23 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             Lane::Preview,
             set_source,
         ),
+        CommandSpec::job(
+            Meta::new("retouch.repaint", "Paint strokes again", "Loads the sources the visible strokes need and paints them again where they changed.")
+                .help(
+                    "After an undo, a redo or a layer shown or hidden, the region where the visible strokes changed is \
+                     painted again from the output. When a stroke there paints from a frame or output that isn't in \
+                     memory, loading it takes seconds, so the engine starts this job instead of waiting: it loads the \
+                     sources (a frame from its warped image in the cache, or decoded and warped again), and the region \
+                     is painted when it ends. Until then the result keeps the strokes as they were, and `retouch.paint` \
+                     and `retouch.stroke` wait. A source that can't be loaded is left out of the painting, with a \
+                     warning, and not asked for again while the output is open. Runs beside other jobs; a newer call \
+                     replaces one still running.",
+                )
+                .requires(Requires::Project)
+                .supersede(),
+            Lane::Preview,
+            repaint,
+        ),
         CommandSpec::query(
             Meta::new("retouch.sharpest", "Sharpest frame", "The frame where a point of the output is sharpest.")
                 .help("From the depth map of a depth-map output, or the map `retouch.mapFocus` made. `x` and `y` are in pixels of the output.")
@@ -235,6 +252,9 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
                 changes: RetouchChanges { opened: true, ..RetouchChanges::default() },
                 unsaved: false,
                 left_out,
+                repainting: false,
+                unloadable: Vec::new(),
+                start_repaint: false,
             });
             Ok(opened)
         }))
@@ -357,6 +377,77 @@ fn set_source(session: &Session, p: SourceParams) -> Result<JobPlan<SourceSet>, 
         }))
     });
     Ok(job.stages(&[("Loading the source", 1.0)]))
+}
+
+/// What `retouch.repaint` did.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Repainted {
+    /// The sources loaded, and those that couldn't be (their strokes are left out).
+    loaded: Vec<Source>,
+    failed: Vec<Source>,
+}
+
+fn repaint(session: &Session, _: NoParams) -> Result<JobPlan<Repainted>, CommandError> {
+    let open = open_session(session)?;
+    let output = open.output;
+    let strokes = session.project()?.output(output).map(visible_strokes).unwrap_or_default();
+    let missing = open.missing(&strokes);
+    let size = open.size();
+    let store = Arc::clone(&open.store);
+    let mut loader = if missing.is_empty() { None } else { Some(SourceLoader::new(session, "retouch.repaint", output)?) };
+    let job = JobPlan::new(move |ctx| {
+        let (mut got, mut failed, mut cached) = (Vec::new(), Vec::new(), Vec::new());
+        for &source in &missing {
+            ctx.checkpoint()?;
+            let Some(loader) = &mut loader else { break };
+            match loader.load(source, size).and_then(|(image, new)| Ok((SourceTiles::of(&store, &image)?, new))) {
+                Ok((tiles, new)) => {
+                    got.push((source, Arc::new(tiles)));
+                    cached.extend(new);
+                }
+                Err(e) => {
+                    tracing::warn!("strokes from {source:?} can't be painted: {e}");
+                    failed.push(source);
+                }
+            }
+        }
+        Ok(commit(move |session: &mut Session| {
+            let Some(open) = session.retouch.as_mut().filter(|s| s.output == output) else {
+                return Ok(Repainted { loaded: Vec::new(), failed: Vec::new() });
+            };
+            let names: Vec<Source> = got.iter().map(|(s, _)| *s).collect();
+            for (source, tiles) in got {
+                if open.source(source).is_none() {
+                    open.sources.push((source, tiles));
+                }
+            }
+            open.unloadable.extend(failed.iter().copied());
+            for (frame, reference) in cached {
+                session.keep_aligned(frame, reference)?;
+            }
+            // With the sources in, the region is painted now.
+            session.sync_retouch();
+            Ok(Repainted { loaded: names, failed })
+        }))
+    });
+    Ok(job.stages(&[("Loading the sources", 1.0)]))
+}
+
+/// Refuses painting while the result waits to be painted again (`retouch.repaint`), starting that job again if it
+/// was cancelled.
+fn wait_for_repaint(session: &mut Session, command: &str) -> Result<(), CommandError> {
+    if !session.retouch.as_ref().is_some_and(|r| r.repainting) {
+        return Ok(());
+    }
+    let running = session.jobs.list().iter().any(|j| j.command == "retouch.repaint" && !j.state.is_finished());
+    if let Some(open) = session.retouch.as_mut().filter(|_| !running) {
+        open.start_repaint = true;
+    }
+    Err(CommandError::Unavailable {
+        command: command.to_owned(),
+        reason: "the strokes are being painted again after an undo, a redo or a layer change: paint once that is done".to_owned(),
+    })
 }
 
 /// A point of the output.
@@ -499,6 +590,7 @@ fn region(rect: Option<florastack_core::Rect>) -> Option<[usize; 4]> {
 }
 
 fn paint(session: &mut Session, p: PaintParams) -> Result<PaintedRegion, CommandError> {
+    wait_for_repaint(session, "retouch.paint")?;
     let settings_changed = session.invalid("stroke", "changes its settings part way: begin a new stroke");
     let open = session.retouch.as_mut().ok_or_else(|| CommandError::Unavailable {
         command: "retouch.paint".to_owned(),
@@ -580,6 +672,7 @@ struct Stroked {
 }
 
 fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandError> {
+    wait_for_repaint(session, "retouch.stroke")?;
     let stroke = p.stroke.quantized();
     let output = open_session(session)?.output;
     // The layer: the one given, which must be visible, the top one, or a new one.

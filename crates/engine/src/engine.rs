@@ -333,11 +333,16 @@ impl Engine {
 
     fn flush(&mut self) {
         let events = self.session.take_events();
-        if events.is_empty() || self.subscribers.is_empty() {
-            return;
+        if !self.subscribers.is_empty() {
+            for event in events {
+                self.subscribers.retain(|s| s.send(event.clone()).is_ok());
+            }
         }
-        for event in events {
-            self.subscribers.retain(|s| s.send(event.clone()).is_ok());
+        // The retouch session waits for sources to paint again where the strokes changed: a job loads them.
+        if self.session.retouch.as_mut().is_some_and(|r| std::mem::take(&mut r.start_repaint))
+            && let Err(e) = self.dispatch("retouch.repaint", Value::Null)
+        {
+            tracing::warn!("the strokes can't be painted again: {e}");
         }
     }
 }

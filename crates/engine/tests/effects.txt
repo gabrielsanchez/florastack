@@ -97,6 +97,7 @@ retouch.mapFocus project
 retouch.open project
 retouch.paint project
 retouch.removeLayer project
+retouch.repaint project
 retouch.setLayerVisible project
 retouch.setSource project
 retouch.sharpest none

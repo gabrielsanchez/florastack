@@ -55,6 +55,9 @@ same framing can be a source.
   brush smaller and larger.
 - **Layers.** Strokes go into the layer picked in the panel, or the top one; the first stroke makes "Layer 1". Hide a
   layer to see the output without its strokes.
+- **Undo and redo** paint the strokes again where they changed. When a stroke there paints from a frame that is no
+  longer in memory (FloraStack keeps the last three sources), the frame is loaded in the background first, which takes
+  a few seconds: the output view says so, and the brush waits until it is done.
 
 ## Brushes
 

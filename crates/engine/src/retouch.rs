@@ -120,6 +120,13 @@ pub(crate) struct RetouchSession {
     pub unsaved: bool,
     /// The visible strokes whose source is gone from the project, by layer ([`left_out`]).
     pub left_out: Vec<LeftOut>,
+    /// Whether the result waits for sources a `retouch.repaint` job loads, to be painted again where the strokes
+    /// changed; painting waits with it.
+    pub repainting: bool,
+    /// The sources that job couldn't load: their strokes are left out rather than asked for again.
+    pub unloadable: Vec<Source>,
+    /// Whether the engine is to start that job (after the command or the events at hand).
+    pub start_repaint: bool,
 }
 
 impl RetouchSession {
@@ -137,6 +144,18 @@ impl RetouchSession {
     /// Notes `rect` as changed.
     pub fn touched(&mut self, rect: Option<Rect>) {
         self.changes.region = union(self.changes.region, rect);
+    }
+
+    /// The sources `strokes` paint from that aren't loaded and could be: not gone from the project, not tried in vain.
+    pub fn missing(&self, strokes: &[Stroke]) -> Vec<Source> {
+        let mut missing = Vec::new();
+        for source in strokes.iter().filter_map(|s| s.source) {
+            let gone = self.left_out.iter().any(|l| l.source == source) || self.unloadable.contains(&source);
+            if self.source(source).is_none() && !gone && !missing.contains(&source) {
+                missing.push(source);
+            }
+        }
+        missing
     }
 
     /// The output's size.
@@ -382,6 +401,12 @@ impl RetouchView<'_> {
     /// Whether the session can tell each point's sharpest frame (`retouch.sharpest`).
     pub fn has_sharpest(&self) -> bool {
         self.session.sharpest.is_some()
+    }
+
+    /// Whether the result waits for sources to be loaded (`retouch.repaint`) to be painted again where an undo, a redo
+    /// or a layer changed the strokes; painting waits until then.
+    pub fn repainting(&self) -> bool {
+        self.session.repainting
     }
 
     /// The visible strokes whose source is gone from the project, by layer and source: they are left out when the
@@ -756,27 +781,21 @@ impl Session {
         let reach = |s: &Stroke| Stroke::reach(&s.dabs(), 1.0, w, h);
         let region = session.painted[common..].iter().chain(&strokes[common..]).fold(None, |r, s| union(r, reach(s)));
         if let Some(region) = region {
-            let mut cached = Vec::new();
-            if strokes.iter().any(|s| s.source.is_some_and(|src| session.source(src).is_none())) {
-                let store = Arc::clone(&session.store);
-                match SourceLoader::new(self, "retouch", session.output)
-                    .and_then(|mut loader| load_tiled(&strokes, &mut session.sources, &mut loader, (w, h), &store))
-                {
-                    Ok(new) => cached = new,
-                    Err(e) => tracing::warn!("the strokes' sources can't be loaded: {e}"),
-                }
+            // Loading a frame takes seconds: a job loads what is missing (`retouch.repaint`, which the engine starts),
+            // and the region is painted when it ends. The result keeps the strokes painted so far until then.
+            if !session.missing(&strokes).is_empty() {
+                session.repainting = true;
+                session.start_repaint = true;
+                self.retouch = Some(session);
+                return;
             }
             if let Err(e) = session.replay(&strokes, region) {
                 tracing::warn!("the strokes can't be painted again: {e}");
             }
             session.touched(Some(region));
             session.unsaved = true;
-            for (frame, reference) in cached {
-                if let Err(e) = self.keep_aligned(frame, reference) {
-                    tracing::debug!("the warped frame isn't kept: {e}");
-                }
-            }
         }
+        session.repainting = false;
         session.painted = strokes;
         self.retouch = Some(session);
     }

@@ -277,6 +277,8 @@ fn every_command_dispatches_from_json() {
     assert!(calls.run("retouch.paint", &format!(r#"{{ "begin": true, "stroke": {stroke} }}"#))["region"].is_array());
     assert_eq!(calls.run("retouch.stroke", &format!(r#"{{ "stroke": {stroke} }}"#))["strokes"], 1);
     assert_eq!(calls.run("retouch.cancelPaint", "{}")["cancelled"], false);
+    // Every source the strokes need is in memory: nothing to load.
+    assert_eq!(calls.run("retouch.repaint", "{}")["loaded"], json!([]));
     let layer = calls.run("retouch.addLayer", &format!(r#"{{ "output": {target}, "name": "Bristles" }}"#))["layer"].clone();
     calls.run("retouch.setLayerVisible", &format!(r#"{{ "output": {target}, "layer": {layer}, "visible": false }}"#));
     calls.run("retouch.removeLayer", &format!(r#"{{ "output": {target}, "layer": {layer} }}"#));
