@@ -52,13 +52,13 @@ The output's field of view, which applies when stacking (no new alignment needed
 
 The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly. In smooth or blurred areas, such as an out-of-focus background, no frame does, and following noise there makes blotches. Below the contrast threshold, a pixel's depth is filled from the confident pixels around it instead.
 
-When you stack by depth map, the tab shows the threshold first, over a picture of the stack: areas in **black** are below it. Raise the threshold until noise and smooth background turn black while the subject's detail stays visible, then press **Continue**.
+When you stack by depth map, the tab shows the threshold first, over a quarter-size preview of the depth-map stack in its colors: areas in **black** are below it. Raise the threshold until noise and smooth background turn black while the subject's detail stays visible, then press **Continue**.
 
 - **Automatic** picks a threshold from the image.
 - **Percentile** fills at least that share of the image.
 - **Level** sets the contrast directly, for repeating a threshold across stacks.
 
-The first picture takes as long as a quarter-size preview, since every frame is read; after that the picture follows the slider at once.
+The first picture takes as long as a quarter-size preview, since every frame is read (less after a depth-map preview); after that the picture follows the slider at once. Its colors stay those of the first picture's threshold, which differ from the stack's mostly where the picture is black.
 
 ## Grit
 

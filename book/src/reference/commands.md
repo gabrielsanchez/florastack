@@ -3681,7 +3681,7 @@ Examples:
 
 **Show contrast threshold.** Shows which parts of the stack fall below the depth map's contrast threshold.
 
-The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly; below the contrast threshold, in smooth or blurred areas, it fills the depth from the confident pixels around. This shows where that happens, at a quarter of the frames' size: the sharpest frame's luminance at each pixel, black below the threshold, transparent where no frame covers it, as an 8-bit TIFF in the project's `previews/` folder (each call removes the one before), with the threshold's level and the share of the pixels below it. Takes the threshold settings of `stack.depthMap`, the project's (`stack.get`) when left out. The first call reads every frame, as the depth-map method's first pass does; later calls with the same frames, alignment, develop settings and radius reuse what it measured and take milliseconds, so call it on every move of a threshold slider. Runs beside other jobs as a preview; a newer call replaces an older one still running.
+The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly; below the contrast threshold, in smooth or blurred areas, it fills the depth from the confident pixels around. This shows where that happens, at a quarter of the frames' size: the depth-map composite, black below the threshold, transparent where no frame covers it, as an 8-bit sRGB TIFF in the project's `previews/` folder (each call removes the one before), with the threshold's level and the share of the pixels below it. Takes the threshold settings of `stack.depthMap`, the project's (`stack.get`) when left out. The first call reads every frame twice, as the depth-map method does, to measure their focus and to composite; later calls with the same frames, alignment, develop settings and radius reuse both and take milliseconds, so call it on every move of a threshold slider. The colors stay those of the first call's threshold (or of a depth-map `stack.preview` of the same frames), which differ from a later threshold's result mostly where the picture is black. Runs beside other jobs as a preview; a newer call replaces an older one still running.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3704,7 +3704,7 @@ Result:
 | `height` | integer |  |
 | `level` | number | The threshold's level of contrast, which `"threshold": "level"` takes. |
 | `measured` | boolean | Whether the frames' focus was measured again, rather than reused from the call before. |
-| `path` | string | The picture: an 8-bit TIFF, gray with an alpha channel. |
+| `path` | string | The picture: an 8-bit sRGB TIFF, RGB with an alpha channel. |
 | `width` | integer | Its size, in pixels: a quarter of the full stack's on each side. |
 
 Examples:

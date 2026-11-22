@@ -226,6 +226,49 @@ fn the_depth_maps_previews_and_threshold_share_the_focus_they_measured() {
     assert_eq!(run(&mut engine, "stack.threshold", r#"{ "radius": 3.0 }"#)["measured"], true);
 }
 
+/// The 8-bit RGBA pixels of a threshold picture.
+fn threshold_picture(shown: &serde_json::Value) -> Vec<u8> {
+    let path = PathBuf::from(shown["path"].as_str().unwrap());
+    match florastack_codecs::read_file(&path, &florastack_codecs::ReadOptions::default()).unwrap().image {
+        AnyImage::U8(image) => {
+            assert_eq!(image.channels(), 4, "RGB with alpha");
+            image.as_raw().to_vec()
+        }
+        other => panic!("an 8-bit picture, not {:?}", other.format()),
+    }
+}
+
+#[test]
+fn the_threshold_shows_the_depth_maps_colors_above_it_and_black_below() {
+    let dir = TempDir::new("stack-threshold-colors");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 27));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    let settings = r#"{ "threshold": "percentile", "percentile": 40 }"#;
+    // The colors composited by the threshold itself, at its first threshold.
+    let shown = run(&mut engine, "stack.threshold", settings);
+    let own = threshold_picture(&shown);
+    let pixels: Vec<&[u8]> = own.chunks_exact(4).collect();
+    let black = pixels.iter().filter(|p| p[..3] == [0, 0, 0] && p[3] == 255).count();
+    let below = shown["below"].as_f64().unwrap();
+    assert!((black as f64 / pixels.len() as f64 - below).abs() < 0.01, "black where below: {black} of {} against {below}", pixels.len());
+    let colored = pixels.iter().filter(|p| p[0] != p[1] || p[1] != p[2]).count();
+    assert!(colored > pixels.len() / 4, "the stack's colors, not gray: {colored} of {}", pixels.len());
+    // A later threshold keeps those colors, and darkens more.
+    let more = run(&mut engine, "stack.threshold", r#"{ "threshold": "percentile", "percentile": 70 }"#);
+    assert_eq!(more["measured"], false);
+    for (a, b) in own.chunks_exact(4).zip(threshold_picture(&more).chunks_exact(4)) {
+        assert!(b[..3] == [0, 0, 0] || a == b, "{a:?} became {b:?}");
+    }
+    // The same colors from a depth-map preview at that threshold, in a project opened again.
+    let path = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.save", "{}");
+    run(&mut engine, "project.close", "{}");
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(&path)));
+    run(&mut engine, "stack.preview", r#"{ "method": "depth-map", "threshold": "percentile", "percentile": 40 }"#);
+    assert_eq!(threshold_picture(&run(&mut engine, "stack.threshold", settings)), own, "the preview's colors are the threshold's own");
+}
+
 #[test]
 fn stacking_needs_a_current_alignment_and_cancelling_changes_nothing() {
     let dir = TempDir::new("stack-stale");

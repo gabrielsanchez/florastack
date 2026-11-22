@@ -4,9 +4,13 @@
 //! does (`florastack_stack::Estimator`), and the session keeps what it found (`SharedFocus`, which `stack.preview`
 //! with the depth map and the depth maps of `adjust` and `retouch.mapFocus` share); every later call with the same
 //! frames, alignment, develop settings and radius only resolves the new threshold, in milliseconds, so that a slider
-//! can follow it live. The picture is the sharpest frame's luminance at each pixel, black where the pixel is
-//! below the threshold and transparent where no frame covers it, as an 8-bit TIFF in the project's `previews/` folder;
-//! each call removes the one before.
+//! can follow it live. The picture is the depth-map composite at a quarter of the frames' size, black where the pixel
+//! is below the threshold and transparent where no frame covers it, as an 8-bit sRGB TIFF in the project's `previews/`
+//! folder; each call removes the one before. The composite's colors are made once for the focus measured, by a second
+//! pass over the frames' quarter-size copies at the threshold of the first call (or taken from a depth-map
+//! `stack.preview` of the same frames), and kept with it: a later threshold changes mostly where the depth is filled,
+//! which the picture shows black, so that its colors stay close to the result's without a pass over the frames for
+//! every move of a slider.
 
 use florastack_core::{AnyImage, ColorSpace, Image, Monitor, Sample};
 use florastack_project::Area;
@@ -30,14 +34,17 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .help(
                 "The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly; \
                  below the contrast threshold, in smooth or blurred areas, it fills the depth from the confident \
-                 pixels around. This shows where that happens, at a quarter of the frames' size: the sharpest frame's \
-                 luminance at each pixel, black below the threshold, transparent where no frame covers it, as an 8-bit \
-                 TIFF in the project's `previews/` folder (each call removes the one before), with the threshold's \
-                 level and the share of the pixels below it. Takes the threshold settings of `stack.depthMap`, the \
-                 project's (`stack.get`) when left out. The first call reads every frame, as the depth-map method's \
-                 first pass does; later calls with the same frames, alignment, develop settings and radius reuse what \
-                 it measured and take milliseconds, so call it on every move of a threshold slider. Runs beside other \
-                 jobs as a preview; a newer call replaces an older one still running.",
+                 pixels around. This shows where that happens, at a quarter of the frames' size: the depth-map \
+                 composite, black below the threshold, transparent where no frame covers it, as an 8-bit sRGB TIFF \
+                 in the project's `previews/` folder (each call removes the one before), with the threshold's level \
+                 and the share of the pixels below it. Takes the threshold settings of `stack.depthMap`, the \
+                 project's (`stack.get`) when left out. The first call reads every frame twice, as the depth-map \
+                 method does, to measure their focus and to composite; later calls with the same frames, alignment, \
+                 develop settings and radius reuse both and take milliseconds, so call it on every move of a \
+                 threshold slider. The colors stay those of the first call's threshold (or of a depth-map \
+                 `stack.preview` of the same frames), which differ from a later threshold's result mostly where the \
+                 picture is black. Runs beside other jobs as a preview; a newer call replaces an older one still \
+                 running.",
             )
             .requires(Requires::Project)
             .supersede()
@@ -86,7 +93,7 @@ impl Params for ThresholdParams {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct Shown {
-    /// The picture: an 8-bit TIFF, gray with an alpha channel.
+    /// The picture: an 8-bit sRGB TIFF, RGB with an alpha channel.
     path: String,
     /// Its size, in pixels: a quarter of the full stack's on each side.
     width: usize,
@@ -109,8 +116,11 @@ fn threshold(session: &Session, p: ThresholdParams) -> Result<JobPlan<Shown>, Co
         let (stats, measured) = plan.reduced_focus(&depth, ctx, &mut units)?;
         ctx.stage(1);
         ctx.checkpoint()?;
+        let colors = plan.reduced_colors(&depth, std::sync::Arc::clone(&stats), ctx, &mut units)?;
+        ctx.stage(2);
+        ctx.checkpoint()?;
         let level = stats.level(reduced.contrast_threshold());
-        let (picture, below) = picture(&stats, level)?;
+        let (picture, below) = picture(&stats, Some(&colors), level)?;
         let reference = write_image_in(&plan.cache, Area::Previews, "stack-threshold", &AnyImage::U8(picture), None)?;
         let path = reference.path.resolve(plan.cache.path());
         let shown =
@@ -125,30 +135,39 @@ fn threshold(session: &Session, p: ThresholdParams) -> Result<JobPlan<Shown>, Co
             Ok(shown)
         }))
     });
-    Ok(job.stages(&[("Measuring focus", 0.95), ("Showing the threshold", 0.05)]))
+    Ok(job.stages(&[("Measuring focus", 0.5), ("Compositing", 0.45), ("Showing the threshold", 0.05)]))
 }
 
-/// The picture of `level` over `stats`: the guide (the sharpest frame's linear luminance) in sRGB, black where the
-/// confidence is below `level`, transparent where no frame covers; and the share of the covered pixels below.
-fn picture(stats: &FocusStats, level: f32) -> Result<(Image<u8>, f64), StackError> {
+/// The picture of `level` over `stats`: `colors` (the depth-map composite, sRGB 8-bit RGB), or without them, or when
+/// they aren't of `stats`' size, the guide (the sharpest frame's linear luminance) in gray; black where the confidence
+/// is below `level`, transparent where no frame covers. And the share of the covered pixels below.
+fn picture(stats: &FocusStats, colors: Option<&Image<u8>>, level: f32) -> Result<(Image<u8>, f64), StackError> {
     let (w, h) = (stats.width(), stats.height());
-    let mut out = Image::new(w, h, 2, ColorSpace::SRGB)?;
+    let colors = colors.filter(|c| (c.width(), c.height(), c.channels()) == (w, h, 3));
+    let mut out = Image::new(w, h, 4, ColorSpace::SRGB)?;
     let (mut covered, mut below) = (0_u64, 0_u64);
     for (y, row) in out.rows_mut().enumerate() {
         let (Some(guide), Some(confidence)) = (stats.guide.row(y), stats.confidence.row(y)) else { continue };
+        let rgb = colors.and_then(|c| c.row(y));
         let coverage = stats.covered.as_ref().and_then(|c| c.row(y));
-        for (x, pixel) in row.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+        for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let covers = coverage.is_none_or(|c| c.get(x).is_some_and(|&k| k > 0.0));
             let (Some(&g), Some(&c)) = (guide.get(x), confidence.get(x)) else { continue };
             if !covers {
-                pixel.copy_from_slice(&[0, 0]);
+                *pixel = [0; 4];
                 continue;
             }
             covered += 1;
             let dark = c.is_nan() || c < level;
             below += u64::from(dark);
-            let v = if dark { 0.0 } else { florastack_core::convert::linear_to_srgb(g.clamp(0.0, 1.0)) };
-            pixel.copy_from_slice(&[u8::from_normalized(v), u8::MAX]);
+            *pixel = match rgb.and_then(|r| r.get(3 * x..3 * x + 3)) {
+                _ if dark => [0, 0, 0, u8::MAX],
+                Some(&[r, g, b]) => [r, g, b, u8::MAX],
+                _ => {
+                    let v = u8::from_normalized(florastack_core::convert::linear_to_srgb(g.clamp(0.0, 1.0)));
+                    [v, v, v, u8::MAX]
+                }
+            };
         }
     }
     #[allow(clippy::cast_precision_loss)] // A share, shown rounded.
@@ -174,14 +193,29 @@ mod tests {
         }
     }
 
+    fn colors(n: usize) -> Image<u8> {
+        let values = (0..n)
+            .flat_map(|i| {
+                let i = u8::try_from(10 * i).unwrap();
+                [i + 1, i + 2, i + 3]
+            })
+            .collect();
+        Image::from_vec(n, 1, 3, ColorSpace::SRGB, values).unwrap()
+    }
+
     #[test]
     fn pixels_below_the_level_are_black_and_uncovered_ones_transparent() {
-        let (image, below) = picture(&stats(&[0.5, 2.0, 0.1, 3.0], Some(&[1.0, 1.0, 1.0, 0.0])), 1.0).unwrap();
-        assert_eq!(image.as_raw(), &[0, 255, 255, 255, 0, 255, 0, 0]);
+        let covered = stats(&[0.5, 2.0, 0.1, 3.0], Some(&[1.0, 1.0, 1.0, 0.0]));
+        let (image, below) = picture(&covered, Some(&colors(4)), 1.0).unwrap();
+        assert_eq!(image.as_raw(), &[0, 0, 0, 255, 11, 12, 13, 255, 0, 0, 0, 255, 0, 0, 0, 0], "the composite's colors above the level");
         assert!((below - 2.0 / 3.0).abs() < 1e-9, "two of the three covered pixels are below: {below}");
-        let (_, none) = picture(&stats(&[0.5, 2.0], None), 0.0).unwrap();
+        let (image, _) = picture(&covered, None, 1.0).unwrap();
+        assert_eq!(&image.as_raw()[4..8], &[255, 255, 255, 255], "without colors, the guide in gray");
+        let (image, _) = picture(&covered, Some(&colors(3)), 1.0).unwrap();
+        assert_eq!(&image.as_raw()[4..8], &[255, 255, 255, 255], "colors of another size are left out");
+        let (_, none) = picture(&stats(&[0.5, 2.0], None), Some(&colors(2)), 0.0).unwrap();
         assert_eq!(none, 0.0, "nothing is below a level of 0");
-        let (image, all) = picture(&stats(&[f32::NAN, 0.0], None), 0.5).unwrap();
-        assert_eq!((image.as_raw()[0], all), (0, 1.0), "a confidence that isn't a number counts as below");
+        let (image, all) = picture(&stats(&[f32::NAN, 0.0], None), Some(&colors(2)), 0.5).unwrap();
+        assert_eq!((&image.as_raw()[..4], all), (&[0, 0, 0, 255][..], 1.0), "a confidence that isn't a number counts as below");
     }
 }
