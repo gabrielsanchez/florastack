@@ -91,6 +91,8 @@ pub(crate) struct RetouchSession {
     pub changes: RetouchChanges,
     /// Whether the canvas holds strokes the cached result doesn't.
     pub unsaved: bool,
+    /// The visible strokes whose source is gone from the project, by layer ([`left_out`]).
+    pub left_out: Vec<LeftOut>,
 }
 
 impl RetouchSession {
@@ -109,6 +111,53 @@ impl RetouchSession {
     pub fn touched(&mut self, rect: Option<Rect>) {
         self.changes.region = union(self.changes.region, rect);
     }
+}
+
+/// Strokes of a layer that paint from a source the project no longer has: they are left out when the strokes are
+/// painted again (when the output opens without its cached result, after an undo, on export), though the result shown
+/// may still hold them, painted while the source was there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeftOut {
+    pub layer: florastack_project::LayerId,
+    pub layer_name: String,
+    /// How many of the layer's strokes paint from `source`.
+    pub strokes: usize,
+    pub source: Source,
+    pub why: Gone,
+}
+
+/// Why a stroke's source is gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gone {
+    /// The frame was removed from the project.
+    FrameRemoved,
+    /// The frame is in the project, but the alignment has none of it (it was added or rejected since).
+    FrameNotAligned,
+    /// The output was removed.
+    OutputRemoved,
+}
+
+/// The visible strokes of `output` whose source is gone from `project`, by layer and source, bottom layer first.
+pub(crate) fn left_out(project: &Project, output: &Output) -> Vec<LeftOut> {
+    let aligned = stored_alignment(project).ok().flatten().map(|a| a.frames.iter().map(|f| f.frame).collect::<Vec<_>>());
+    let gone = |source: Source| match source {
+        Source::Frame(id) if project.frame(id).is_none() => Some(Gone::FrameRemoved),
+        Source::Frame(id) if aligned.as_ref().is_none_or(|a| !a.contains(&id)) => Some(Gone::FrameNotAligned),
+        Source::Output(id) if project.output(id).is_none() => Some(Gone::OutputRemoved),
+        _ => None,
+    };
+    let mut found: Vec<LeftOut> = Vec::new();
+    for layer in output.retouch.iter().filter(|l| l.visible) {
+        for value in &layer.strokes {
+            let Some(source) = value.get("source").cloned().and_then(|v| serde_json::from_value::<Source>(v).ok()) else { continue };
+            let Some(why) = gone(source) else { continue };
+            match found.iter_mut().find(|l| l.layer == layer.id() && l.source == source) {
+                Some(entry) => entry.strokes += 1,
+                None => found.push(LeftOut { layer: layer.id(), layer_name: layer.name.clone(), strokes: 1, source, why }),
+            }
+        }
+    }
+    found
 }
 
 /// The rectangle that holds both `a` and `b` (florastack-retouch's), for apps folding changes together.
@@ -149,6 +198,12 @@ impl RetouchView<'_> {
     /// Whether the session can tell each point's sharpest frame (`retouch.sharpest`).
     pub fn has_sharpest(&self) -> bool {
         self.session.sharpest.is_some()
+    }
+
+    /// The visible strokes whose source is gone from the project, by layer and source: they are left out when the
+    /// strokes are painted again.
+    pub fn left_out(&self) -> &[LeftOut] {
+        &self.session.left_out
     }
 
     /// The sharpest frame at output pixel `(x, y)`, when the session can tell.
@@ -485,6 +540,7 @@ impl Session {
             return;
         };
         let strokes = visible_strokes(output);
+        session.left_out = left_out(project, output);
         let common = session.painted.iter().zip(&strokes).take_while(|(a, b)| a == b).count();
         let (w, h) = (session.canvas.width(), session.canvas.height());
         let reach = |s: &Stroke| Stroke::reach(&s.dabs(), 1.0, w, h);

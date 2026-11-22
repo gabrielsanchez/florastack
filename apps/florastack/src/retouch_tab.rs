@@ -154,7 +154,7 @@ pub fn sync(app: &mut FloraStackApp) {
     let whole = florastack_engine::Rect::new(0, 0, w, h);
     let output = view.output().get();
     if changes.opened || ui.output != Some(output) || ui.result.is_none() {
-        ui.factor = w.max(h).div_ceil(max_side.max(1)).max(1);
+        ui.factor = display_factor(w, h, max_side);
         ui.result = view.result(whole, ui.factor).ok().map(|(image, _)| Picture::new(Arc::new(image)));
         ui.source = None;
         ui.output = Some(output);
@@ -168,6 +168,12 @@ pub fn sync(app: &mut FloraStackApp) {
     if changes.source || changes.opened {
         ui.source = view.source_pixels(whole, ui.factor).and_then(Result::ok).map(|(image, _)| Picture::new(Arc::new(image)));
     }
+}
+
+/// How much the views reduce an output of `w` x `h` pixels: not at all up to the viewer's longest side, which is twice
+/// the GPU's largest texture (the viewer tiles images larger than that texture).
+fn display_factor(w: usize, h: usize, max_side: usize) -> usize {
+    w.max(h).div_ceil(max_side.max(1)).max(1)
 }
 
 /// The right panel's Retouch tab.
@@ -241,6 +247,7 @@ fn layers(app: &mut FloraStackApp, ui: &mut egui::Ui, output: u64) {
             }
         });
     }
+    left_out(app, ui);
     ui.horizontal(|ui| {
         if ui.button(tr("retouch-add-layer")).clicked()
             && let Some(added) = app.shell.run("retouch.addLayer", json!({ "output": output }))
@@ -254,6 +261,25 @@ fn layers(app: &mut FloraStackApp, ui: &mut egui::Ui, output: u64) {
             app.retouch.layer = None;
         }
     });
+}
+
+/// The strokes whose source is gone from the project, which are left out when the strokes are painted again.
+fn left_out(app: &FloraStackApp, ui: &mut egui::Ui) {
+    use florastack_engine::retouch::Gone;
+    let Some(view) = app.shell.engine().retouch() else { return };
+    for gone in view.left_out() {
+        let why = match gone.why {
+            Gone::FrameRemoved => "frame-removed",
+            Gone::FrameNotAligned => "frame-not-aligned",
+            Gone::OutputRemoved => "output-removed",
+        };
+        let source = match gone.source {
+            RetouchSource::Frame(id) => id.get(),
+            RetouchSource::Output(id) => id.get(),
+        };
+        let args = [("strokes", gone.strokes.into()), ("layer", gone.layer_name.clone().into()), ("source", source.into()), ("why", why.into())];
+        ui.colored_label(ui.visuals().warn_fg_color, tr_args("retouch-left-out", &args)).on_hover_text(tr("tip-left-out"));
+    }
 }
 
 /// The source: a frame or another output picked by hand, or the sharpest frame where the pointer is.
@@ -552,5 +578,16 @@ mod tests {
         let mut ui = RetouchUi::default();
         ui.resize_brush(1e9);
         assert_eq!(ui.size, 4000.0);
+    }
+
+    #[test]
+    fn outputs_up_to_twice_the_largest_texture_are_shown_at_full_size() {
+        // A GPU whose largest texture is 8192 pixels a side: the viewer tiles a 12000-pixel output, unreduced.
+        let max_side = crate::viewer::Viewer::new(Some(8192)).max_side();
+        assert_eq!(display_factor(12000, 8000, max_side), 1);
+        assert_eq!(display_factor(16384, 16384, max_side), 1);
+        assert_eq!(display_factor(20000, 9000, max_side), 2);
+        // Without a GPU renderer, the views show a reduced copy.
+        assert_eq!(display_factor(6000, 4000, crate::viewer::Viewer::new(None).max_side()), 3);
     }
 }

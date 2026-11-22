@@ -1,6 +1,7 @@
 //! The Retouch tab, headless (`egui_kittest`): an output opened from the tab, its sharpest frames mapped and one picked
 //! as the source with Ctrl+click, a stroke painted by dragging on the output, undone and redone from the keyboard,
-//! and the brush resized with its keys. Stacking runs on the CPU, the views without a GPU renderer.
+//! the brush resized with its keys, and the stroke named as left out once its source frame is removed. Stacking runs
+//! on the CPU, the views without a GPU renderer.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -78,6 +79,15 @@ fn a_stroke_painted_on_the_output_from_its_sharpest_frame_undoes_and_redoes() {
     harness.key_press(Key::CloseBracket);
     harness.step();
     assert!(harness.state().retouch.size > size);
+
+    // The stroke's source frame removed: the tab says its stroke is left out when painted again.
+    let source = match harness.state().shell.engine().retouch().and_then(|v| v.source()) {
+        Some(florastack_engine::RetouchSource::Frame(id)) => id.get(),
+        other => panic!("the source is a frame: {other:?}"),
+    };
+    harness.state_mut().shell.run("project.removeFrames", florastack_engine::json!({ "frames": [source] }));
+    until(&mut harness, "the frame removed", |app| app.shell.frames.len() == 3);
+    harness.get_by_label_contains("left out when the strokes are painted again");
     assert!(harness.state().shell.notices.iter().all(|n| !n.error), "{:?}", harness.state().shell.notices);
     drop(harness);
     let _ = std::fs::remove_dir_all(dir);

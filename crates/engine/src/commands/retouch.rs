@@ -211,6 +211,8 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
         let opened = Opened { output: id, width: size.0, height: size.1, rendered, strokes: strokes.len(), skipped, sharpest: sharpest.is_some() };
         Ok(commit(move |session: &mut Session| {
             session.flush_retouch()?;
+            let project = session.project()?;
+            let left_out = project.output(id).map(|o| crate::retouch::left_out(project, o)).unwrap_or_default();
             for (frame, reference) in aligned {
                 session.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) })?;
             }
@@ -225,6 +227,7 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
                 sharpest,
                 changes: RetouchChanges { opened: true, ..RetouchChanges::default() },
                 unsaved: false,
+                left_out,
             });
             Ok(opened)
         }))

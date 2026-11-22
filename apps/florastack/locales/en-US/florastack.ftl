@@ -366,6 +366,18 @@ retouch-layer = { $name } ({ $strokes ->
     [one] one stroke
    *[other] { $strokes } strokes
 })
+retouch-left-out = { $strokes ->
+    [one] One stroke of { $layer } paints
+   *[other] { $strokes } strokes of { $layer } paint
+} from { $why ->
+    [frame-removed] frame { $source }, which was removed from the project
+    [frame-not-aligned] frame { $source }, which the alignment no longer has
+   *[output-removed] output { $source }, which was removed
+}: { $strokes ->
+    [one] it is
+   *[other] they are
+} left out when the strokes are painted again.
+tip-left-out = The result shown may still hold these strokes, painted while their source was there. Undo, hiding a layer and exporting paint the strokes again, without them; adding the frame back and aligning again brings them back.
 tip-layer-visible = Show or hide this layer's strokes.
 tip-layer-active = Strokes go into this layer.
 retouch-add-layer = Add layer

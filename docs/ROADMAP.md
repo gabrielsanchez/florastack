@@ -423,11 +423,12 @@ Each frame's color and tone matched to the master's, and the geometry beyond a s
 - [ ] Follow-up: with Follow the sharpest frame, show the frame's small aligned preview at once while the full frame loads
 - [ ] Follow-up: memory: a retouch session holds the output, the result and up to three sources as full 32-bit images (about 1.3 GB at 24 MP, with the app's display copies); tile them
 - [ ] Follow-up: disk: each frame used as a source is cached warped at 32 bits (about 300 MB at 24 MP); evict them with 5.4's cache size
-- [ ] Follow-up: a stroke whose source frame was removed from the project is left out when the strokes are painted again (with a warning in the log); say so in the Retouch tab
+- [x] Follow-up: a stroke whose source frame was removed from the project is left out when the strokes are painted again (with a warning in the log); say so in the Retouch tab: the retouch session names the visible strokes whose source is gone, by layer and source, and why (a frame removed or no longer aligned, an output removed: `RetouchView::left_out`), updated when frames, the alignment, outputs or layers change, and the Layers section shows a warning for each (`tests/retouch.rs`, `tests/retouch_tab.rs`)
 - [ ] Follow-up: undo and redo paint the uncovered region again on the engine's thread, loading the sources it needs there; with many sources out of memory that pauses the window, so move it to a job
 - [x] Follow-up: the Stack and Export tabs' views show outputs without their strokes (reported again on 2026-11-09, with adjustments): an output with strokes or adjustments is shown rendered by `output.render`, with the same pixels a file is written with, kept as its `result` map keyed by its image, strokes and adjustments, and rendered again when they change. Comparing two outputs still shows them as stacked
 - [ ] Follow-up: comparing two outputs (Compare) shows them as stacked, without their strokes and adjustments
-- [ ] Follow-up: above the GPU's largest texture (8192 pixels a side), the retouch views show the output reduced, and brushes smaller than the reduction's blocks are hard to place
+- [x] Follow-up: above the GPU's largest texture (8192 pixels a side), the retouch views show the output reduced, and brushes smaller than the reduction's blocks are hard to place: since 5.1's tiled images, the views load outputs at the viewer's longest side, twice the largest texture (at most 16384 pixels unless the texture is larger), tiled and updated tile by tile (a unit test of the factor; the viewer's GPU test of a tiled picture updated in part)
+- [ ] Follow-up: outputs above twice the GPU's largest texture (16384 pixels a side on most GPUs) are still shown reduced in the retouch views
 
 ### 5.4 Export, presets and preferences
 

@@ -79,3 +79,9 @@ see.
   the output, so that opening it again needs no recomputation. Frames used as sources are cached too, warped onto the
   output's canvas, so that they are read rather than decoded again.
 - Exporting a retouched output (Export tab, `output.save`) writes it with its visible strokes.
+- A stroke whose source has left the project (a frame removed, or no longer aligned; an output removed) can't be
+  painted again. The result on screen may still show it, but undo, hiding a layer, exporting and reopening without the
+  cached result paint the strokes again without it. The Layers section says which layer's strokes are affected and
+  why; adding the frame back and aligning again brings them back.
+- The views show an output at full size up to twice the GPU's largest texture (16384 pixels on most GPUs), tiling it
+  beyond that texture; a larger output is shown reduced.

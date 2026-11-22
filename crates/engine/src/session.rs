@@ -625,7 +625,9 @@ impl Session {
 
     /// The events since the last call: project, change and history events, then jobs' partial results, then job events.
     pub(crate) fn take_events(&mut self) -> Vec<Event> {
-        if self.retouch.is_some() && self.changed.intersects(Aspects::RETOUCH.union(Aspects::OUTPUTS)) {
+        // Removing frames or aligning again can leave strokes without their source, which the session says.
+        let affecting = Aspects::RETOUCH.union(Aspects::OUTPUTS).union(Aspects::FRAMES).union(Aspects::ALIGN);
+        if self.retouch.is_some() && self.changed.intersects(affecting) {
             self.sync_retouch();
         }
         let mut events = std::mem::take(&mut self.events);

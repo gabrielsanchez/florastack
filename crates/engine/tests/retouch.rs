@@ -144,3 +144,36 @@ fn the_result_opens_again_with_no_recomputation_and_exports_retouched() {
     assert_eq!(opened["rendered"], "painted", "{opened}");
     assert_eq!(result(&engine), painted);
 }
+
+#[test]
+fn strokes_whose_frame_is_removed_are_named_as_left_out() {
+    let dir = TempDir::new("retouch-left-out");
+    let (mut engine, pyramid, depth, frames) = stacked(dir.path());
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let from_frame = format!(r#""source": {{ "frame": {} }},"#, frames[1]);
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[1]));
+    for samples in ["[[30, 30, 1], [60, 40, 1]]", "[[90, 70, 1]]"] {
+        run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &from_frame, samples)));
+    }
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "output": {depth} }}"#));
+    run(
+        &mut engine,
+        "retouch.stroke",
+        &format!(r#"{{ "stroke": {} }}"#, stroke("details", &format!(r#""source": {{ "output": {depth} }},"#), "[[20, 90, 1]]")),
+    );
+    assert!(engine.retouch().unwrap().left_out().is_empty(), "every source is there");
+
+    run(&mut engine, "project.removeFrames", &format!(r#"{{ "frames": [{}] }}"#, frames[1]));
+    let left_out = engine.retouch().unwrap().left_out().to_vec();
+    assert_eq!(left_out.len(), 1, "{left_out:?}");
+    let gone = &left_out[0];
+    assert_eq!((gone.strokes, gone.why), (2, florastack_engine::retouch::Gone::FrameRemoved));
+    assert!(matches!(gone.source, florastack_engine::RetouchSource::Frame(id) if id.get() == frames[1]), "{gone:?}");
+    // Undoing the removal brings the source back.
+    run(&mut engine, "edit.undo", "{}");
+    assert!(engine.retouch().unwrap().left_out().is_empty());
+    // A source output removed is named too.
+    run(&mut engine, "output.remove", &format!(r#"{{ "output": {depth} }}"#));
+    let left_out = engine.retouch().unwrap().left_out().to_vec();
+    assert_eq!(left_out.iter().map(|l| (l.strokes, l.why)).collect::<Vec<_>>(), [(1, florastack_engine::retouch::Gone::OutputRemoved)]);
+}
