@@ -13,19 +13,90 @@
 //! - **Adaptive hardness** (Details): where the source or the base has fine detail (its luminance's Laplacian, large
 //!   for its brightness, anywhere in the pixel's 3 x 3 neighborhood), the edge is hard, so that detail is painted
 //!   whole rather than ghosted; where there is little, the brush keeps its own hardness, so that it blends.
+//!
+//! The images can be a window of the output rather than all of it ([`Window`]), so that an output too large to hold
+//! whole is painted a piece at a time: coordinates stay the output's, and a window must hold what painting its region
+//! reads ([`reads`]), which painting checks.
 
 use florastack_core::{Image, Rect};
 
 use crate::RetouchError;
 use crate::stroke::{Brush, Dab};
 
+/// Where the images painting reads and writes lie in the output: the top left corner of the window of it they hold,
+/// and the output's size. The result, the base, the source and its coverage given together all hold the same window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Window {
+    pub x: usize,
+    pub y: usize,
+    pub output_width: usize,
+    pub output_height: usize,
+}
+
+impl Window {
+    /// The whole of `image`, which is the whole output.
+    pub fn whole<T: florastack_core::Sample>(image: &Image<T>) -> Window {
+        Window { x: 0, y: 0, output_width: image.width(), output_height: image.height() }
+    }
+
+    /// The window at `rect` of an output of `width` x `height` pixels.
+    pub fn at(rect: Rect, width: usize, height: usize) -> Window {
+        Window { x: rect.x, y: rect.y, output_width: width, output_height: height }
+    }
+
+    /// The rectangle of the output that an image of this window holds.
+    pub fn rect<T: florastack_core::Sample>(&self, image: &Image<T>) -> Rect {
+        Rect::new(self.x, self.y, image.width(), image.height())
+    }
+
+    /// Whether an image of this window holds `rect` of the output, and lies within the output.
+    pub(crate) fn holds<T: florastack_core::Sample>(&self, image: &Image<T>, rect: Rect) -> bool {
+        let r = self.rect(image);
+        r.x + r.width <= self.output_width
+            && r.y + r.height <= self.output_height
+            && rect.x >= r.x
+            && rect.y >= r.y
+            && rect.x + rect.width <= r.x + r.width
+            && rect.y + rect.height <= r.y + r.height
+    }
+}
+
 /// The images a stroke reads, which painting never changes: the output before any retouching, and the stroke's source
-/// with how much of each pixel a frame covers (a frame warped onto the canvas covers it partly at its edges).
+/// with how much of each pixel a frame covers (a frame warped onto the canvas covers it partly at its edges); all of
+/// them the same window of the output.
 #[derive(Clone, Copy)]
 pub struct Fields<'a> {
     pub base: &'a Image<f32>,
     pub source: Option<&'a Image<f32>>,
     pub coverage: Option<&'a Image<f32>>,
+    pub window: Window,
+}
+
+impl<'a> Fields<'a> {
+    /// Fields of the whole output.
+    pub fn whole(base: &'a Image<f32>, source: Option<&'a Image<f32>>, coverage: Option<&'a Image<f32>>) -> Fields<'a> {
+        Fields { base, source, coverage, window: Window::whole(base) }
+    }
+}
+
+/// The region of the output that painting `rect` with `brush` of `size` reads from the fields, in an output of
+/// `width` x `height` pixels: the rectangle itself, and for Details, the pixels around it its adaptive hardness looks
+/// at (2 on each side) and the blocks its matching sums.
+pub fn reads(brush: Brush, size: f64, rect: Rect, width: usize, height: usize) -> Rect {
+    if brush != Brush::Details {
+        return rect;
+    }
+    let grown = |x0: usize, y0: usize, x1: usize, y1: usize| Rect::new(x0, y0, x1.min(width).saturating_sub(x0), y1.min(height).saturating_sub(y0));
+    let near = grown(rect.x.saturating_sub(2), rect.y.saturating_sub(2), rect.x + rect.width + 2, rect.y + rect.height + 2);
+    let b = block_side(size);
+    let reach = usize::try_from(WINDOW_BLOCKS).unwrap_or(2) + 1;
+    let blocks = grown(
+        (rect.x / b).saturating_sub(reach) * b,
+        (rect.y / b).saturating_sub(reach) * b,
+        ((rect.x + rect.width) / b + reach + 1) * b,
+        ((rect.y + rect.height) / b + reach + 1) * b,
+    );
+    crate::stroke::union(Some(near), Some(blocks)).unwrap_or(rect)
 }
 
 /// Luminance weights of the working space's primaries (Rec. 2020, which the RAW develop step gives; close enough for
@@ -94,30 +165,36 @@ pub(crate) struct Prepared {
     pub gains: Vec<[f32; 3]>,
 }
 
-/// Prepares a stroke with `brush`, `size` and `hardness` over `rect` of the fields.
+/// Prepares a stroke with `brush`, `size` and `hardness` over `rect` of the fields, which must hold what it reads
+/// ([`reads`]).
 pub(crate) fn prepare(fields: &Fields<'_>, brush: Brush, size: f64, hardness: f64, rect: Rect) -> Result<Prepared, RetouchError> {
     let n = rect.width * rect.height;
     #[allow(clippy::cast_possible_truncation)] // From 0 to 1.
     let base_hardness = hardness as f32;
+    let w = fields.window;
+    if !w.holds(fields.base, reads(brush, size, rect, w.output_width, w.output_height)) {
+        return Err(RetouchError::Mismatch { what: "a window of the output that doesn't hold what painting there reads".to_owned() });
+    }
     let (Brush::Details, Some(source)) = (brush, fields.source) else {
         return Ok(Prepared { rect, hardness: vec![base_hardness; n], gains: vec![[1.0; 3]; n] });
     };
     let layout = Layout::of(fields.base)?;
-    let detail = detail(fields.base, source, layout, rect);
+    let detail = detail(fields.base, source, layout, w, rect);
     let hardness = detail.iter().map(|&d| base_hardness + (1.0 - base_hardness) * smoothstep(DETAIL_SOFT, DETAIL_HARD, d)).collect();
-    let gains = gains(fields.base, source, layout, size, rect);
+    let gains = gains(fields.base, source, layout, w, size, rect);
     Ok(Prepared { rect, hardness, gains })
 }
 
-/// The relative contrast of `image`'s luminance at `(x, y)` (coordinates clamped to the image): its Laplacian over
-/// its brightness.
+/// The relative contrast of `image`'s luminance at `(x, y)` of the output (coordinates clamped to the output), `image`
+/// being `window` of it: its Laplacian over its brightness.
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation)] // Image sides and block indices, far below isize::MAX; clamped before they index.
-fn contrast(image: &Image<f32>, layout: Layout, x: isize, y: isize) -> f32 {
-    let (w, h) = (image.width() as isize, image.height() as isize);
+fn contrast(image: &Image<f32>, layout: Layout, window: Window, x: isize, y: isize) -> f32 {
+    let (w, h) = (window.output_width as isize, window.output_height as isize);
     let y_at = |x: isize, y: isize| {
-        #[allow(clippy::cast_sign_loss)] // Clamped to the image.
+        #[allow(clippy::cast_sign_loss)] // Clamped to the output.
         let (cx, cy) = (x.clamp(0, w - 1) as usize, y.clamp(0, h - 1) as usize);
-        image.pixel(cx, cy).map_or(0.0, |p| luminance(p, layout.color))
+        let local = cx.checked_sub(window.x).zip(cy.checked_sub(window.y));
+        local.and_then(|(lx, ly)| image.pixel(lx, ly)).map_or(0.0, |p| luminance(p, layout.color))
     };
     let c = y_at(x, y);
     let around = y_at(x - 1, y) + y_at(x + 1, y) + y_at(x, y - 1) + y_at(x, y + 1);
@@ -128,7 +205,7 @@ fn contrast(image: &Image<f32>, layout: Layout, x: isize, y: isize) -> f32 {
 
 /// Each pixel of `rect`'s detail: the largest relative contrast of the base or the source in its 3 x 3 neighborhood.
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation)] // Image sides and block indices, far below isize::MAX; clamped before they index.
-fn detail(base: &Image<f32>, source: &Image<f32>, layout: Layout, rect: Rect) -> Vec<f32> {
+fn detail(base: &Image<f32>, source: &Image<f32>, layout: Layout, window: Window, rect: Rect) -> Vec<f32> {
     // The contrast over the rectangle and a pixel around it, then the 3 x 3 maximum.
     let (cw, ch) = (rect.width + 2, rect.height + 2);
     let mut c = vec![0.0f32; cw * ch];
@@ -136,7 +213,7 @@ fn detail(base: &Image<f32>, source: &Image<f32>, layout: Layout, rect: Rect) ->
         let y = rect.y as isize + j as isize - 1;
         for (i, v) in row.iter_mut().enumerate() {
             let x = rect.x as isize + i as isize - 1;
-            *v = contrast(base, layout, x, y).max(contrast(source, layout, x, y));
+            *v = contrast(base, layout, window, x, y).max(contrast(source, layout, window, x, y));
         }
     }
     let mut out = Vec::with_capacity(rect.width * rect.height);
@@ -166,11 +243,11 @@ fn block_side(size: f64) -> usize {
     (size / 4.0).round().clamp(2.0, 1000.0) as usize
 }
 
-/// Every pixel of `rect`'s matching ratios. See the module documentation.
+/// Every pixel of `rect`'s matching ratios, the images being `window` of the output. See the module documentation.
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation)] // Image sides and block indices, far below isize::MAX; clamped before they index.
-fn gains(base: &Image<f32>, source: &Image<f32>, layout: Layout, size: f64, rect: Rect) -> Vec<[f32; 3]> {
+fn gains(base: &Image<f32>, source: &Image<f32>, layout: Layout, window: Window, size: f64, rect: Rect) -> Vec<[f32; 3]> {
     let b = block_side(size);
-    let (w, h) = (base.width(), base.height());
+    let (w, h) = (window.output_width, window.output_height);
     let (blocks_x, blocks_y) = (w.div_ceil(b) as isize, h.div_ceil(b) as isize);
     // The blocks whose centers interpolate the rectangle's pixels, and the windows around those.
     let reach = WINDOW_BLOCKS + 1;
@@ -188,13 +265,15 @@ fn gains(base: &Image<f32>, source: &Image<f32>, layout: Layout, size: f64, rect
             let (x1, y1) = ((x0 + b).min(w), (y0 + b).min(h));
             let mut s = ([0i64; 3], [0i64; 3]);
             for y in y0..y1 {
-                let (Some(br), Some(sr)) = (base.row(y), source.row(y)) else { continue };
+                let Some(ly) = y.checked_sub(window.y) else { continue };
+                let (Some(br), Some(sr)) = (base.row(ly), source.row(ly)) else { continue };
                 let n = base.channels();
                 let m = source.channels();
                 for x in x0..x1 {
+                    let Some(lx) = x.checked_sub(window.x) else { continue };
                     for c in 0..layout.color {
-                        s.0[c] += br.get(x * n + c).copied().map_or(0, fixed);
-                        s.1[c] += sr.get(x * m + c).copied().map_or(0, fixed);
+                        s.0[c] += br.get(lx * n + c).copied().map_or(0, fixed);
+                        s.1[c] += sr.get(lx * m + c).copied().map_or(0, fixed);
                     }
                 }
             }
@@ -368,10 +447,11 @@ mod tests {
         let bright = image(64, 48, |x, y| [(0.2 + 0.001 * x as f32) * 1.5, 0.3 * 1.5, (0.1 + 0.002 * y as f32) * 1.5]);
         let layout = Layout::of(&base).unwrap();
         let rect = Rect::new(10, 10, 20, 20);
-        for g in gains(&base, &bright, layout, 16.0, rect) {
+        let whole = Window::whole(&base);
+        for g in gains(&base, &bright, layout, whole, 16.0, rect) {
             assert!(g.iter().all(|&g| (g - 1.0 / 1.5).abs() < 1e-3), "{g:?}");
         }
-        assert!(gains(&base, &base, layout, 16.0, rect).iter().all(|g| *g == [1.0; 3]), "exactly 1 for an identical source");
+        assert!(gains(&base, &base, layout, whole, 16.0, rect).iter().all(|g| *g == [1.0; 3]), "exactly 1 for an identical source");
     }
 
     #[test]
@@ -379,16 +459,28 @@ mod tests {
         let base = image(64, 48, |x, y| [((x * 7 + y * 3) % 13) as f32 / 13.0, 0.4, 0.2]);
         let source = image(64, 48, |x, y| [((x * 5 + y * 11) % 17) as f32 / 17.0, 0.3, 0.25]);
         let layout = Layout::of(&base).unwrap();
-        let whole = gains(&base, &source, layout, 10.0, Rect::new(0, 0, 64, 48));
-        let part = gains(&base, &source, layout, 10.0, Rect::new(17, 9, 13, 21));
+        let all = Window::whole(&base);
+        let whole = gains(&base, &source, layout, all, 10.0, Rect::new(0, 0, 64, 48));
+        let part = gains(&base, &source, layout, all, 10.0, Rect::new(17, 9, 13, 21));
         for (j, row) in part.chunks(13).enumerate() {
             for (i, g) in row.iter().enumerate() {
                 assert_eq!(*g, whole[(9 + j) * 64 + 17 + i]);
             }
         }
-        let whole = detail(&base, &source, layout, Rect::new(0, 0, 64, 48));
-        let part = detail(&base, &source, layout, Rect::new(17, 9, 13, 21));
+        // A window holding what the region reads gives the same ratios and detail.
+        let rect = Rect::new(17, 9, 13, 21);
+        let need = reads(Brush::Details, 10.0, rect, 64, 48);
+        let crop = |image: &Image<f32>| {
+            let data = (need.y..need.y + need.height).flat_map(|y| image.row(y).unwrap()[need.x * 3..(need.x + need.width) * 3].to_vec()).collect();
+            Image::from_vec(need.width, need.height, 3, ColorSpace::LINEAR, data).unwrap()
+        };
+        let (wb, ws) = (crop(&base), crop(&source));
+        let window = Window::at(need, 64, 48);
+        assert_eq!(gains(&wb, &ws, layout, window, 10.0, rect), part, "the same ratios in a window");
+        let whole = detail(&base, &source, layout, all, Rect::new(0, 0, 64, 48));
+        let part = detail(&base, &source, layout, all, rect);
         assert_eq!(part[0], whole[9 * 64 + 17]);
+        assert_eq!(detail(&wb, &ws, layout, window, rect), part, "the same detail in a window");
     }
 
     #[test]

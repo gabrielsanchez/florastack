@@ -1,11 +1,12 @@
-//! Strokes painted and replayed: replay is deterministic (twice, tile by tile, live as drawn, over a region), undo and
-//! redo round-trip, a Details stroke from an identical source changes nothing, and each brush does what it is for.
+//! Strokes painted and replayed: replay is deterministic (twice, tile by tile, live as drawn, over a region, and in
+//! windows of the output), undo and redo round-trip, a Details stroke from an identical source changes nothing, and each
+//! brush does what it is for.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use florastack_core::{ColorSpace, Image, Rect};
 use florastack_project::FrameId;
-use florastack_retouch::{Brush, Fields, LiveStroke, Painted, Source, Stroke, apply, render, replay};
+use florastack_retouch::{Brush, Fields, LiveStroke, Painted, Source, Stroke, Window, apply, reads, render, replay, union};
 use proptest::prelude::*;
 
 const W: usize = 96;
@@ -67,6 +68,22 @@ fn painted<'a>(strokes: &'a [Stroke], fields: Fields<'a>) -> Vec<Painted<'a>> {
     strokes.iter().map(|stroke| Painted { stroke, fields }).collect()
 }
 
+/// `rect` of `image`, as a window of it.
+fn crop(image: &Image<f32>, rect: Rect) -> Image<f32> {
+    let n = image.channels();
+    let data = (rect.y..rect.y + rect.height).flat_map(|y| image.row(y).unwrap()[rect.x * n..(rect.x + rect.width) * n].to_vec()).collect();
+    Image::from_vec(rect.width, rect.height, n, ColorSpace::LINEAR, data).unwrap()
+}
+
+/// Writes `rect` of `window`, a window of `image` at `at`, back into `image`.
+fn put(image: &mut Image<f32>, window: &Image<f32>, at: Rect, rect: Rect) {
+    let n = image.channels();
+    for y in rect.y..rect.y + rect.height {
+        let src = &window.row(y - at.y).unwrap()[(rect.x - at.x) * n..(rect.x - at.x + rect.width) * n];
+        image.row_mut(y).unwrap()[rect.x * n..(rect.x + rect.width) * n].copy_from_slice(src);
+    }
+}
+
 fn same_bits(a: &Image<f32>, b: &Image<f32>) -> bool {
     a.as_raw().iter().zip(b.as_raw()).all(|(x, y)| x.to_bits() == y.to_bits())
 }
@@ -74,7 +91,7 @@ fn same_bits(a: &Image<f32>, b: &Image<f32>) -> bool {
 #[test]
 fn replay_is_deterministic() {
     let (base, source) = (output(), frame());
-    let fields = Fields { base: &base, source: Some(&source), coverage: None };
+    let fields = Fields::whole(&base, Some(&source), None);
     let strokes = strokes();
     let first = render(&base, &painted(&strokes, fields)).unwrap();
     let second = render(&base, &painted(&strokes, fields)).unwrap();
@@ -107,14 +124,14 @@ fn replay_is_deterministic() {
 #[test]
 fn undo_and_redo_round_trip() {
     let (base, source) = (output(), frame());
-    let fields = Fields { base: &base, source: Some(&source), coverage: None };
+    let fields = Fields::whole(&base, Some(&source), None);
     let strokes = strokes();
     let all = render(&base, &painted(&strokes, fields)).unwrap();
     let without_last = render(&base, &painted(&strokes[..2], fields)).unwrap();
     // Undo: the last stroke's region is replayed with the strokes before it.
     let mut canvas = all.clone();
     let reach = Stroke::reach(&strokes[2].dabs(), 1.0, W, H).unwrap();
-    replay(&mut canvas, &base, &painted(&strokes[..2], fields), reach).unwrap();
+    replay(&mut canvas, &base, &painted(&strokes[..2], fields), reach, Window::whole(&base)).unwrap();
     assert!(same_bits(&canvas, &without_last), "undone");
     // Redo: the stroke painted again.
     apply(&mut canvas, Painted { stroke: &strokes[2], fields }, whole()).unwrap();
@@ -123,14 +140,14 @@ fn undo_and_redo_round_trip() {
     let mut canvas = all.clone();
     let reach = Stroke::reach(&strokes[1].dabs(), 1.0, W, H).unwrap();
     let kept = [strokes[0].clone(), strokes[2].clone()];
-    replay(&mut canvas, &base, &painted(&kept, fields), reach).unwrap();
+    replay(&mut canvas, &base, &painted(&kept, fields), reach, Window::whole(&base)).unwrap();
     assert!(same_bits(&canvas, &render(&base, &painted(&kept, fields)).unwrap()));
 }
 
 #[test]
 fn a_details_stroke_from_an_identical_source_changes_nothing() {
     let base = output();
-    let fields = Fields { base: &base, source: Some(&base), coverage: None };
+    let fields = Fields::whole(&base, Some(&base), None);
     let mut canvas = base.clone();
     let mut s = stroke(Brush::Details, &[[5.0, 5.0, 1.0], [90.0, 65.0, 1.0], [10.0, 60.0, 0.4]]);
     s.size = 60.0;
@@ -143,7 +160,7 @@ fn a_details_stroke_from_an_identical_source_changes_nothing() {
 #[test]
 fn details_matches_a_brighter_source_and_keeps_its_detail() {
     let (base, source) = (output(), frame());
-    let fields = Fields { base: &base, source: Some(&source), coverage: None };
+    let fields = Fields::whole(&base, Some(&source), None);
     let s = stroke(Brush::Details, &[[48.0, 36.0, 1.0]]);
     let mut details = base.clone();
     apply(&mut details, Painted { stroke: &s, fields }, whole()).unwrap();
@@ -171,7 +188,7 @@ fn details_matches_a_brighter_source_and_keeps_its_detail() {
 #[test]
 fn the_eraser_brings_back_the_output_and_darken_never_lightens() {
     let (base, source) = (output(), frame());
-    let fields = Fields { base: &base, source: Some(&source), coverage: None };
+    let fields = Fields::whole(&base, Some(&source), None);
     let painted_over = render(&base, &painted(&strokes(), fields)).unwrap();
     let mut restored = painted_over.clone();
     let mut eraser = stroke(Brush::Eraser, &[[0.0, 36.0, 1.0], [96.0, 36.0, 1.0]]);
@@ -197,7 +214,7 @@ fn the_eraser_brings_back_the_output_and_darken_never_lightens() {
 fn a_frame_paints_only_where_it_covers_and_a_cancelled_stroke_leaves_nothing() {
     let (base, source) = (output(), frame());
     let coverage = Image::from_vec(W, H, 1, ColorSpace::LINEAR, (0..W * H).map(|i| if i % W < 48 { 0.0 } else { 1.0 }).collect()).unwrap();
-    let fields = Fields { base: &base, source: Some(&source), coverage: Some(&coverage) };
+    let fields = Fields::whole(&base, Some(&source), Some(&coverage));
     let mut s = stroke(Brush::Pixels, &[[10.0, 36.0, 1.0], [90.0, 36.0, 1.0]]);
     s.size = 40.0;
     let mut canvas = base.clone();
@@ -208,7 +225,7 @@ fn a_frame_paints_only_where_it_covers_and_a_cancelled_stroke_leaves_nothing() {
     let mut drawing = LiveStroke::new(s).unwrap();
     drawing.extend(&mut live, &fields, &[]).unwrap();
     assert!(!same_bits(&live, &base));
-    drawing.cancel(&mut live);
+    drawing.cancel(&mut live, Window::whole(&base)).unwrap();
     assert!(same_bits(&live, &base));
 }
 
@@ -216,12 +233,12 @@ fn a_frame_paints_only_where_it_covers_and_a_cancelled_stroke_leaves_nothing() {
 fn images_that_dont_fit_are_refused() {
     let base = output();
     let small = Image::from_vec(10, 10, 3, ColorSpace::LINEAR, vec![0.5; 300]).unwrap();
-    let fields = Fields { base: &base, source: Some(&small), coverage: None };
+    let fields = Fields::whole(&base, Some(&small), None);
     let mut canvas = base.clone();
     let s = stroke(Brush::Pixels, &[[5.0, 5.0, 1.0]]);
     assert!(apply(&mut canvas, Painted { stroke: &s, fields }, whole()).is_err());
     let gray = Image::from_vec(W, H, 1, ColorSpace::LINEAR, vec![0.5; W * H]).unwrap();
-    let fields = Fields { base: &base, source: Some(&gray), coverage: None };
+    let fields = Fields::whole(&base, Some(&gray), None);
     assert!(apply(&mut canvas, Painted { stroke: &s, fields }, whole()).is_err(), "gray onto color");
 }
 
@@ -239,7 +256,7 @@ proptest! {
         cut in 1usize..95,
     ) {
         let (base, source) = (output(), frame());
-        let fields = Fields { base: &base, source: Some(&source), coverage: None };
+        let fields = Fields::whole(&base, Some(&source), None);
         let s = Stroke {
             size,
             hardness,
@@ -262,4 +279,85 @@ proptest! {
         }
         prop_assert!(same_bits(&whole_canvas, &live));
     }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 24, ..ProptestConfig::default() })]
+
+    /// Any stroke painted through windows of the output that hold what it reads (whole, live a few samples at a time,
+    /// replayed over part of it, cancelled) gives the same bits as on the whole output; a window too small is refused.
+    #[test]
+    fn any_stroke_paints_the_same_through_windows(
+        brush in prop::sample::select(vec![Brush::Details, Brush::Pixels, Brush::Darken, Brush::Lighten, Brush::Eraser]),
+        size in 1.0f64..60.0,
+        samples in prop::collection::vec((0.0f64..96.0, 0.0f64..72.0, 0.0f64..=1.0), 1..10),
+        cut in 1usize..71,
+    ) {
+        let (base, source) = (output(), frame());
+        let s = Stroke { size, samples: samples.iter().map(|&(x, y, p)| [x, y, p]).collect(), ..stroke(brush, &[[0.0, 0.0, 1.0]]) }.quantized();
+        let fields = Fields::whole(&base, Some(&source), None);
+        let mut expected = base.clone();
+        apply(&mut expected, Painted { stroke: &s, fields }, whole()).unwrap();
+        // Whole, in two bands, each through a window holding what it reads.
+        let mut banded = base.clone();
+        for band in [Rect::new(0, 0, W, cut), Rect::new(0, cut, W, H - cut)] {
+            let at = reads(s.brush, s.size, band, W, H);
+            let (b, src, mut canvas) = (crop(&base, at), crop(&source, at), crop(&banded, at));
+            let fields = Fields { base: &b, source: Some(&src), coverage: None, window: Window::at(at, W, H) };
+            apply(&mut canvas, Painted { stroke: &s, fields }, band).unwrap();
+            put(&mut banded, &canvas, at, band);
+        }
+        prop_assert!(same_bits(&expected, &banded), "in windows");
+        // Live, each piece through the window it asks for, then cancelled through the stroke's extent.
+        let mut live = base.clone();
+        let mut drawing = LiveStroke::new(Stroke { samples: vec![s.samples[0]], ..s.clone() }).unwrap();
+        let mut pieces: Vec<&[[f64; 3]]> = vec![&[]];
+        pieces.extend(s.samples[1..].chunks(2));
+        for piece in pieces {
+            let Some(at) = drawing.window_for(piece, W, H) else {
+                drawing.extend(&mut live, &fields, piece).unwrap();
+                continue;
+            };
+            let (b, src, mut canvas) = (crop(&base, at), crop(&source, at), crop(&live, at));
+            let window = Fields { base: &b, source: Some(&src), coverage: None, window: Window::at(at, W, H) };
+            drawing.extend(&mut canvas, &window, piece).unwrap();
+            put(&mut live, &canvas, at, at);
+        }
+        prop_assert!(same_bits(&expected, &live), "live, in windows");
+        let extent = drawing.extent(W, H).unwrap();
+        let mut canvas = crop(&live, extent);
+        let changed = drawing.cancel(&mut canvas, Window::at(extent, W, H)).unwrap();
+        put(&mut live, &canvas, extent, extent);
+        prop_assert!(same_bits(&base, &live), "cancelled");
+        prop_assert!(changed.is_some());
+        // Replayed over the lower band (an undo uncovering it) through a window.
+        let band = Rect::new(0, cut, W, H - cut);
+        let at = union(Some(band), Some(reads(s.brush, s.size, band, W, H))).unwrap();
+        let mut replayed = expected.clone();
+        let (b, src, mut canvas) = (crop(&base, at), crop(&source, at), crop(&replayed, at));
+        let window = Window::at(at, W, H);
+        let fields = Fields { base: &b, source: Some(&src), coverage: None, window };
+        replay(&mut canvas, &b, &[Painted { stroke: &s, fields }], band, window).unwrap();
+        put(&mut replayed, &canvas, at, band);
+        prop_assert!(same_bits(&expected, &replayed), "replayed in a window");
+    }
+}
+
+#[test]
+fn a_window_that_doesnt_hold_what_painting_reads_is_refused() {
+    let (base, source) = (output(), frame());
+    let mut s = stroke(Brush::Details, &[[48.0, 36.0, 1.0]]);
+    s.size = 20.0;
+    let paint = Rect::new(40, 30, 16, 12);
+    // Just the painted rectangle: Details reads around it.
+    let (b, src, mut canvas) = (crop(&base, paint), crop(&source, paint), crop(&base, paint));
+    let fields = Fields { base: &b, source: Some(&src), coverage: None, window: Window::at(paint, W, H) };
+    assert!(apply(&mut canvas, Painted { stroke: &s, fields }, paint).is_err());
+    // A window reaching beyond the output.
+    let fields = Fields { base: &b, source: Some(&src), coverage: None, window: Window::at(Rect::new(90, 70, 16, 12), W, H) };
+    assert!(apply(&mut canvas, Painted { stroke: &s, fields }, paint).is_err());
+    // Pixels reads only the rectangle itself.
+    let pixels = Stroke { brush: Brush::Pixels, ..s };
+    let fields = Fields { base: &b, source: Some(&src), coverage: None, window: Window::at(paint, W, H) };
+    assert!(apply(&mut canvas, Painted { stroke: &pixels, fields }, paint).is_ok());
 }

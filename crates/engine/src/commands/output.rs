@@ -497,7 +497,7 @@ impl Pixels {
             let open = session.retouch.as_ref().filter(|r| r.output == id && r.live.is_none() && r.painted == strokes);
             let cached = output.maps.get(&crate::retouch::map_name(crate::retouch::RETOUCHED)?).filter(|r| r.key.as_deref() == Some(key.as_str()));
             Some(match (open, cached) {
-                (Some(open), _) => Retouched::Painted(open.canvas.clone()),
+                (Some(open), _) => Retouched::Painted(open.canvas.whole()?),
                 (None, Some(reference)) => Retouched::Cached(reference.clone()),
                 (None, None) => Retouched::Paint { strokes, loader: Box::new(crate::retouch::SourceLoader::new(session, "output.save", id)?) },
             })

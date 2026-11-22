@@ -18,7 +18,7 @@ mod brush;
 mod layer;
 mod stroke;
 
-pub use brush::Fields;
+pub use brush::{Fields, Window, reads};
 pub use layer::{LiveStroke, Painted, apply, render, replay};
 pub use stroke::{Brush, Dab, MAX_DABS, MAX_SAMPLES, MAX_SIZE, MIN_SIZE, STROKE_VERSION, Source, Stroke, intersect, union};
 

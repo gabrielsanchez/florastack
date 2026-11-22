@@ -37,6 +37,9 @@ for the system and your other programs. Raise it on a machine dedicated to stack
 sluggish while a stack runs. On the GPU, the totals live in the card's memory, within a budget of their own, and move to
 the computer's memory beyond it.
 
+Retouching keeps the output, its retouched result and up to three sources the same way, in half the budget (at least
+64 MiB), so that a large output can be retouched on a small machine: painting reads only the tiles around the brush.
+
 ## The cache and temporary files
 
 - **Temporary projects**, made when you drop photos on the window without naming a project, live in the app's data

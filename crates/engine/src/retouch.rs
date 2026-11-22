@@ -11,6 +11,9 @@
 //!   decoded the next time.
 //! - **No recomputation**: the result is cached (the output's `retouched` map, keyed by the output and its strokes)
 //!   when the project is saved and when the session closes, and read back when the output is opened again.
+//! - **Memory**: the output, the result and the sources are kept tile by tile within a share of the memory budget,
+//!   the rest spilled to temporary files (`tiles.rs`); painting reads a window around what it paints, large regions a
+//!   piece at a time, and florastack-retouch paints a window to the same bits as the whole image.
 //! - **The sharpest frame**: a depth-map output's own depth map, or the output's `sharpest` map, made once by
 //!   `retouch.mapFocus` from the frames' focus at a quarter of their size.
 //!
@@ -29,6 +32,9 @@ use crate::project::{read_image, stored_alignment, write_image_in};
 use crate::session::Session;
 use crate::view::{DisplayImage, ViewError, display_region};
 
+mod tiles;
+pub(crate) use tiles::{Shared, Store, Tiled};
+
 /// The output map that caches the retouched result, and the one that maps each point's sharpest frame.
 pub(crate) const RETOUCHED: &str = "retouched";
 pub(crate) const SHARPEST: &str = "sharpest";
@@ -45,6 +51,22 @@ pub(crate) struct SourceImage {
     pub image: Image<f32>,
     pub coverage: Option<Image<f32>>,
 }
+
+/// A source in a session's tiles.
+pub(crate) struct SourceTiles {
+    pub image: Tiled,
+    pub coverage: Option<Tiled>,
+}
+
+impl SourceTiles {
+    pub(crate) fn of(store: &Shared, source: &SourceImage) -> Result<SourceTiles, CommandError> {
+        let coverage = source.coverage.as_ref().map(|c| Tiled::from_image(store, c)).transpose()?;
+        Ok(SourceTiles { image: Tiled::from_image(store, &source.image)?, coverage })
+    }
+}
+
+/// The sources a session holds, the most recently used first.
+pub(crate) type Sources = Vec<(Source, Arc<SourceTiles>)>;
 
 /// Each point's sharpest frame: a map of indices into `frames`, `scale` map pixels to an output pixel.
 pub(crate) struct Sharpest {
@@ -80,12 +102,14 @@ impl Sharpest {
 /// See the module documentation.
 pub(crate) struct RetouchSession {
     pub output: OutputId,
-    pub base: Arc<Image<f32>>,
-    pub canvas: Image<f32>,
+    /// The tiles of the images below.
+    pub store: Shared,
+    pub base: Tiled,
+    pub canvas: Tiled,
     /// The visible strokes painted on the canvas, the bottom layer's first.
     pub painted: Vec<Stroke>,
     /// The sources loaded, the most recently used first.
-    pub sources: Vec<(Source, Arc<SourceImage>)>,
+    pub sources: Sources,
     /// The source strokes paint from now.
     pub current: Option<Source>,
     pub live: Option<LiveStroke>,
@@ -99,12 +123,12 @@ pub(crate) struct RetouchSession {
 }
 
 impl RetouchSession {
-    pub fn source(&self, source: Source) -> Option<Arc<SourceImage>> {
+    pub fn source(&self, source: Source) -> Option<Arc<SourceTiles>> {
         self.sources.iter().find(|(s, _)| *s == source).map(|(_, image)| Arc::clone(image))
     }
 
     /// Keeps `image` as `source`, the most recently used, letting the oldest go beyond [`KEPT_SOURCES`].
-    pub fn keep_source(&mut self, source: Source, image: Arc<SourceImage>) {
+    pub fn keep_source(&mut self, source: Source, image: Arc<SourceTiles>) {
         self.sources.retain(|(s, _)| *s != source);
         self.sources.insert(0, (source, image));
         self.sources.truncate(KEPT_SOURCES);
@@ -114,6 +138,163 @@ impl RetouchSession {
     pub fn touched(&mut self, rect: Option<Rect>) {
         self.changes.region = union(self.changes.region, rect);
     }
+
+    /// The output's size.
+    pub fn size(&self) -> (usize, usize) {
+        (self.canvas.width(), self.canvas.height())
+    }
+
+    fn images(&self) -> Images<'_> {
+        Images { base: &self.base, canvas: &self.canvas, sources: &self.sources }
+    }
+
+    /// Paints `rect` of the result again from the output with `strokes` (those whose source is loaded), piece by
+    /// piece.
+    pub fn replay(&self, strokes: &[Stroke], rect: Rect) -> Result<(), CommandError> {
+        replay_tiled(self.images(), strokes, rect)
+    }
+
+    /// Paints `stroke` over the result within `clip`, piece by piece. Returns the region it may have changed.
+    pub fn apply(&self, stroke: &Stroke, clip: Rect) -> Result<Option<Rect>, CommandError> {
+        let (w, h) = self.size();
+        let Some(reach) = Stroke::reach(&stroke.dabs(), 1.0, w, h).and_then(|r| florastack_retouch::intersect(r, clip)) else { return Ok(None) };
+        for piece in pieces(reach, self.canvas.piece()) {
+            let at = union(Some(piece), Some(florastack_retouch::reads(stroke.brush, stroke.size, piece, w, h))).unwrap_or(piece);
+            let fields = self.images().window(at, stroke.source.as_slice())?;
+            let mut canvas = self.canvas.read(at)?;
+            florastack_retouch::apply(&mut canvas, Painted { stroke, fields: fields.fields(stroke.source) }, piece)?;
+            self.canvas.write(&canvas, at, piece)?;
+        }
+        Ok(Some(reach))
+    }
+
+    /// Adds `samples` to the stroke being drawn and paints its new dabs. Returns the region it may have changed.
+    pub fn extend_live(&mut self, live: &mut LiveStroke, samples: &[[f64; 3]]) -> Result<Option<Rect>, CommandError> {
+        let (w, h) = self.size();
+        // With no new dab reaching the output, nothing is read: a pixel's window does for the checks.
+        let at = live.window_for(samples, w, h).unwrap_or(Rect::new(0, 0, w.min(1), h.min(1)));
+        let source = live.stroke().source;
+        let fields = self.images().window(at, source.as_slice())?;
+        let mut canvas = self.canvas.read(at)?;
+        let changed = live.extend(&mut canvas, &fields.fields(source), samples)?;
+        if let Some(changed) = changed {
+            self.canvas.write(&canvas, at, changed)?;
+        }
+        Ok(changed)
+    }
+
+    /// Puts back the result from before the stroke being drawn. Returns the region it changed.
+    pub fn cancel_live(&mut self, live: LiveStroke) -> Result<Option<Rect>, CommandError> {
+        let (w, h) = self.size();
+        let Some(at) = live.extent(w, h) else { return Ok(None) };
+        let mut canvas = self.canvas.read(at)?;
+        let changed = live.cancel(&mut canvas, florastack_retouch::Window::at(at, w, h))?;
+        self.canvas.write(&canvas, at, at)?;
+        Ok(changed)
+    }
+}
+
+/// A session's images, for painting in pieces.
+#[derive(Clone, Copy)]
+pub(crate) struct Images<'a> {
+    pub base: &'a Tiled,
+    pub canvas: &'a Tiled,
+    pub sources: &'a [(Source, Arc<SourceTiles>)],
+}
+
+/// The fields painting reads in a window of the output: the base's and the sources' pixels there.
+pub(crate) struct WindowFields {
+    window: florastack_retouch::Window,
+    base: Image<f32>,
+    sources: Vec<(Source, Image<f32>, Option<Image<f32>>)>,
+}
+
+impl WindowFields {
+    /// The fields of a stroke from `source`.
+    fn fields(&self, source: Option<Source>) -> Fields<'_> {
+        let found = source.and_then(|s| self.sources.iter().find(|(k, ..)| *k == s));
+        Fields { base: &self.base, source: found.map(|(_, image, _)| image), coverage: found.and_then(|(.., c)| c.as_ref()), window: self.window }
+    }
+}
+
+impl Images<'_> {
+    /// The fields in window `at` for strokes from `sources` (those loaded).
+    fn window(&self, at: Rect, sources: &[Source]) -> Result<WindowFields, CommandError> {
+        let mut read: Vec<(Source, Image<f32>, Option<Image<f32>>)> = Vec::new();
+        for source in sources {
+            if read.iter().any(|(s, ..)| s == source) {
+                continue;
+            }
+            if let Some((_, tiles)) = self.sources.iter().find(|(s, _)| s == source) {
+                let coverage = tiles.coverage.as_ref().map(|c| c.read(at)).transpose()?;
+                read.push((*source, tiles.image.read(at)?, coverage));
+            }
+        }
+        let window = florastack_retouch::Window::at(at, self.base.width(), self.base.height());
+        Ok(WindowFields { window, base: self.base.read(at)?, sources: read })
+    }
+}
+
+/// Paints `rect` of the result again from the output with `strokes`, as [`florastack_retouch::replay`] does, a piece
+/// at a time, each through the window of the images it reads; strokes whose source isn't loaded are left out.
+pub(crate) fn replay_tiled(images: Images<'_>, strokes: &[Stroke], rect: Rect) -> Result<(), CommandError> {
+    let (w, h) = (images.base.width(), images.base.height());
+    let loaded = |s: &Stroke| s.source.is_none_or(|src| images.sources.iter().any(|(k, _)| *k == src));
+    let strokes: Vec<(&Stroke, Rect)> =
+        strokes.iter().filter(|s| loaded(s)).filter_map(|s| Some((s, Stroke::reach(&s.dabs(), 1.0, w, h)?))).collect();
+    let Some(rect) = florastack_retouch::intersect(rect, images.base.rect()) else { return Ok(()) };
+    for piece in pieces(rect, images.canvas.piece()) {
+        let involved: Vec<(&Stroke, Rect)> = strokes.iter().filter_map(|(s, r)| Some((*s, florastack_retouch::intersect(*r, piece)?))).collect();
+        let mut at = piece;
+        for (s, part) in &involved {
+            at = union(Some(at), Some(florastack_retouch::reads(s.brush, s.size, *part, w, h))).unwrap_or(at);
+        }
+        let sources: Vec<Source> = involved.iter().filter_map(|(s, _)| s.source).collect();
+        let fields = images.window(at, &sources)?;
+        // Replaying starts from the output's pixels, so the window of the output does for the result's.
+        let mut canvas = fields.base.clone();
+        let painted: Vec<Painted<'_>> = involved.iter().map(|(stroke, _)| Painted { stroke, fields: fields.fields(stroke.source) }).collect();
+        florastack_retouch::replay(&mut canvas, &fields.base, &painted, piece, fields.window)?;
+        images.canvas.write(&canvas, at, piece)?;
+    }
+    Ok(())
+}
+
+/// `rect` in pieces of at most `side` pixels a side, row by row: large regions are painted and shown a piece at a
+/// time, each reading a window of the images around it.
+fn pieces(rect: Rect, side: usize) -> impl Iterator<Item = Rect> {
+    let side = side.max(1);
+    (rect.y..rect.y + rect.height).step_by(side).flat_map(move |y| {
+        (rect.x..rect.x + rect.width)
+            .step_by(side)
+            .map(move |x| Rect::new(x, y, side.min(rect.x + rect.width - x), side.min(rect.y + rect.height - y)))
+    })
+}
+
+/// `rect` of `image` for display, reduced by `factor`, as [`display_region`] gives it from the whole image: read a
+/// band of rows at a time.
+pub(crate) fn display_tiled(image: &Tiled, rect: Rect, factor: usize) -> Result<(DisplayImage, Rect), ViewError> {
+    let f = factor.max(1);
+    let (w, h) = (image.width(), image.height());
+    let (x0, y0) = (rect.x.min(w) / f, rect.y.min(h) / f);
+    let (x1, y1) = ((rect.x + rect.width).min(w).div_ceil(f), (rect.y + rect.height).min(h).div_ceil(f));
+    if x1 <= x0 || y1 <= y0 {
+        return display_region(&image.read(Rect::new(0, 0, w.min(1), h.min(1))).map_err(|e| ViewError::Retouch(Box::new(e)))?, rect, f);
+    }
+    // Bands whole blocks high, on the blocks' grid, so that each block is averaged as from the whole image.
+    let band = (image.piece() / f).max(1);
+    let mut rgba = Vec::new();
+    let mut alpha = false;
+    let mut width = 0;
+    for by in (y0..y1).step_by(band) {
+        let rows = band.min(y1 - by);
+        let pixels = Rect::new(x0 * f, by * f, (x1 * f).min(w) - x0 * f, ((by + rows) * f).min(h) - by * f);
+        let part = image.read(pixels).map_err(|e| ViewError::Retouch(Box::new(e)))?;
+        let (shown, _) = display_region(&part, Rect::new(0, 0, part.width(), part.height()), f)?;
+        (width, alpha) = (shown.width, shown.alpha);
+        rgba.extend_from_slice(&shown.rgba);
+    }
+    Ok((DisplayImage { width, height: y1 - y0, rgba, alpha }, Rect::new(x0, y0, x1 - x0, y1 - y0)))
 }
 
 /// Strokes of a layer that paint from a source the project no longer has: they are left out when the strokes are
@@ -190,7 +371,7 @@ impl RetouchView<'_> {
 
     /// The output's size, in pixels.
     pub fn size(&self) -> (usize, usize) {
-        (self.session.canvas.width(), self.session.canvas.height())
+        self.session.size()
     }
 
     /// The source strokes paint from now.
@@ -216,13 +397,13 @@ impl RetouchView<'_> {
 
     /// `rect` of the result for display, reduced by `factor` ([`display_region`]).
     pub fn result(&self, rect: Rect, factor: usize) -> Result<(DisplayImage, Rect), ViewError> {
-        display_region(&self.session.canvas, rect, factor)
+        display_tiled(&self.session.canvas, rect, factor)
     }
 
     /// `rect` of the source for display, reduced by `factor`; `None` without a source.
     pub fn source_pixels(&self, rect: Rect, factor: usize) -> Option<Result<(DisplayImage, Rect), ViewError>> {
         let source = self.session.source(self.session.current?)?;
-        Some(display_region(&source.image, rect, factor))
+        Some(display_tiled(&source.image, rect, factor))
     }
 }
 
@@ -495,9 +676,35 @@ pub(crate) fn painted<'a>(strokes: &'a [Stroke], base: &'a Image<f32>, sources: 
         .iter()
         .map(|stroke| {
             let source = stroke.source.and_then(|s| sources.iter().find(|(k, _)| *k == s)).map(|(_, image)| &**image);
-            Painted { stroke, fields: Fields { base, source: source.map(|s| &s.image), coverage: source.and_then(|s| s.coverage.as_ref()) } }
+            Painted { stroke, fields: Fields::whole(base, source.map(|s| &s.image), source.and_then(|s| s.coverage.as_ref())) }
         })
         .collect()
+}
+
+/// The sources `strokes` paint from that aren't in `sources` yet, loaded with `loader` into `store`'s tiles (strokes
+/// whose source can't be loaded are skipped when painted, with a warning). Returns the frames' new cache files, for
+/// the project.
+pub(crate) fn load_tiled(
+    strokes: &[Stroke],
+    sources: &mut Sources,
+    loader: &mut SourceLoader,
+    size: (usize, usize),
+    store: &Shared,
+) -> Result<Vec<(FrameId, CacheRef)>, CommandError> {
+    let mut cached = Vec::new();
+    for source in strokes.iter().filter_map(|s| s.source) {
+        if sources.iter().any(|(s, _)| *s == source) {
+            continue;
+        }
+        match loader.load(source, size) {
+            Ok((image, new)) => {
+                sources.push((source, Arc::new(SourceTiles::of(store, &image)?)));
+                cached.extend(new);
+            }
+            Err(e) => tracing::warn!("strokes from {source:?} can't be painted: {e}"),
+        }
+    }
+    Ok(cached)
 }
 
 /// The sources `strokes` paint from that aren't in `sources` yet, loaded with `loader` (strokes whose source can't be
@@ -525,7 +732,7 @@ pub(crate) fn load_sources(
 }
 
 /// The strokes whose source is among `sources` (the eraser's always): what can be painted.
-pub(crate) fn paintable(strokes: &[Stroke], sources: &[(Source, Arc<SourceImage>)]) -> Vec<Stroke> {
+pub(crate) fn paintable<T>(strokes: &[Stroke], sources: &[(Source, T)]) -> Vec<Stroke> {
     strokes.iter().filter(|s| s.source.is_none_or(|src| sources.iter().any(|(k, _)| *k == src))).cloned().collect()
 }
 
@@ -545,20 +752,21 @@ impl Session {
         let strokes = visible_strokes(output);
         session.left_out = left_out(project, output);
         let common = session.painted.iter().zip(&strokes).take_while(|(a, b)| a == b).count();
-        let (w, h) = (session.canvas.width(), session.canvas.height());
+        let (w, h) = session.size();
         let reach = |s: &Stroke| Stroke::reach(&s.dabs(), 1.0, w, h);
         let region = session.painted[common..].iter().chain(&strokes[common..]).fold(None, |r, s| union(r, reach(s)));
         if let Some(region) = region {
             let mut cached = Vec::new();
             if strokes.iter().any(|s| s.source.is_some_and(|src| session.source(src).is_none())) {
-                match SourceLoader::new(self, "retouch", session.output) {
-                    Ok(mut loader) => cached = load_sources(&strokes, &mut session.sources, &mut loader, (w, h)),
+                let store = Arc::clone(&session.store);
+                match SourceLoader::new(self, "retouch", session.output)
+                    .and_then(|mut loader| load_tiled(&strokes, &mut session.sources, &mut loader, (w, h), &store))
+                {
+                    Ok(new) => cached = new,
                     Err(e) => tracing::warn!("the strokes' sources can't be loaded: {e}"),
                 }
             }
-            let usable = paintable(&strokes, &session.sources);
-            let base = Arc::clone(&session.base);
-            if let Err(e) = florastack_retouch::replay(&mut session.canvas, &base, &painted(&usable, &base, &session.sources), region) {
+            if let Err(e) = session.replay(&strokes, region) {
                 tracing::warn!("the strokes can't be painted again: {e}");
             }
             session.touched(Some(region));
@@ -660,11 +868,12 @@ impl Session {
         let edit = if session.painted.is_empty() {
             Edit::SetOutputMap { output, name: map_name(RETOUCHED)?, map: None }
         } else {
-            let reference = write_image_in(
+            // Written a band at a time from the tiles.
+            let reference = crate::project::write_float_rows(
                 &self.cache_dir()?,
-                Area::Cache,
                 &format!("retouched-{}", output.get()),
-                &AnyImage::F32(session.canvas.clone()),
+                &mut TiledRows(&session.canvas),
+                false,
                 Some(key),
             )?;
             Edit::SetOutputMap { output, name: map_name(RETOUCHED)?, map: Some(reference) }
@@ -674,6 +883,26 @@ impl Session {
             session.unsaved = false;
         }
         Ok(())
+    }
+}
+
+/// A tiled image as rows for an encoder.
+pub(crate) struct TiledRows<'a>(pub &'a Tiled);
+
+impl florastack_codecs::RowSource for TiledRows<'_> {
+    fn width(&self) -> usize {
+        self.0.width()
+    }
+
+    fn height(&self) -> usize {
+        self.0.height()
+    }
+
+    fn rows(&mut self, y: usize, rows: usize) -> Result<AnyImage, florastack_codecs::CodecError> {
+        self.0.read(Rect::new(0, y, self.0.width(), rows)).map(AnyImage::F32).map_err(|e| florastack_codecs::CodecError::Read {
+            path: std::path::PathBuf::from("the retouch session's tiles"),
+            source: std::io::Error::other(e.to_string()),
+        })
     }
 }
 

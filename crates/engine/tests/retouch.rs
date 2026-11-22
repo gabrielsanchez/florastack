@@ -243,3 +243,81 @@ fn warped_frames_beyond_the_limit_go_least_recently_used_first_and_come_back_the
     set(&mut engine, frames[1]);
     assert_eq!(run(&mut engine, "cache.info", "{}")["retouchSources"]["frames"], 1);
 }
+
+/// A saved project in `dir` with an aligned stack, stacked by pyramid and by depth map: its folder, the two outputs and
+/// the frames.
+fn saved_stack(dir: &Path) -> (std::path::PathBuf, u64, u64, Vec<u64>) {
+    let (mut engine, pyramid, depth, frames) = stacked(dir);
+    run(&mut engine, "project.save", "{}");
+    let folder = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.close", "{}");
+    (folder, pyramid, depth, frames)
+}
+
+/// What retouching the project in `folder` gives with `tiling`: the result as shown after each step, reduced by 3 at
+/// the end, and the cached result's 32-bit samples.
+fn retouched_with(
+    dir: &Path,
+    folder: &Path,
+    (pyramid, depth, frames): (u64, u64, &[u64]),
+    tiling: florastack_engine::Tiling,
+) -> (Vec<Vec<u16>>, Vec<u32>) {
+    let mut engine = Engine::new(florastack_engine::EngineConfig { tiling, ..config(dir) });
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(folder)));
+    let mut shown = Vec::new();
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let from_frame = format!(r#""source": {{ "frame": {} }},"#, frames[1]);
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[1]));
+    let big = r#"{ "brush": "details", SOURCE "size": 70, "hardness": 0.2, "opacity": 0.9, "samples": [[5, 10, 1], [150, 60, 0.7], [20, 110, 1]] }"#;
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, big.replace("SOURCE ", &from_frame)));
+    shown.push(result(&engine));
+    // Drawn live in pieces, then committed.
+    let live = |samples: &str| stroke("lighten", &from_frame, samples);
+    run(&mut engine, "retouch.paint", &format!(r#"{{ "begin": true, "stroke": {} }}"#, live("[[100, 100, 1]]")));
+    run(&mut engine, "retouch.paint", &format!(r#"{{ "stroke": {} }}"#, live("[[60, 20, 0.8], [10, 50, 1]]")));
+    shown.push(result(&engine));
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, live("[[100, 100, 1], [60, 20, 0.8], [10, 50, 1]]")));
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "output": {depth} }}"#));
+    let from_depth = format!(r#""source": {{ "output": {depth} }},"#);
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("details", &from_depth, "[[80, 60, 1], [140, 20, 1]]")));
+    shown.push(result(&engine));
+    // Cancelled part way, undone, hidden and shown.
+    run(&mut engine, "retouch.paint", &format!(r#"{{ "begin": true, "stroke": {} }}"#, stroke("pixels", &from_depth, "[[0, 0, 1], [159, 119, 1]]")));
+    run(&mut engine, "retouch.cancelPaint", "{}");
+    shown.push(result(&engine));
+    run(&mut engine, "edit.undo", "{}");
+    shown.push(result(&engine));
+    let layer = engine.project().unwrap().outputs.iter().find(|o| o.id().get() == pyramid).unwrap().retouch[0].id().get();
+    run(&mut engine, "retouch.setLayerVisible", &format!(r#"{{ "output": {pyramid}, "layer": {layer}, "visible": false }}"#));
+    shown.push(result(&engine));
+    run(&mut engine, "retouch.setLayerVisible", &format!(r#"{{ "output": {pyramid}, "layer": {layer}, "visible": true }}"#));
+    shown.push(result(&engine));
+    shown.push(engine.retouch().unwrap().result(Rect::new(0, 0, 160, 120), 3).unwrap().0.rgba);
+    // The result cached when the session closes, read back.
+    run(&mut engine, "retouch.close", "{}");
+    let output = engine.project().unwrap().outputs.iter().find(|o| o.id().get() == pyramid).unwrap().clone();
+    let cached = output.maps.iter().find(|(name, _)| name.as_str() == "retouched").unwrap().1.path.resolve(engine.project_path().unwrap());
+    let read = florastack_codecs::read_file(&cached, &florastack_codecs::ReadOptions::default()).unwrap().image;
+    let bits = read.into_image::<f32>().unwrap().as_raw().iter().map(|v| v.to_bits()).collect();
+    run(&mut engine, "project.close", r#"{ "discardChanges": true }"#);
+    (shown, bits)
+}
+
+#[test]
+fn retouching_in_small_tiles_spilled_to_disk_gives_the_same_bits() {
+    let dir = TempDir::new("retouch-tiles");
+    let (folder, pyramid, depth, frames) = saved_stack(dir.path());
+    let ids = (pyramid, depth, frames.as_slice());
+    let whole = retouched_with(dir.path(), &folder, ids, florastack_engine::Tiling::default());
+    // Tiles of 24 pixels, pieces of 48, and room for two tiles in memory: everything else goes to disk and back.
+    let spill = dir.path().join("spill");
+    std::fs::create_dir_all(&spill).unwrap();
+    let small = florastack_engine::Tiling { tile_size: 24, budget: 2 * 24 * 24 * 4 * 4, spill_dir: Some(spill) };
+    let tiled = retouched_with(dir.path(), &folder, ids, small);
+    assert_eq!(whole.0.len(), tiled.0.len());
+    for (i, (a, b)) in whole.0.iter().zip(&tiled.0).enumerate() {
+        assert!(a == b, "step {i} differs in small tiles");
+    }
+    assert!(whole.1 == tiled.1, "the cached result differs in small tiles");
+    assert!(whole.0.windows(2).any(|w| w[0] != w[1]), "the steps changed the result");
+}
