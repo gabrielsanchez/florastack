@@ -162,9 +162,9 @@ fn a_settings_question_mark_opens_its_section_of_the_guide_in_the_app() {
     assert_eq!(florastack_app::help::shown(&harness.ctx).as_deref(), Some("method"));
     harness.get_by_label_contains("picks the sharpest detail scale by scale. It is the best all-rounder");
     harness.get_by_label("Open the whole guide online");
-    // A link to another section of the page opens it in the window.
-    // (Through AccessKit: egui_kittest's pointer clicks miss widgets in a scroll area inside a window, as the roadmap
-    // notes for the Preferences dialog.)
+    // A link to another section of the page opens it in the window. (Through AccessKit: this link wraps onto a
+    // second line, so its rectangle also covers the words after it there, which egui hit-tests above it; kittest's
+    // pointer click, at the rectangle's center, lands on them.)
     harness.get_by_label("contrast threshold").click_accesskit();
     harness.step();
     harness.step();

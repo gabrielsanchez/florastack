@@ -10,7 +10,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{app, drop_files, frames, until};
+use common::{app, drop_files, frames, settle, until};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -180,10 +180,10 @@ fn preferences_reach_the_engine_and_say_nothing_is_sent() {
     let Some(Dialog::Preferences(form)) = harness.state().dialog.clone() else { panic!("the Preferences dialog") };
     harness.get_by_label_contains("sends nothing anywhere: no telemetry");
     harness.get_by_label_contains("is suggested");
-    // The GPU's self-test, on demand: what it found is shown, whatever this machine has. (The dialog's settings are in
-    // a scroll area, where kittest's pointer clicks don't land, though a mouse's do: they are clicked through
-    // AccessKit, as a screen reader would.)
-    harness.get_by_label("Test the GPU").click_accesskit();
+    // The GPU's self-test, on demand: what it found is shown, whatever this machine has. Clicked once the dialog is in
+    // place (`settle`).
+    settle(&mut harness, "Test the GPU");
+    harness.get_by_label("Test the GPU").click();
     until(&mut harness, "the GPU's test", |app| app.shell.tested.is_some() && !app.shell.busy());
     let tested = harness.state().shell.tested.clone().unwrap();
     let shown = if tested["device"] == "gpu" { "The GPU passed" } else { "The CPU stacks" };
