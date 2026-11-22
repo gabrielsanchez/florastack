@@ -179,6 +179,8 @@ pub struct FloraStackApp {
     view_loader: Loader,
     /// The second image of a pair compared, and the first one while it waits for it.
     pair_loader: Loader,
+    /// The Retouch tab's stand-in for a frame loading as the source: its small aligned preview.
+    pub(crate) standin_loader: Loader,
     pair: [Option<Arc<florastack_engine::view::DisplayImage>>; 2],
     thumb_loader: Loader,
     /// The display images of the frames around the selection, and the frames still to read ahead into it, one at a
@@ -317,6 +319,7 @@ impl FloraStackApp {
             thumbnail_requests: std::collections::HashSet::new(),
             view_loader: Loader::latest_only("viewer", ctx),
             pair_loader: Loader::latest_only("compare", ctx),
+            standin_loader: Loader::latest_only("stand-in", ctx),
             pair: [None, None],
             thumb_loader: Loader::every("thumbnails", ctx),
             frame_cache: crate::frame_cache::FrameCache::default(),
@@ -811,6 +814,14 @@ impl FloraStackApp {
         self.film_at(at, false);
     }
 
+    /// The canvas of the framing set, as the alignment gives it: the stack preview's and the aligned previews'.
+    pub(crate) fn framing_canvas(&self) -> Option<crate::viewer::Canvas> {
+        let framing = &self.shell.align_settings["framing"];
+        let f = self.shell.alignment["run"]["framings"].as_array()?.iter().find(|f| f["framing"] == *framing)?;
+        let size = |k: &str| f[k].as_u64().and_then(|v| usize::try_from(v).ok());
+        Some(crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: serde_json::from_value(f["toMaster"].clone()).ok()? })
+    }
+
     /// The point at the viewer's middle in the master frame's pixels, when what it shows is placed there.
     fn view_center_in_master(&self) -> Option<[f64; 2]> {
         let (center, shown) = self.viewer.view_center()?;
@@ -818,12 +829,7 @@ impl FloraStackApp {
         let canvas = match &self.selection {
             Selection::Output(id) | Selection::Compare(id, _) => self.shell.outputs.iter().find(|o| o.id == *id)?.canvas?,
             // The preview is the canvas of the framing set, reduced.
-            Selection::Preview => {
-                let framing = &self.shell.align_settings["framing"];
-                let f = run["framings"].as_array()?.iter().find(|f| f["framing"] == *framing)?;
-                let size = |k: &str| f[k].as_u64().and_then(|v| usize::try_from(v).ok());
-                crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: serde_json::from_value(f["toMaster"].clone()).ok()? }
-            }
+            Selection::Preview => self.framing_canvas()?,
             // A frame's pixels go to the master's by the inverse of its alignment.
             Selection::Frame(id) => {
                 let f = run["frames"].as_array()?.iter().find(|f| f["frame"] == *id)?;
@@ -954,6 +960,9 @@ impl FloraStackApp {
             }
         }
         self.show_pair();
+        for done in self.standin_loader.done() {
+            crate::retouch_tab::standin_read(self, done);
+        }
         self.reading_ahead();
         for done in self.thumb_loader.done() {
             if let Ok(image) = done.image {

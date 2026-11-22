@@ -383,6 +383,7 @@ tip-layer-active = Strokes go into this layer.
 retouch-add-layer = Add layer
 retouch-remove-layer = Remove layer
 retouch-source = Source
+retouch-standin = Source: preview while the frame loads
 retouch-source-frame = Frame: { $name }
 retouch-source-output = Output: { $name }
 retouch-source-none = No source yet: pick a frame or an output, or Ctrl+click the output.

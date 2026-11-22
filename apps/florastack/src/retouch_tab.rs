@@ -14,7 +14,7 @@ use florastack_engine::{Brush, RetouchSource, Value, json};
 
 use crate::app::FloraStackApp;
 use crate::i18n::{tr, tr_args};
-use crate::viewer::{Picture, draw, fit_zoom, zoomed_center};
+use crate::viewer::{PairMap, Picture, draw, fit_zoom, zoomed_center};
 
 /// How long the pointer rests on a point before "Follow the sharpest frame" loads its frame.
 const FOLLOW_REST: Duration = Duration::from_millis(300);
@@ -65,6 +65,16 @@ pub struct RetouchUi {
     pub panes: Option<(Rect, Rect)>,
     /// The output the tab opened on its own, once, when it was shown with none open.
     asked: Option<u64>,
+    /// While a frame loads as the source, its small aligned preview in its place.
+    standin: Option<Standin>,
+}
+
+/// A frame's small aligned preview, shown as the source while the frame loads at full size (`retouch.setSource`):
+/// the frame, its preview's file, and once read, the picture and where it shows what the output shows.
+struct Standin {
+    frame: u64,
+    path: std::path::PathBuf,
+    shown: Option<(Picture, PairMap)>,
 }
 
 impl Default for RetouchUi {
@@ -93,11 +103,30 @@ impl Default for RetouchUi {
             resting: None,
             panes: None,
             asked: None,
+            standin: None,
         }
     }
 }
 
 impl RetouchUi {
+    /// The frame whose small aligned preview stands in for it as the source while it loads, once the preview is
+    /// read.
+    pub fn standin(&self) -> Option<u64> {
+        self.standin.as_ref().filter(|s| s.shown.is_some()).map(|s| s.frame)
+    }
+
+    /// Where the stand-in shows what the output's view shows: its zoom and center, in its own pixels; and its size.
+    pub fn standin_view(&self) -> Option<(f32, Vec2, Vec2)> {
+        let (picture, map) = self.standin.as_ref()?.shown.as_ref()?;
+        let (zoom, center) = map.view(self.zoom, self.center);
+        Some((zoom, center, picture.size()))
+    }
+
+    /// The output's view: its zoom and center, in the result's display pixels; and the result's size.
+    pub fn view(&self) -> Option<(f32, Vec2, Vec2)> {
+        Some((self.zoom, self.center, self.result.as_ref()?.size()))
+    }
+
     /// Whether a stroke is being drawn.
     pub fn drawing(&self) -> bool {
         !self.stroke.is_empty()
@@ -166,6 +195,7 @@ pub fn sync(app: &mut FloraStackApp) {
         result.update([at.x, at.y], Arc::new(image));
     }
     if changes.source || changes.opened {
+        ui.standin = None;
         ui.source = view.source_pixels(whole, ui.factor).and_then(Result::ok).map(|(image, _)| Picture::new(Arc::new(image)));
     }
 }
@@ -311,7 +341,7 @@ fn source(app: &mut FloraStackApp, ui: &mut egui::Ui, output: u64) {
         }
     });
     if let Some(params) = pick {
-        app.shell.run("retouch.setSource", params);
+        set_source(app, params);
     }
     if sharpest {
         ui.checkbox(&mut app.retouch.follow, tr("retouch-follow")).on_hover_text(tr("tip-follow"));
@@ -320,6 +350,43 @@ fn source(app: &mut FloraStackApp, ui: &mut egui::Ui, output: u64) {
         ui.weak(tr("retouch-mapping"));
     } else if ui.button(tr("retouch-map")).on_hover_text(tr("tip-map")).clicked() {
         app.shell.run("retouch.mapFocus", json!({}));
+    }
+}
+
+/// Sets the source (`retouch.setSource`); a frame's small aligned preview stands in for it while it loads.
+pub fn set_source(app: &mut FloraStackApp, params: Value) {
+    let frame = params["frame"].as_u64();
+    app.shell.run("retouch.setSource", params);
+    // A source kept in memory is set at once; one that failed to start says so.
+    if !app.shell.running(&["retouch.setSource"]) {
+        app.retouch.standin = None;
+        return;
+    }
+    let preview = frame.and_then(|id| app.shell.frames.iter().find(|f| f.id == id)?.aligned_preview.clone());
+    app.retouch.standin = match (frame, preview) {
+        (Some(frame), Some(path)) => {
+            app.standin_loader.request(crate::loader::Request::file(path.clone(), None));
+            Some(Standin { frame, path, shown: None })
+        }
+        _ => None,
+    };
+}
+
+/// Shows a stand-in that was read, placed on the output's canvas: the aligned previews are on the canvas of the
+/// framing set, which may not be the output's.
+pub fn standin_read(app: &mut FloraStackApp, done: crate::loader::Done) {
+    let Ok(image) = done.image else { return };
+    let map = (|| {
+        app.retouch.standin.as_ref().filter(|s| s.path == done.request.path)?;
+        let output = app.shell.outputs.iter().find(|o| Some(o.id) == app.retouch.output)?.canvas?;
+        let preview = app.framing_canvas()?;
+        let result = app.retouch.result.as_ref()?.size();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a picture's size in pixels")]
+        let shown = [result.x as usize, result.y as usize];
+        PairMap::between(&output, shown, &preview, [image.width, image.height])
+    })();
+    if let (Some(map), Some(standin)) = (map, &mut app.retouch.standin) {
+        standin.shown = Some((Picture::new(image), map));
     }
 }
 
@@ -440,9 +507,18 @@ fn draw_panes(app: &mut FloraStackApp, ui: &egui::Ui, pointer: &Pointer) {
     let ctx = ui.ctx().clone();
     let gpu = app.viewer.gpu();
     let output_name = app.retouch.output.and_then(|id| app.shell.outputs.iter().find(|o| o.id == id)).map(|o| o.name.clone()).unwrap_or_default();
+    let loading = app.shell.running(&["retouch.setSource"]);
     let r = &mut app.retouch;
+    // A stand-in goes when its frame failed to load or was cancelled.
+    if !loading {
+        r.standin = None;
+    }
+    let standing_in = r.standin().is_some();
     let (zoom, center, boost) = (r.zoom, r.center, r.boost);
-    if let Some(source) = &mut r.source {
+    if let Some((picture, map)) = r.standin.as_mut().and_then(|s| s.shown.as_mut()) {
+        let (zoom, center) = map.view(zoom, center);
+        draw(ui, &ctx, gpu, 0, picture, (left, left), zoom, center, boost);
+    } else if let Some(source) = &mut r.source {
         draw(ui, &ctx, gpu, 0, source, (left, left), zoom, center, boost);
     } else {
         let weak = ui.visuals().weak_text_color();
@@ -469,7 +545,7 @@ fn draw_panes(app: &mut FloraStackApp, ui: &egui::Ui, pointer: &Pointer) {
         names.rect_filled(back, 3.0, egui::Color32::from_black_alpha(150));
         names.galley(back.min + Vec2::splat(4.0), galley, egui::Color32::WHITE);
     };
-    label(left, tr("retouch-source"));
+    label(left, if standing_in { tr("retouch-standin") } else { tr("retouch-source") });
     label(right, output_name);
 }
 
@@ -513,7 +589,7 @@ fn pick_source(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response
         }
     }
     if let Some(frame) = source_to.filter(|f| current != frame_source(*f)) {
-        app.shell.run("retouch.setSource", json!({ "frame": frame }));
+        set_source(app, json!({ "frame": frame }));
     }
     current
 }

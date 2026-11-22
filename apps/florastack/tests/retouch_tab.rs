@@ -1,7 +1,7 @@
 //! The Retouch tab, headless (`egui_kittest`): an output opened from the tab, its sharpest frames mapped and one picked
 //! as the source with Ctrl+click, a stroke painted by dragging on the output, undone and redone from the keyboard,
-//! the brush resized with its keys, and the stroke named as left out once its source frame is removed. Stacking runs
-//! on the CPU, the views without a GPU renderer.
+//! the brush resized with its keys, another frame's preview standing in for it while it loads, and the stroke named as
+//! left out once its source frame is removed. Stacking runs on the CPU, the views without a GPU renderer.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -11,6 +11,16 @@ use common::{app, drop_files, frames, until};
 use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable;
 use florastack_app::FloraStackApp;
+
+/// Frame `id`, as the engine's type (made only from its JSON outside the engine).
+fn id_of(id: u64) -> florastack_engine::model::FrameId {
+    serde_json::from_value(serde_json::json!(id)).unwrap()
+}
+
+/// The retouch session's source.
+fn source_now(harness: &egui_kittest::Harness<'_, FloraStackApp>) -> Option<florastack_engine::RetouchSource> {
+    harness.state().shell.engine().retouch().and_then(|v| v.source())
+}
 
 /// The output's strokes, in all its layers.
 fn strokes(app: &FloraStackApp) -> usize {
@@ -80,12 +90,38 @@ fn a_stroke_painted_on_the_output_from_its_sharpest_frame_undoes_and_redoes() {
     harness.step();
     assert!(harness.state().retouch.size > size);
 
+    // Another frame picked: its small aligned preview stands in for it, placed where the output's view is, until it
+    // loads. (Read here rather than by the app's loader, which the frame itself could beat.)
+    let Some(florastack_engine::RetouchSource::Frame(painted_from)) = source_now(&harness) else { panic!("the source is a frame") };
+    let other = harness
+        .state()
+        .shell
+        .frames
+        .iter()
+        .map(|f| f.id)
+        .find(|&id| Some(florastack_engine::RetouchSource::Frame(id_of(id))) != source_now(&harness))
+        .unwrap();
+    florastack_app::retouch_tab::set_source(harness.state_mut(), florastack_engine::json!({ "frame": other }));
+    let preview = harness.state().shell.frames.iter().find(|f| f.id == other).unwrap().aligned_preview.clone().unwrap();
+    let image = florastack_engine::view::load(&preview, None).unwrap();
+    let done = florastack_app::loader::Done { request: florastack_app::loader::Request::file(preview, None), image: Ok(std::sync::Arc::new(image)) };
+    florastack_app::retouch_tab::standin_read(harness.state_mut(), done);
+    assert_eq!(harness.state().retouch.standin(), Some(other));
+    let (zoom, center, size) = harness.state().retouch.view().unwrap();
+    let (standin_zoom, standin_center, standin_size) = harness.state().retouch.standin_view().unwrap();
+    // The output was stacked with the framing set, so the preview shows its canvas reduced: the same point, at the
+    // scale between them.
+    let scale = standin_size.x / size.x;
+    assert!((standin_center - center * scale).length() < 0.5, "{standin_center:?} against {center:?} x {scale}");
+    assert!((standin_zoom * scale / zoom - 1.0).abs() < 0.02, "{standin_zoom} against {zoom} / {scale}");
+    until(&mut harness, "the frame loaded", |app| {
+        app.shell.engine().retouch().and_then(|v| v.source()) == Some(florastack_engine::RetouchSource::Frame(id_of(other))) && !app.shell.busy()
+    });
+    harness.step();
+    assert_eq!(harness.state().retouch.standin(), None, "the frame itself replaces its stand-in");
+
     // The stroke's source frame removed: the tab says its stroke is left out when painted again.
-    let source = match harness.state().shell.engine().retouch().and_then(|v| v.source()) {
-        Some(florastack_engine::RetouchSource::Frame(id)) => id.get(),
-        other => panic!("the source is a frame: {other:?}"),
-    };
-    harness.state_mut().shell.run("project.removeFrames", florastack_engine::json!({ "frames": [source] }));
+    harness.state_mut().shell.run("project.removeFrames", florastack_engine::json!({ "frames": [painted_from.get()] }));
     until(&mut harness, "the frame removed", |app| app.shell.frames.len() == 3);
     harness.get_by_label_contains("left out when the strokes are painted again");
     assert!(harness.state().shell.notices.iter().all(|n| !n.error), "{:?}", harness.state().shell.notices);

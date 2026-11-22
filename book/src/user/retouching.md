@@ -48,7 +48,8 @@ same framing can be a source.
   together. The brush's circle shows at the same point in both.
 - **The source.** Pick a frame or another output in the panel. Or Ctrl+click a point of the output, and the source
   becomes the frame where that point is sharpest. With **Follow the sharpest frame** on, resting the pointer on a point
-  does the same.
+  does the same. While a frame loads at full size, its small aligned preview stands in for it in the left view
+  (without its brightness matched), so that you see at once which frame is coming.
 - **Painting.** Drag on the output to paint; the stroke shows as you draw it and becomes one undo step when you let go.
   Pan with the middle or right button, or with Space and the left button; zoom with the wheel. `[` and `]` make the
   brush smaller and larger.
