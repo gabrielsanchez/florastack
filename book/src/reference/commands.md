@@ -21,7 +21,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [defects](#defects) | [`defects.clear`](#defectsclear), [`defects.detect`](#defectsdetect), [`defects.export`](#defectsexport), [`defects.import`](#defectsimport), [`defects.info`](#defectsinfo) |
 | [develop](#develop) | [`develop.get`](#developget), [`develop.reset`](#developreset), [`develop.set`](#developset) |
 | [edit](#edit) | [`edit.history`](#edithistory), [`edit.redo`](#editredo), [`edit.undo`](#editundo) |
-| [export](#export) | [`export.estimate`](#exportestimate), [`export.get`](#exportget), [`export.reproduce`](#exportreproduce), [`export.reset`](#exportreset), [`export.run`](#exportrun), [`export.set`](#exportset) |
+| [export](#export) | [`export.estimate`](#exportestimate), [`export.get`](#exportget), [`export.measure`](#exportmeasure), [`export.reproduce`](#exportreproduce), [`export.reset`](#exportreset), [`export.run`](#exportrun), [`export.set`](#exportset) |
 | [filmstrip](#filmstrip) | [`filmstrip.crop`](#filmstripcrop), [`filmstrip.list`](#filmstriplist), [`filmstrip.update`](#filmstripupdate) |
 | [job](#job) | [`job.cancel`](#jobcancel), [`job.list`](#joblist) |
 | [output](#output) | [`output.list`](#outputlist), [`output.remove`](#outputremove), [`output.rename`](#outputrename), [`output.render`](#outputrender), [`output.save`](#outputsave) |
@@ -1708,7 +1708,7 @@ Example:
 
 **Estimate export size.** About how many bytes exporting an output will write, and in how many files.
 
-From the output's size and the settings (the project's, or the ones given): exact for uncompressed files, an estimate from typical compression otherwise, with the extras the settings ask for.
+From the output's size and the settings (the project's, or the ones given): exact for uncompressed files, an estimate otherwise, with the extras the settings ask for. A compressed main file is estimated from how well the output compressed with these settings when `export.measure` measured it (`measured`), and else from typical compression, which can be off by half for an image that compresses unusually well or badly.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -1720,6 +1720,7 @@ Parameters:
 |---|---|---|
 | `output` | integer | **Required.** The output, as `output.list` lists it. |
 | `settings` | object | Settings on top of the project's, for this estimate only. |
+| `settings.aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
 | `settings.aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
 | `settings.alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
 | `settings.annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |
@@ -1755,6 +1756,7 @@ Result:
 | `approximate` | boolean | Whether `bytes` is a guess (compressed files), rather than known but for the headers, the profile and the metadata (a few KiB). |
 | `bytes` | integer | About how many bytes, every file included. |
 | `files` | integer | How many files. |
+| `measured` | boolean | Whether the main file's size comes from the output's own compression (`export.measure`), rather than typical compression. |
 | `name` | string | The main file's name. |
 
 Examples:
@@ -1784,6 +1786,64 @@ Example:
 
 ```json
 {}
+```
+
+### `export.measure`
+
+**Measure export compression.** Measures how well an output compresses with the export settings.
+
+Writes nine crops of 256 x 256 pixels of the output, spread over it, with the settings (the project's, or the ones given), and keeps how many bytes they took per byte of samples for this output and these settings, for `export.estimate`, until the project closes. Runs beside other jobs; a newer call for the same output replaces one still running.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `output` | integer | **Required.** The output, as `output.list` lists it. |
+| `settings` | object | Settings on top of the project's, for this estimate only. |
+| `settings.aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
+| `settings.aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
+| `settings.alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
+| `settings.annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |
+| `settings.calibrated_depth` | boolean | Write full-precision calibrated depth as float TIFF values in micrometers. Default: `false`. |
+| `settings.calibration_name` | string | Name of the selected objective or magnification, retained with its measured value. Default: `""`. |
+| `settings.confidence_map` | boolean | Write the confidence map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
+| `settings.contribution_maps` | boolean | Write a normalized 16-bit contribution TIFF per input of a depth-map output. Default: `false`. |
+| `settings.depth` | `"u8"` \| `"u16"` \| `"f32"` \| `"f16"` | `u8`, `u16`, `f32` or `f16`, as the format holds: JPEG 8-bit, PNG 8 or 16, TIFF 8, 16, 32-bit float or 16-bit float, DNG 16 or 32-bit float, OpenEXR 32-bit float. Default: `"u16"`. |
+| `settings.depth_map` | boolean | Write the depth map (a depth-map output's) alongside, as a 16-bit TIFF. Default: `false`. |
+| `settings.dng_compression` | `"uncompressed"` \| `"lossless-jpeg"` \| `"deflate"` | DNG's compression: `uncompressed`, `lossless-jpeg` (16-bit files) or `deflate` (32-bit float files). Either of the last two stands for the other at the depth it can't store. Default: `"lossless-jpeg"`. |
+| `settings.dng_look` | `"rendered"` \| `"raw"` | DNG's look: `rendered` or `raw`. Default: `"rendered"`. |
+| `settings.dng_preview` | boolean | A small sRGB picture of the image at the front of a DNG file, for file browsers to show. Default: `true`. |
+| `settings.exr_compression` | `"none"` \| `"rle"` \| `"zips"` \| `"zip"` \| `"piz"` | OpenEXR's compression: `none`, `rle`, `zips`, `zip` or `piz`. Default: `"zip"`. |
+| `settings.exr_half` | boolean | OpenEXR with half floats rather than full ones. Default: `false`. |
+| `settings.extended_range` | boolean | In 32-bit float files, keep values beyond [0, 1] (the result from before tone compression). Default: `false`. |
+| `settings.format` | `"tiff"` \| `"png"` \| `"jpeg"` \| `"dng"` \| `"open-exr"` | `tiff`, `png`, `jpeg`, `dng` or `open-exr`. Default: `"tiff"`. |
+| `settings.jpeg_quality` | integer, from 1 to 100 | JPEG's quality, from 1 to 100. Default: `95`. |
+| `settings.jpeg_subsampling` | `"s422"` \| `"s420"` \| `"s444"` | JPEG's chroma subsampling: `s444`, `s422` or `s420`. Default: `"s444"`. |
+| `settings.metadata` | boolean | Copy a frame's metadata (EXIF, IPTC, XMP) into the file. Default: `true`. |
+| `settings.metadata_frame` | integer, at least 1 | The frame whose metadata is copied: its position among the output's frames in the project's order (the filmstrip's), from 1 (the first); beyond the last, the last. Default: `1`. |
+| `settings.pixels_per_micrometer` | number | Lateral calibration in master-image pixels per micrometer; copied from a profile or measured directly. |
+| `settings.profile` | `"input"` \| `"srgb"` \| object \| `"untagged"` | The color profile: `input` (the frames' own), `srgb`, `{"wide": "pro-photo"}`, `{"wide": "rec2020"}` or `untagged`. Default: `"input"`. |
+| `settings.profile.wide` | `"pro-photo"` \| `"rec2020"` | **Required.** A wide-gamut working space for [`OutputProfile::Wide`]. |
+| `settings.template` | string | The file's name without its extension: {project}, {name}, {method}, {frames}, {first}, {last}, {date} and {id} are filled in. Default: `"{project} {name}"`. |
+| `settings.tiff_compression` | `"none"` \| `"lzw"` \| `"deflate"` | TIFF's compression: `none`, `lzw` or `deflate`. Default: `"deflate"`. |
+| `settings.z_origin_micrometers` | number | Z of the first captured frame, in micrometers. Default: `0.0`. |
+| `settings.z_step_micrometers` | number | Signed capture step in micrometers, in the recorded capture order; unset when unknown. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `ratio` | number | The bytes written per byte of samples (at the settings' depth). |
+
+Examples:
+
+```json
+{"output":3}
+{"output":3,"settings":{"format":"png"}}
 ```
 
 ### `export.reproduce`
@@ -1842,7 +1902,7 @@ Example:
 
 **Export output.** Writes an output into a folder with the output settings, and its extras alongside.
 
-The file is named by the settings' template, with the format's extension; the depth and confidence maps (a depth-map output's) are written beside it as 16-bit TIFF files ending in `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in a folder ending in ` aligned`. Settings given apply to this export only, on top of the project's. Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a failure leaves no partial file. Scientific extras include a float TIFF in micrometers, per-frame contribution maps and alignment CSV; visible annotation layers are rendered only onto the output copy. Every export includes a settings/version/input-hash JSON sidecar, published last; `export.reproduce` replays it. Runs as a job.
+The file is named by the settings' template, with the format's extension; the depth and confidence maps (a depth-map output's) are written beside it as 16-bit TIFF files ending in `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in a folder ending in ` aligned` (in the output's format, depth and profile with `aligned_as_output`). Settings given apply to this export only, on top of the project's. Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a failure leaves no partial file. Scientific extras include a float TIFF in micrometers, per-frame contribution maps and alignment CSV; visible annotation layers are rendered only onto the output copy. Every export includes a settings/version/input-hash JSON sidecar, published last; `export.reproduce` replays it. Runs as a job.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -1856,6 +1916,7 @@ Parameters:
 | `output` | integer | **Required.** The output, as `output.list` lists it. |
 | `overwrite` | boolean | Replace files that exist. Default: `false`. |
 | `settings` | object | Settings on top of the project's, for this export only. |
+| `settings.aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
 | `settings.aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
 | `settings.alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
 | `settings.annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |
@@ -1912,6 +1973,7 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
+| `aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
 | `aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
 | `alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
 | `annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |

@@ -52,6 +52,7 @@ edit.redo project
 edit.undo project
 export.estimate none
 export.get none
+export.measure project
 export.reproduce files
 export.reset project
 export.run files

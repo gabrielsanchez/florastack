@@ -16,13 +16,15 @@ folder. The settings are the project's, saved with it, and a [preset](#presets) 
 | **Color profile** | **Keep the frames' profile** (the default: what they were shot or exported in), **sRGB** (the safest for sharing), or a wide gamut (**ProPhoto RGB** or **Rec. 2020**) that keeps saturated colors for editing |
 | **Copy metadata from frame** | The camera, lens, exposure, date, place and keywords of that frame (counted from 1 in the frame list), in the file |
 | **File name** | The name without its extension; `{project}`, `{name}` (the output's), `{method}`, `{frames}`, `{first}`, `{last}` (the first and last frames' file names), `{date}` and `{id}` are filled in |
-| **Also export** | A depth-map output's **depth map** and **confidence map**, as 16-bit gray TIFFs beside it; the **aligned frames**, each warped onto the output's canvas, as 16-bit TIFFs in a folder of their own, for retouching in other programs |
+| **Also export** | A depth-map output's **depth map** and **confidence map**, as 16-bit gray TIFFs beside it; the **aligned frames**, each warped onto the output's canvas, as 16-bit TIFFs in a folder of their own, for retouching in other programs, or with **In the output's format** in the format, depth, compression and profile set for the output |
 
 A 32-bit float DNG holds white at 1 and needs a raw converter that reads DNG 1.4 or later. TIFF and DNG files are written a part at a time, so exporting takes little memory beyond the output itself; one whose samples could pass 4 GB is written as BigTIFF, which most current software reads but older software may not.
 
 **Retain extended range** (float files only) keeps the values the pyramid pushed beyond black and white, before they
 were brought back into range. The tab shows the size the export will take, and the name of the main file; an export
-that would replace a file stops and says which, unless **Replace files that exist** is on.
+that would replace a file stops and says which, unless **Replace files that exist** is on. A compressed file's size
+depends on the picture: the tab first shows a typical size, then, a moment later, one measured on a few crops of the
+output written with the settings, usually within a fifth of what is written.
 
 Every export also writes a JSON *sidecar* beside the image (`<file>.json`) that records the software version, every
 setting and the inputs' hashes, from which `florastack-cli reproduce` makes the same image again.
@@ -85,11 +87,13 @@ keys, and `develop.get`, `align.get`, `stack.get` and `export.get` show them all
 - **Processing**: the GPU when it passes its test, the CPU only, or any GPU (software ones too, for testing); **Test the
   GPU** runs its self-test again, after a driver update for example.
 - **Cache**: where temporary projects and stacking's work on disk go, how much each takes, after how many days
-  unused a temporary project is offered for the trash, how much disk the frames warped for retouching may take in a
+  unused a temporary project is offered for the trash and how much disk the temporary projects may take before the
+  least recently used are (10 GiB by default, 0 for no limit), how much disk the frames warped for retouching may take in a
   project's cache (4 GiB by default; the least recently used go beyond it), and **Clean up**, which removes what
   crashed stacks left behind.
 - **Autosave**: saves the project a few minutes after the first unsaved change (0 for never).
-- **Appearance**: the theme (dark or light, also Ctrl+Shift+T) and the language.
+- **Appearance**: the theme (dark or light, also Ctrl+Shift+T) and the language, which changes at once (English alone so
+  far: [Translating the app](../dev/translating.md) says how to add one).
 - **Display profile**: how the viewer's colors are made for your monitor. **Automatic** uses the profile your system
   has for the display the window is on (Windows' display settings, macOS's ColorSync, or a color manager such as
   colord on Linux under X11), and looks again when you move the window to another display; **sRGB** ignores it; and

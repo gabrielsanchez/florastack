@@ -40,4 +40,5 @@
 - [The browser build](dev/web.md)
 - [Manual release checks](dev/manual-checks.md)
 - [Fuzzing](dev/fuzzing.md)
+- [Translating the app](dev/translating.md)
 - [Writing the documentation](dev/docs.md)

@@ -276,13 +276,26 @@ fn alongside(app: &mut FloraStackApp, ui: &mut egui::Ui, depth_map: bool) {
         ui.weak(tr("export-maps-none"));
     }
     toggle(app, ui, "aligned_frames", "export-aligned-frames", "tip-export-aligned-frames", true);
+    let aligned = app.shell.export_settings["aligned_frames"] == json!(true);
+    ui.indent("aligned-format", |ui| {
+        toggle(app, ui, "aligned_as_output", "export-aligned-as-output", "tip-export-aligned-as-output", aligned);
+    });
 }
 
 /// The size the export takes and the main file's name, asked of the engine once for each output and change.
 fn estimate(app: &mut FloraStackApp, ui: &mut egui::Ui, id: u64) {
     let key = (id, app.shell.revision);
+    // A measurement that ended makes a better estimate.
+    if std::mem::take(&mut app.shell.measured) {
+        app.export.estimate = None;
+    }
     if app.export.estimate.as_ref().is_none_or(|(k, _)| *k != key) {
         let estimate = app.shell.run("export.estimate", json!({ "output": id })).unwrap_or(Value::Null);
+        // A compressed file's size, guessed from typical compression: the output's own is measured, once for these
+        // settings.
+        if estimate["approximate"] == json!(true) && estimate["measured"] == json!(false) && !app.shell.running(&["export.measure"]) {
+            app.shell.run("export.measure", json!({ "output": id }));
+        }
         app.export.estimate = Some((key, estimate));
     }
     let Some((_, estimate)) = &app.export.estimate else { return };

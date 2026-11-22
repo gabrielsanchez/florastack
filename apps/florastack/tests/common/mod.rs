@@ -85,6 +85,24 @@ pub fn drop_files(harness: &mut Harness<'_, FloraStackApp>, files: &[PathBuf]) {
     }
 }
 
+/// Runs frames until the widget labelled `label` stays where it is from one frame to the next. A dialog or a window
+/// moves into place over its first few frames (the Preferences dialog, some 64 points up in five), and egui hit-tests
+/// a pointer click against where the widgets were the frame before, while kittest clicks where they are now: a click
+/// sent while they move lands beside them.
+pub fn settle(harness: &mut Harness<'_, FloraStackApp>, label: &str) {
+    use egui_kittest::kittest::Queryable;
+    let mut last = None;
+    for _ in 0..120 {
+        let now = harness.query_by_label(label).map(|n| n.rect());
+        if now.is_some() && now == last {
+            return;
+        }
+        last = now;
+        harness.step();
+    }
+    panic!("{label} never stayed in place");
+}
+
 /// Runs frames until `done` holds, failing after a minute or at the first error the app shows.
 pub fn until(harness: &mut Harness<'_, FloraStackApp>, what: &str, done: impl Fn(&FloraStackApp) -> bool) {
     let start = Instant::now();

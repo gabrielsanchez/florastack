@@ -105,7 +105,8 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
             source_state.frame(frame).and_then(|f| Path::new(&f.path).file_stem()).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let stem = file_name("{name}", &[("name", stem)]);
         if settings.aligned_frames {
-            planned.push(Planned::Aligned { path: folder.join(format!("{base} aligned/{:03} {stem}.tif", i + 1)), frame });
+            let extension = settings.aligned_extension();
+            planned.push(Planned::Aligned { path: folder.join(format!("{base} aligned/{:03} {stem}.{extension}", i + 1)), frame });
         }
         if settings.contribution_maps {
             let index =
@@ -180,7 +181,8 @@ pub(super) fn run(session: &Session, p: RunParams) -> Result<JobPlan<Exported>, 
                     let loader = loader.as_mut().ok_or_else(|| scientific::unavailable("missing input reader"))?;
                     let warped = loader.warp(frame, size.ok_or_else(|| scientific::unavailable("missing output dimensions"))?)?;
                     let pixels = AnyImage::F32(warped.image);
-                    let staged = publication.stage_image(&path, &pixels, extra_spec(OutputProfile::Input), &OutputMetadata::default())?;
+                    let staged = publication.stage_image(&path, &pixels, settings.aligned_spec(), &OutputMetadata::default())?;
+                    warnings.extend(staged.warnings.iter().map(|w| format!("{}: {w}", display(&path))));
                     (path, "aligned", staged.hash, staged.bytes)
                 }
                 Planned::Contribution { path, frame, index } => {

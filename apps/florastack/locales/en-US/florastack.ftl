@@ -1,7 +1,8 @@
 # The desktop app's English strings (Project Fluent: https://projectfluent.org/). Every key here is used by the code,
 # and every key the code uses is here: a test in src/i18n.rs checks both. A translation copies this file to
-# locales/<language>/florastack.ftl; it may also override a command's title and summary from the engine's registry
-# with `command-<name>-title` and `command-<name>-summary`, the name's dot written as a hyphen.
+# locales/<language>/florastack.ftl and gets a row in LANGUAGES (book/src/dev/translating.md); it may also override a
+# command's title, summary and help from the engine's registry with `command-<name>-title`, `command-<name>-summary`
+# and `command-<name>-help`, the name's dot written as a hyphen.
 
 untitled = Untitled
 title-unsaved = { $name } (unsaved)
@@ -483,6 +484,8 @@ tip-export-confidence-map = How sure the depth map is at each point, as a 16-bit
 export-maps-none = Only depth-map outputs have a depth map and a confidence map.
 export-aligned-frames = Aligned frames
 tip-export-aligned-frames = Every frame as it was aligned onto the output's canvas, as 16-bit TIFF files in a folder of their own: for retouching in other programs.
+export-aligned-as-output = In the output's format
+tip-export-aligned-as-output = Writes the aligned frames in the format, bit depth, compression and color profile set above for the output, rather than as 16-bit TIFF: as JPEG for a quick look, say.
 export-pick = Pick an output to export.
 export-estimate = { $size } in { $files ->
     [one] one file
@@ -492,7 +495,7 @@ export-estimate-about = About { $size } in { $files ->
     [one] one file
    *[other] { $files } files
 }
-tip-export-estimate = Compressed files' sizes depend on the picture: this is a guess.
+tip-export-estimate = Compressed files' sizes depend on the picture: the main file's is measured on a few crops of the output, which takes a moment, so it is close but not exact; the files alongside are a guess.
 export-overwrite = Replace files that exist
 tip-export-overwrite = Off, an export that would replace a file stops and says which.
 export-run = Export…
@@ -565,6 +568,9 @@ prefs-cache-clean = Clean up
 prefs-orphan-days = Offer unnamed projects for the trash after
 prefs-days = {" "}days
 tip-orphan-days = Projects you never named stay in the cache folder. Once one has gone unused this long, you are asked at startup whether to move it to the trash. Nothing goes without your say.
+prefs-temporary-limit = Keep unnamed projects up to
+prefs-no-limit = no limit
+tip-temporary-limit = When the projects you never named take more than this, the least recently used are offered for the trash at startup too, whatever their age: the open one and the most recently used one always stay. Nothing goes without your say. 0 for no limit.
 drive-removable = The cache folder is on a removable drive: what is moved to the trash from there may be deleted for good.
 drive-network = The cache folder is on a network drive: what is moved to the trash from there may be deleted for good.
 tip-cache-clean = Removes what stacks that crashed left on disk.
@@ -602,9 +608,9 @@ drop-hint = Drop to open or add
 ## Banners
 
 orphans-found = { $count ->
-    [one] One old temporary project
-   *[other] { $count } old temporary projects
-} take { $size } MB.
+    [one] One temporary project you haven't used lately takes
+   *[other] { $count } temporary projects you haven't used lately take
+} { $size } MB.
 orphans-trash = Move to the trash
 orphans-keep = Keep
 

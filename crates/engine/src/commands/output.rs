@@ -558,8 +558,9 @@ impl Pixels {
 /// The metadata of the frame file at `path`, for a file written from it; what goes wrong goes into `notes`.
 pub(super) fn frame_metadata(path: Option<&Path>, notes: &mut Vec<String>) -> Option<florastack_codecs::Metadata> {
     let frame = path?;
-    match florastack_core::fs::read(frame) {
-        Ok(bytes) => Some(florastack_codecs::read_metadata(&bytes)),
+    // Only the parts of the file that hold its metadata are read, not a RAW file's image data.
+    match florastack_codecs::read_metadata_file(frame) {
+        Ok(metadata) => Some(metadata),
         Err(e) => {
             notes.push(format!("the metadata of {} can't be read, so the file has none: {e}", frame.display()));
             None

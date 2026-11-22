@@ -191,6 +191,16 @@ fn maps_and_aligned_frames_are_exported_alongside() {
         files.iter().filter(|(_, w)| w == "aligned").map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(aligned, ["001 frame-00.tif", "002 frame-01.tif", "003 frame-02.tif", "004 frame-03.tif"]);
     assert!(files[3].0.parent().unwrap().ends_with("Depth map aligned"), "{}", files[3].0.display());
+    // In the output's format: 8-bit JPEG files, as the output.
+    let as_output = json!({ "format": "jpeg", "depth": "u8", "template": "jpeg", "aligned_frames": true, "aligned_as_output": true });
+    let jpegs = export(&mut engine, &depth, &folder, &as_output);
+    let frames: Vec<&PathBuf> = jpegs.iter().filter(|(_, w)| w == "aligned").map(|(p, _)| p).collect();
+    assert_eq!(frames.len(), 4);
+    for path in frames {
+        assert_eq!(path.extension().unwrap(), "jpg", "{}", path.display());
+        let decoded = florastack_codecs::read_file(path, &ReadOptions::default()).unwrap();
+        assert_eq!((decoded.info.format, decoded.info.bits_per_sample), (florastack_codecs::Format::Jpeg, 8), "{}", path.display());
+    }
     // The estimate is near what was written: compressed files are guessed at (and this synthetic stack compresses
     // better than most photographs), uncompressed ones known within their headers.
     let written: u64 = files.iter().map(|(p, _)| std::fs::metadata(p).unwrap().len()).sum();
@@ -305,4 +315,31 @@ fn every_built_in_preset_is_valid_and_applies() {
     }
     run(&mut engine, "project.new", "{}");
     assert_eq!(engine.dispatch_json("preset.apply", r#"{ "builtin": "underwater" }"#).unwrap_err().code(), "params");
+}
+
+#[test]
+fn an_estimate_from_the_outputs_measured_compression_is_near_what_is_written() {
+    let dir = TempDir::new("measured");
+    let mut engine = Engine::new(config(dir.path()));
+    let (pyramid, _) = stacked(&mut engine, dir.path(), 4);
+    let folder = dir.path().join("out");
+    let cases = [
+        json!({ "format": "tiff", "depth": "u16", "tiff_compression": "deflate" }),
+        json!({ "format": "tiff", "depth": "u16", "tiff_compression": "lzw" }),
+        json!({ "format": "png", "depth": "u8" }),
+        json!({ "format": "jpeg", "depth": "u8", "jpeg_quality": 90 }),
+        json!({ "format": "open-exr", "depth": "f32", "exr_compression": "zip" }),
+    ];
+    for (i, mut settings) in cases.into_iter().enumerate() {
+        settings["template"] = json!(format!("measured {i}"));
+        let params = json!({ "output": pyramid, "settings": settings }).to_string();
+        assert_eq!(run(&mut engine, "export.estimate", &params)["measured"], false, "{settings}");
+        assert!(run(&mut engine, "export.measure", &params)["ratio"].as_f64().unwrap() > 0.0);
+        let estimate = run(&mut engine, "export.estimate", &params);
+        assert_eq!(estimate["measured"], true, "{settings}");
+        let files = export(&mut engine, &pyramid, &folder, &settings);
+        let written: u64 = files.iter().map(|(p, _)| std::fs::metadata(p).unwrap().len()).sum();
+        let estimated = estimate["bytes"].as_u64().unwrap();
+        assert!(written.abs_diff(estimated) * 5 < written, "{settings}: estimated {estimated} bytes, wrote {written}");
+    }
 }

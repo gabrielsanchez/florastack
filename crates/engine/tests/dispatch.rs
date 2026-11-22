@@ -246,6 +246,8 @@ fn every_command_dispatches_from_json() {
     );
     assert_eq!((&set["settings"]["depth"], &set["settings"]["metadata"]), (&json!("u8"), &json!(true)), "{set}");
     let estimate = calls.run("export.estimate", &format!(r#"{{ "output": {} }}"#, depth["output"]));
+    let measured = calls.run("export.measure", &format!(r#"{{ "output": {} }}"#, depth["output"]));
+    assert!(measured["ratio"].as_f64().is_some_and(|r| r > 0.0), "{measured}");
     assert_eq!((&estimate["files"], &estimate["name"]), (&json!(10), &json!("Depth map depth-map.tif")), "{estimate}");
     let exported = calls.run("export.run", &format!(r#"{{ "output": {}, "folder": {} }}"#, depth["output"], quoted(&dir.path().join("exported"))));
     let files = exported["files"].as_array().unwrap();
