@@ -55,6 +55,7 @@ export.reproduce files
 export.reset project
 export.run files
 export.set project
+filmstrip.crop project
 filmstrip.list none
 filmstrip.update project
 job.cancel project

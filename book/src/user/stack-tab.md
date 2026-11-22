@@ -1,6 +1,6 @@
 # The Stack tab
 
-The Stack tab, on the right of the desktop app's window, takes a stack of photos from frames to finished image in three steps: add the frames, align them, and stack them. Its settings are always on screen; the ones most stacks never need are under **Advanced**. Every setting has a tooltip, and its **?** opens its section of this page.
+The Stack tab, on the right of the desktop app's window, takes a stack of photos from frames to finished image in three steps: add the frames, align them, and stack them. Its settings are always on screen; the ones most stacks never need are under **Advanced**. Every setting has a tooltip, and its **?** opens its section of this page in a window, from the copy of this guide that comes with the app, so it needs no network and matches the version you run.
 
 Changing a stacking setting renders a quarter-size preview once the frames are aligned: the first in a few seconds, while the frames are read, and the next ones in under a second, from the reduced frames FloraStack keeps. A full-size stack runs in the background: you can keep changing settings and previewing while it runs, and each stack you make is kept in the outputs list.
 
@@ -16,7 +16,7 @@ Changing a stacking setting renders a quarter-size preview once the frames are a
 - **Depth map** takes each pixel from the frame where it is sharpest. Colors and smooth backgrounds stay exactly as shot, but edges between near and far parts can show halos. It asks for its [contrast threshold](#contrast-threshold) before stacking.
 - **Weighted average** blends every frame, each weighted by its sharpness: fast and smooth, but softer than the others.
 - **Wavelet** picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with about as much noise. It stacks on the CPU only and takes several times as long as the pyramid, so it suits a final stack more than trying settings.
-- **Both** makes a pyramid output and a depth-map output from the same frames, to compare them, or to retouch one from the other later.
+- **Both** makes a pyramid output and a depth-map output from the same frames, to compare them, or to retouch one from the other later. Its previews show the two methods compared, split or side by side as the outputs' comparison is set; changing a setting of one method previews that method again.
 
 ## Radius
 
@@ -52,13 +52,13 @@ The output's field of view, which applies when stacking (no new alignment needed
 
 The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly. In smooth or blurred areas, such as an out-of-focus background, no frame does, and following noise there makes blotches. Below the contrast threshold, a pixel's depth is filled from the confident pixels around it instead.
 
-When you stack by depth map, the tab shows the threshold first, over a picture of the stack: areas in **black** are below it. Raise the threshold until noise and smooth background turn black while the subject's detail stays visible, then press **Continue**.
+When you stack by depth map, the tab shows the threshold first, over a quarter-size preview of the depth-map stack in its colors: areas in **black** are below it. Raise the threshold until noise and smooth background turn black while the subject's detail stays visible, then press **Continue**.
 
 - **Automatic** picks a threshold from the image.
 - **Percentile** fills at least that share of the image.
 - **Level** sets the contrast directly, for repeating a threshold across stacks.
 
-The first picture takes as long as a quarter-size preview, since every frame is read; after that the picture follows the slider at once.
+The first picture takes as long as a quarter-size preview, since every frame is read (less after a depth-map preview); after that the picture follows the slider at once. Its colors stay those of the first picture's threshold, which differ from the stack's mostly where the picture is black.
 
 ## Grit
 
@@ -150,6 +150,8 @@ Frames in which part of the subject moved at least this many pixels against the 
 
 Drag up and down over the thumbnails in the frame list to play the stack frame by frame in the viewer, or press **Play**. Frames play aligned by default, so that whatever still moves is the subject: an insect's leg, a leaf in the wind. **As shot** plays them before alignment. Press Escape to return to the viewer.
 
+The thumbnails are small, so movement of a few pixels doesn't show in them. Zoom the viewer onto the place to check, on a frame, the preview or an output, and press **Crop at 100%**: FloraStack reads every frame at full size and crops that region, aligned, and the filmstrip then plays the crops at 100% (**100% crop**). It takes about as long as reading the frames once; the crops play as they come. Untick **100% crop** to play the thumbnails again, and press **Crop at 100%** again for another region.
+
 ## Outputs
 
-Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared.
+Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared. Outputs stacked with different framings line up by what they show, not by their pixels.

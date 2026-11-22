@@ -179,7 +179,7 @@ pub fn display_region(image: &Image<f32>, rect: florastack_core::Rect, factor: u
 
 /// Converts `image`'s color channels from its profile's primaries to sRGB's, in place; an image without a profile is
 /// sRGB already, and one whose profile can't be converted (a lookup-table profile) is shown as it is.
-fn to_srgb_primaries(image: &mut Image<f32>) {
+pub(crate) fn to_srgb_primaries(image: &mut Image<f32>) {
     let Some(icc) = image.color_space().icc.clone() else { return };
     if image.channels() < 3 {
         return;

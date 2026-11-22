@@ -206,6 +206,9 @@ align-missing = { $count ->
    *[other] { $count } frames aren't aligned yet: align again.
 }
 learn-more = Learn more
+help-title = Help
+help-missing = This version of the guide has no such section.
+help-online = Open the whole guide online
 
 stack-method = Method
 method-pyramid = Pyramid
@@ -336,7 +339,12 @@ film-play = Play
 film-stop = Stop
 film-as-shot = As shot
 film-aligned = Aligned
+film-crop = 100% crop
+film-crop-make = Crop at 100%
+tip-film-crop = Reads every frame at full size and crops the region the viewer shows, aligned, so that the filmstrip plays movement of a few pixels that the small previews hide. Takes about as long as reading the frames once.
+tip-film-crop-play = Plays the crops at 100% rather than the small previews.
 tip-film = Drag up and down over the thumbnails to play the stack frame by frame, and spot what moved between frames. Escape returns to the viewer.
+film-thumbnail = Preview of { $name }
 tip-film-as-shot = Plays the frames as they were shot rather than aligned: alignment's own corrections then show as movement.
 film-caption = Frame { $index } of { $count }: { $name } ({ $how })
 quality-master = master

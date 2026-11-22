@@ -95,10 +95,15 @@ pub struct Film {
     next: Instant,
 }
 
+/// The name the pyramid's preview is loaded under when it is compared with the depth map's.
+const PAIRED_PREVIEW: &str = "pyramid preview";
+
 /// How fast the filmstrip plays.
 const FILM_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
 /// The longest side the filmstrip's frames are read at: the previews' own (at most 512 pixels).
 pub const FILM_SIDE: usize = 512;
+/// The largest crop the filmstrip plays at 100%, in pixels: each frame's is kept as a texture while it plays.
+pub const FILM_CROP: [usize; 2] = [1280, 1024];
 
 /// A dialog open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -149,6 +154,7 @@ pub enum Banner {
 }
 
 /// See the module documentation.
+#[allow(clippy::struct_excessive_bools, reason = "independent states of the view and the session, not one state spread over flags")]
 pub struct FloraStackApp {
     /// The system's clipboard, for the shortcuts the app handles, and the files a paste found, to be opened.
     #[cfg(not(target_arch = "wasm32"))]
@@ -189,14 +195,17 @@ pub struct FloraStackApp {
     shown_edits: Option<(u64, u64)>,
     /// The outputs picked for comparing, at most two.
     pub compare: Vec<u64>,
-    /// The filmstrip, while it is shown instead of the viewer.
+    /// The filmstrip, while it is shown instead of the viewer; and whether it plays the crops at 100%
+    /// (`crop_film`) rather than the previews.
     pub film: Option<Film>,
+    pub film_crop: bool,
     /// Whether the depth map's contrast-threshold step is open, before the stack.
     pub threshold_step: bool,
     /// The threshold picture shown last.
     shown_threshold: Option<PathBuf>,
-    /// The method the previews show for "both": the one whose setting changed last.
-    pub preview_method: &'static str,
+    /// With both methods chosen, the one whose setting changed, which alone needs a new preview; both do when it is
+    /// `None` (the framing or the method changed).
+    pub preview_only: Option<&'static str>,
     /// The Retouch tab's brush, view and stroke being drawn.
     pub retouch: crate::retouch_tab::RetouchUi,
     pub adjust: crate::adjust_tab::AdjustUi,
@@ -316,9 +325,10 @@ impl FloraStackApp {
             shown_edits: None,
             compare: Vec::new(),
             film: None,
+            film_crop: false,
             threshold_step: false,
             shown_threshold: None,
-            preview_method: "pyramid",
+            preview_only: None,
             retouch: crate::retouch_tab::RetouchUi::default(),
             adjust: crate::adjust_tab::AdjustUi::default(),
             export: crate::export_tab::ExportUi::default(),
@@ -591,6 +601,18 @@ impl FloraStackApp {
         self.selection = selection.clone();
         self.rendering = None;
         self.shown_edits = None;
+        // With both methods chosen, their previews are compared once both are made.
+        if selection == Selection::Preview
+            && let Some([first, second]) = self.preview_pair_images()
+        {
+            let max_side = Some(self.viewer.max_side());
+            let (path, other) = (PathBuf::from(PAIRED_PREVIEW), PathBuf::from("depth-map preview"));
+            self.pair = [None, None];
+            self.pair_loader.request(Request { path: other, max_side, image: Some(second) });
+            self.view_loader.request(Request { path: path.clone(), max_side, image: Some(first) });
+            self.loading = Some((path, selection, keep));
+            return;
+        }
         // An output with strokes or adjustments is shown as it is written: rendered, then loaded.
         if let Selection::Output(id) = selection
             && let Some(row) = self.shell.outputs.iter().find(|o| o.id == id)
@@ -688,11 +710,27 @@ impl FloraStackApp {
         }
     }
 
-    /// Asks for a quarter-scale preview of the method chosen.
+    /// Asks for a quarter-scale preview of the method chosen: with both, of the one whose setting changed, or of
+    /// each (the engine runs a preview of each method to its end, and shows them compared).
     pub fn preview(&mut self) {
-        let method = if self.prefs.method == crate::prefs::Method::Both { self.preview_method } else { self.prefs.method.name() };
-        self.shell.run("stack.preview", json!({ "method": method }));
+        let only = self.preview_only.take();
+        let methods = match self.prefs.method {
+            crate::prefs::Method::Both => only.map_or_else(|| vec!["pyramid", "depth-map"], |m| vec![m]),
+            method => vec![method.name()],
+        };
+        for method in methods {
+            self.shell.run("stack.preview", json!({ "method": method }));
+        }
         self.follow_preview = true;
+    }
+
+    /// With both methods chosen, the pyramid's preview and the depth map's, once both are made.
+    fn preview_pair_images(&self) -> Option<[Arc<florastack_engine::Image<f32>>; 2]> {
+        if self.prefs.method != crate::prefs::Method::Both {
+            return None;
+        }
+        let previews = &self.shell.previews;
+        Some([Arc::clone(previews.get("pyramid")?), Arc::clone(previews.get("depth-map")?)])
     }
 
     /// Stacks by the method chosen: a depth map asks for its contrast threshold first (the step stays open until
@@ -732,10 +770,58 @@ impl FloraStackApp {
         self.film = Some(Film { index, playing, next: Instant::now() + FILM_FRAME });
     }
 
-    /// The filmstrip's frame `index`: its preview as shot or aligned, as the preferences say.
-    pub fn film_frame(&self, index: usize) -> Option<PathBuf> {
+    /// The filmstrip's frame `index`: its crop at 100% while the crops play (none until it is made), or its preview
+    /// as shot or aligned, as the preferences say; and the longest side to read it at.
+    pub fn film_frame(&self, index: usize) -> Option<(PathBuf, usize)> {
         let frame = self.shell.frames.get(index)?;
-        if self.prefs.film_as_shot { frame.preview.clone() } else { frame.aligned_preview.clone().or_else(|| frame.preview.clone()) }
+        if self.film_crop {
+            return self.shell.film_crops.get(&frame.id).map(|p| (p.clone(), FILM_CROP[0].max(FILM_CROP[1])));
+        }
+        let path = if self.prefs.film_as_shot { frame.preview.clone() } else { frame.aligned_preview.clone().or_else(|| frame.preview.clone()) };
+        path.map(|p| (p, FILM_SIDE))
+    }
+
+    /// Plays the filmstrip as crops at 100% of the region the viewer shows (`filmstrip.crop`): the viewer's size in
+    /// device pixels, at most [`FILM_CROP`], around the point at its middle, found in the master frame's pixels
+    /// through what it shows (an output's canvas, the preview's, a frame's alignment); the canvas's middle when it
+    /// shows none of them.
+    pub fn crop_film(&mut self) {
+        let [w, h] = self.viewer.view_pixels();
+        let center = self.view_center_in_master();
+        let mut params = json!({ "width": w.clamp(16, FILM_CROP[0]), "height": h.clamp(16, FILM_CROP[1]) });
+        if let Some(center) = center {
+            params["center"] = json!(center);
+        }
+        self.shell.film_crops.clear();
+        self.film_crop = true;
+        self.shell.run("filmstrip.crop", params);
+        let at = self.film.as_ref().map_or(0, |f| f.index);
+        self.film_at(at, false);
+    }
+
+    /// The point at the viewer's middle in the master frame's pixels, when what it shows is placed there.
+    fn view_center_in_master(&self) -> Option<[f64; 2]> {
+        let (center, shown) = self.viewer.view_center()?;
+        let run = &self.shell.alignment["run"];
+        let canvas = match &self.selection {
+            Selection::Output(id) | Selection::Compare(id, _) => self.shell.outputs.iter().find(|o| o.id == *id)?.canvas?,
+            // The preview is the canvas of the framing set, reduced.
+            Selection::Preview => {
+                let framing = &self.shell.align_settings["framing"];
+                let f = run["framings"].as_array()?.iter().find(|f| f["framing"] == *framing)?;
+                let size = |k: &str| f[k].as_u64().and_then(|v| usize::try_from(v).ok());
+                crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: serde_json::from_value(f["toMaster"].clone()).ok()? }
+            }
+            // A frame's pixels go to the master's by the inverse of its alignment.
+            Selection::Frame(id) => {
+                let f = run["frames"].as_array()?.iter().find(|f| f["frame"] == *id)?;
+                let transform: [[f64; 3]; 2] = serde_json::from_value(f["transform"].clone()).ok()?;
+                let size = |k: &str| run[k].as_u64().and_then(|v| usize::try_from(v).ok());
+                crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: crate::viewer::inverse(&transform)? }
+            }
+            _ => return None,
+        };
+        canvas.to_master_point(shown, center)
     }
 
     /// Selects the frame `step` places after (or before) the one selected, or the filmstrip's while it is shown.
@@ -843,6 +929,7 @@ impl FloraStackApp {
             }
             match (done.image, selection) {
                 (Ok(image), Selection::Compare(..)) => self.pair[0] = Some(image),
+                (Ok(image), Selection::Preview) if path == std::path::Path::new(PAIRED_PREVIEW) => self.pair[0] = Some(image),
                 (Ok(image), _) if keep => self.viewer.replace(image),
                 (Ok(image), _) => self.viewer.show(image),
                 (Err(e), _) => self.shell.notify(e, true),
@@ -854,13 +941,7 @@ impl FloraStackApp {
                 Err(e) => self.shell.notify(e, true),
             }
         }
-        if let (Selection::Compare(a, b), [Some(_), Some(_)]) = (&self.selection, &self.pair) {
-            let name = |id: u64| self.shell.outputs.iter().find(|o| o.id == id).map(|o| o.name.clone()).unwrap_or_default();
-            let labels = [name(*a), name(*b)];
-            if let [Some(first), Some(second)] = std::mem::take(&mut self.pair) {
-                self.viewer.show_pair(first, second, labels);
-            }
-        }
+        self.show_pair();
         self.reading_ahead();
         for done in self.thumb_loader.done() {
             if let Ok(image) = done.image {
@@ -883,6 +964,25 @@ impl FloraStackApp {
         let reading = [&self.view_loader, &self.pair_loader, &self.thumb_loader, &self.ahead_loader].iter().any(|l| l.pending() > 0);
         if self.shell.busy() || self.loading.is_some() || (reading && cfg!(target_arch = "wasm32")) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// Shows the pair compared once both its images are loaded: two outputs, or with both methods chosen, their
+    /// previews (only these two fill the pair).
+    fn show_pair(&mut self) {
+        let [Some(_), Some(_)] = &self.pair else { return };
+        let output = |id: u64| self.shell.outputs.iter().find(|o| o.id == id);
+        let name = |id: u64| output(id).map(|o| o.name.clone()).unwrap_or_default();
+        let (labels, canvases) = match &self.selection {
+            Selection::Compare(a, b) => ([name(*a), name(*b)], output(*a).and_then(|o| o.canvas).zip(output(*b).and_then(|o| o.canvas))),
+            // The previews of the two methods share the canvas, at the same size.
+            Selection::Preview => ([tr("method-pyramid"), tr("method-depth-map")], None),
+            _ => return,
+        };
+        if let [Some(first), Some(second)] = std::mem::take(&mut self.pair) {
+            // Outputs of different framings line up by their canvases, not their pixels.
+            let map = canvases.and_then(|(a, b)| crate::viewer::PairMap::between(&a, [first.width, first.height], &b, [second.width, second.height]));
+            self.viewer.show_pair(first, second, labels, map);
         }
     }
 
@@ -1101,5 +1201,6 @@ impl FloraStackApp {
         if let Some(picked) = self.palette.ui(&ctx, registry) {
             self.picked(&ctx, picked);
         }
+        crate::help::show(&ctx);
     }
 }

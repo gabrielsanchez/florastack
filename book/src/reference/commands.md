@@ -22,7 +22,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [develop](#develop) | [`develop.get`](#developget), [`develop.reset`](#developreset), [`develop.set`](#developset) |
 | [edit](#edit) | [`edit.history`](#edithistory), [`edit.redo`](#editredo), [`edit.undo`](#editundo) |
 | [export](#export) | [`export.estimate`](#exportestimate), [`export.get`](#exportget), [`export.reproduce`](#exportreproduce), [`export.reset`](#exportreset), [`export.run`](#exportrun), [`export.set`](#exportset) |
-| [filmstrip](#filmstrip) | [`filmstrip.list`](#filmstriplist), [`filmstrip.update`](#filmstripupdate) |
+| [filmstrip](#filmstrip) | [`filmstrip.crop`](#filmstripcrop), [`filmstrip.list`](#filmstriplist), [`filmstrip.update`](#filmstripupdate) |
 | [job](#job) | [`job.cancel`](#jobcancel), [`job.list`](#joblist) |
 | [output](#output) | [`output.list`](#outputlist), [`output.remove`](#outputremove), [`output.rename`](#outputrename), [`output.render`](#outputrender), [`output.save`](#outputsave) |
 | [parallax](#parallax) | [`parallax.animate`](#parallaxanimate), [`parallax.mesh`](#parallaxmesh), [`parallax.preview`](#parallaxpreview), [`parallax.stereo`](#parallaxstereo) |
@@ -1923,6 +1923,42 @@ Examples:
 
 ## filmstrip
 
+### `filmstrip.crop`
+
+**Crop filmstrip at 100%.** Makes every frame's aligned crop of one region at full size, for the filmstrip.
+
+Reads every frame to stack at full size (developed with the fast demosaic, its defects inpainted) and warps the region of `width` x `height` pixels around `center` (a point in the master frame's pixels; the canvas's center when left out) of the canvas of the framing set onto a crop, as the full stack warps it: its brightness and white balance matched, black where the frame doesn't cover it. The region is moved inside the canvas when it would leave it, and made smaller when the canvas is. Each crop is an sRGB JPEG in the project's `previews/` folder, published as soon as it is made in a `partial` event (`{"frame", "path"}`), so that a filmstrip can play the movement of a few pixels that its small previews hide. Runs beside other jobs as a preview; a newer call replaces an older one still running, and the crops of the call before are removed when one ends. Nothing in the project refers to them: no undo step, and they go when the project is closed.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `center` | array of number | The region's center, in the master frame's pixels (as `align.info`'s framings map the canvas to them); the canvas's center when left out. |
+| `height` | integer, from 16 to 4096 | The region's height, in pixels, from 16 to 4096; 768 when left out. Default: `768`. |
+| `width` | integer, from 16 to 4096 | The region's width, in pixels, from 16 to 4096; 1024 when left out. Default: `1024`. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `frames` | array of object | Each frame stacked, in the stack's order, with its crop. |
+| `framing` | `"narrow"` \| `"wide"` \| `"common"` | The framing whose canvas it is. |
+| `height` | integer |  |
+| `width` | integer |  |
+| `x` | integer | The region cropped, in the canvas's pixels: its top left corner and size. |
+| `y` | integer |  |
+
+Examples:
+
+```json
+{}
+{"center":[2000,1500],"height":600,"width":800}
+```
+
 ### `filmstrip.list`
 
 **Filmstrip.** Every frame's previews, as shot and aligned, with its flags and the motion found in it.
@@ -3410,7 +3446,7 @@ Example:
 
 **Preview stack.** Stacks the aligned frames at a quarter of their size, as a quick preview.
 
-The weighted average of `stack.average`, or with `method` "pyramid", "depth-map" or "wavelet" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames reduced to a quarter of their size on each side with the settings scaled to match, so that it shows in seconds what the full stack will look like. Takes the same settings as that method's command. The first preview reads every frame; the engine keeps the reduced frames in memory, so that later previews of the same frames read no file and take a fraction of the time. The engine keeps the latest preview in memory for its viewer, until the project is closed: no output, no undo step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one still running, so call it after every change of a setting.
+The weighted average of `stack.average`, or with `method` "pyramid", "depth-map" or "wavelet" the method of `stack.pyramid`, `stack.depthMap` or `stack.wavelet`, on frames reduced to a quarter of their size on each side with the settings scaled to match, so that it shows in seconds what the full stack will look like. Takes the same settings as that method's command. The first preview reads every frame; the engine keeps the reduced frames in memory, so that later previews of the same frames read no file and take a fraction of the time. The engine keeps the latest preview, and the latest of each method, in memory for its viewer, until the project is closed: no output, no undo step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one of the same method still running, so call it after every change of a setting, and previews of two methods both finish.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3681,7 +3717,7 @@ Examples:
 
 **Show contrast threshold.** Shows which parts of the stack fall below the depth map's contrast threshold.
 
-The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly; below the contrast threshold, in smooth or blurred areas, it fills the depth from the confident pixels around. This shows where that happens, at a quarter of the frames' size: the sharpest frame's luminance at each pixel, black below the threshold, transparent where no frame covers it, as an 8-bit TIFF in the project's `previews/` folder (each call removes the one before), with the threshold's level and the share of the pixels below it. Takes the threshold settings of `stack.depthMap`, the project's (`stack.get`) when left out. The first call reads every frame, as the depth-map method's first pass does; later calls with the same frames, alignment, develop settings and radius reuse what it measured and take milliseconds, so call it on every move of a threshold slider. Runs beside other jobs as a preview; a newer call replaces an older one still running.
+The depth-map method follows each pixel's sharpest frame only where that frame stands out clearly; below the contrast threshold, in smooth or blurred areas, it fills the depth from the confident pixels around. This shows where that happens, at a quarter of the frames' size: the depth-map composite, black below the threshold, transparent where no frame covers it, as an 8-bit sRGB TIFF in the project's `previews/` folder (each call removes the one before), with the threshold's level and the share of the pixels below it. Takes the threshold settings of `stack.depthMap`, the project's (`stack.get`) when left out. The first call reads every frame twice, as the depth-map method does, to measure their focus and to composite; later calls with the same frames, alignment, develop settings and radius reuse both and take milliseconds, so call it on every move of a threshold slider. The colors stay those of the first call's threshold (or of a depth-map `stack.preview` of the same frames), which differ from a later threshold's result mostly where the picture is black. Runs beside other jobs as a preview; a newer call replaces an older one still running.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3704,7 +3740,7 @@ Result:
 | `height` | integer |  |
 | `level` | number | The threshold's level of contrast, which `"threshold": "level"` takes. |
 | `measured` | boolean | Whether the frames' focus was measured again, rather than reused from the call before. |
-| `path` | string | The picture: an 8-bit TIFF, gray with an alpha channel. |
+| `path` | string | The picture: an 8-bit sRGB TIFF, RGB with an alpha channel. |
 | `width` | integer | Its size, in pixels: a quarter of the full stack's on each side. |
 
 Examples:

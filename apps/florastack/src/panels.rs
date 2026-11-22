@@ -7,7 +7,7 @@ use egui::{Align, Layout, RichText, Sense};
 use florastack_engine::{Value, json};
 
 use crate::actions::Action;
-use crate::app::{Banner, Dialog, FILM_SIDE, FloraStackApp, Selection, THUMBNAIL_SIDE};
+use crate::app::{Banner, Dialog, FloraStackApp, Selection, THUMBNAIL_SIDE};
 use crate::i18n::{tr, tr_args};
 use crate::prefs::{Method, Tab};
 use crate::shell::FrameRow;
@@ -297,6 +297,16 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         }
         ui.checkbox(&mut app.prefs.film_as_shot, tr("film-as-shot")).on_hover_text(tr("tip-film-as-shot"));
     });
+    ui.horizontal(|ui| {
+        // Crops at 100% of the region the viewer shows, aligned; made again on each click, for the region shown then.
+        let aligned = app.aligned();
+        if ui.add_enabled(aligned, egui::Button::new(tr("film-crop-make"))).on_hover_text(tr("tip-film-crop")).clicked() {
+            app.crop_film();
+        }
+        if !app.shell.film_crops.is_empty() || app.film_crop {
+            ui.checkbox(&mut app.film_crop, tr("film-crop")).on_hover_text(tr("tip-film-crop-play"));
+        }
+    });
     let frames = app.shell.frames.clone();
     let min_score = app.shell.align_settings["min_score"].as_f64().unwrap_or(0.0);
     let mut moved: Option<(u64, usize)> = None;
@@ -328,6 +338,9 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                 if filmed {
                     ui.painter().rect_stroke(thumb.rect, 2.0, ui.visuals().selection.stroke, egui::StrokeKind::Outside);
                 }
+                // Named for screen readers (and the UI tests, which scrub over them).
+                let name = tr_args("film-thumbnail", &[("name", frame.name.clone().into())]);
+                thumb.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &name));
                 let thumb = thumb.on_hover_text(tr("tip-film"));
                 if thumb.is_pointer_button_down_on() || thumb.dragged() {
                     scrubbing = true;
@@ -354,13 +367,10 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             }
         }
     });
-    // Scrubbing: the frame under the pointer, as it moves over the rows.
+    // Scrubbing: the frame under the pointer, as it moves over the rows; between two rows the one above, above the
+    // first the first, below the last the last.
     if scrubbing && let Some(y) = ui.input(|i| i.pointer.interact_pos()).map(|p| p.y) {
-        let index = spans.iter().position(|s| s.contains(y)).unwrap_or(if spans.first().is_some_and(|s| y < s.min) {
-            0
-        } else {
-            spans.len().saturating_sub(1)
-        });
+        let index = spans.iter().rposition(|s| s.min <= y).unwrap_or(0);
         if app.film.as_ref().is_none_or(|f| f.index != index || f.playing) {
             app.film_at(index, false);
         }
@@ -424,19 +434,25 @@ fn film_view(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
     // Every frame's picture is asked for at once, so that playing doesn't wait for them.
     for i in 0..app.shell.frames.len() {
-        if let Some(path) = app.film_frame(i) {
-            app.thumbnail(&path, FILM_SIDE);
+        if let Some((path, side)) = app.film_frame(i) {
+            app.thumbnail(&path, side);
         }
     }
-    let texture = app.film_frame(index).and_then(|path| app.thumbnail(&path, FILM_SIDE));
+    let texture = app.film_frame(index).and_then(|(path, side)| app.thumbnail(&path, side));
     if let Some(texture) = texture {
         let size = texture.size_vec2();
-        let scale = (rect.width() / size.x.max(1.0)).min(rect.height() / size.y.max(1.0));
+        let fit = (rect.width() / size.x.max(1.0)).min(rect.height() / size.y.max(1.0));
+        // A crop shows at 100% at most: one of its pixels on a pixel of the screen.
+        let scale = if app.film_crop { fit.min(1.0 / ui.ctx().pixels_per_point()) } else { fit };
         let at = egui::Rect::from_center_size(rect.center(), size * scale);
         ui.painter().image(texture.id(), at, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
     }
     let name = app.shell.frames.get(index).map(|f| f.name.clone()).unwrap_or_default();
-    let how = if app.prefs.film_as_shot { tr("film-as-shot") } else { tr("film-aligned") };
+    let how = match (app.film_crop, app.prefs.film_as_shot) {
+        (true, _) => tr("film-crop"),
+        (false, true) => tr("film-as-shot"),
+        (false, false) => tr("film-aligned"),
+    };
     let caption = tr_args(
         "film-caption",
         &[("index", (index + 1).into()), ("count", app.shell.frames.len().into()), ("name", name.into()), ("how", how.into())],

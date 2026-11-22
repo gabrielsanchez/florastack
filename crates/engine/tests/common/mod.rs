@@ -311,10 +311,11 @@ impl Params for StrokeParams {}
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct Done {}
 
-/// The standard commands, plus `test.gate` (a heavy job), `test.preview` (a superseding preview job) and
-/// `test.stroke` (an undoable instant command that paints one retouch stroke, as `retouch.stroke` will in 5.3).
+/// The standard commands, plus `test.gate` (a heavy job), `test.preview` (a superseding preview job), `test.keyed`
+/// (a preview job that supersedes the calls with its `name`) and `test.stroke` (an undoable instant command that
+/// paints one retouch stroke, as `retouch.stroke` will in 5.3).
 pub fn test_registry(gate: &Gate) -> Arc<Registry> {
-    let (heavy, preview) = (gate.clone(), gate.clone());
+    let (heavy, preview, keyed) = (gate.clone(), gate.clone(), gate.clone());
     Arc::new(
         Registry::builder()
             .standard()
@@ -329,6 +330,13 @@ pub fn test_registry(gate: &Gate) -> Arc<Registry> {
                     .supersede(),
                 Lane::Preview,
                 move |s, p| gated(s, p, preview.clone()),
+            ))
+            .command(CommandSpec::job(
+                Meta::new("test.keyed", "Keyed preview", "A preview job that supersedes the calls with its name.")
+                    .requires(Requires::Project)
+                    .supersede_by("name", "unnamed"),
+                Lane::Preview,
+                move |s, p| gated(s, p, keyed.clone()),
             ))
             .command(CommandSpec::instant(
                 Meta::new("test.stroke", "Retouch stroke", "Paints one stroke.").undoable(),

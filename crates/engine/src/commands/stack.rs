@@ -203,13 +203,15 @@ fn stacking() -> Vec<CommandSpec> {
                      shows in seconds what the full stack will look like. Takes the same settings as that method's command. The \
                      first preview reads every frame; the engine keeps the reduced frames in memory, so that later \
                      previews of the same frames read no file and take a fraction of the time. The engine \
-                     keeps the latest preview in memory for its viewer, until the project is closed: no output, no undo \
-                     step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's \
-                     `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one still \
-                     running, so call it after every change of a setting.",
+                     keeps the latest preview, and the latest of each method, in memory for its viewer, until the \
+                     project is closed: no output, no undo step. With `keepFile` the preview is also written as a \
+                     linear 32-bit float TIFF in the project's `previews/` folder and its `path` returned; each such \
+                     file stays until the project is closed. Runs beside other jobs as a preview; a newer call \
+                     replaces an older one of the same method still running, so call it after every change of a \
+                     setting, and previews of two methods both finish.",
                 )
                 .requires(Requires::Project)
-                .supersede()
+                .supersede_by("method", "average")
                 .examples(&[
                     "{}",
                     r#"{ "smoothing": 3.0 }"#,
@@ -1205,8 +1207,9 @@ impl SharedReduced {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SharedFocus(Arc<std::sync::Mutex<KeptFocus>>);
 
-/// The focus statistics kept, each with its key, most recently used first.
-type KeptFocus = Vec<(String, Arc<FocusStats>)>;
+/// The focus statistics kept, each with its key and, once composited, the colors of the depth map they make (sRGB
+/// 8-bit, `stack.threshold`'s picture), most recently used first.
+type KeptFocus = Vec<(String, Arc<FocusStats>, Option<Arc<Image<u8>>>)>;
 
 impl SharedFocus {
     /// How many measurements are kept: the project's framing and an output's, for one stack or two.
@@ -1220,7 +1223,7 @@ impl SharedFocus {
     /// The statistics kept under `key`, which become the most recently used.
     fn get(&self, key: &str) -> Option<Arc<FocusStats>> {
         let mut kept = self.lock();
-        let i = kept.iter().position(|(k, _)| k == key)?;
+        let i = kept.iter().position(|(k, ..)| k == key)?;
         let entry = kept.remove(i);
         let stats = Arc::clone(&entry.1);
         kept.insert(0, entry);
@@ -1230,15 +1233,27 @@ impl SharedFocus {
     /// Keeps `stats` under `key`, dropping the least recently used beyond [`SharedFocus::KEPT`].
     fn keep(&self, key: String, stats: Arc<FocusStats>) {
         let mut kept = self.lock();
-        kept.retain(|(k, _)| *k != key);
-        kept.insert(0, (key, stats));
+        kept.retain(|(k, ..)| *k != key);
+        kept.insert(0, (key, stats, None));
         kept.truncate(SharedFocus::KEPT);
+    }
+
+    /// The colors kept with the statistics under `key`.
+    fn colors(&self, key: &str) -> Option<Arc<Image<u8>>> {
+        self.lock().iter().find(|(k, ..)| k == key).and_then(|(.., colors)| colors.clone())
+    }
+
+    /// Keeps `colors` with the statistics under `key`, when they are still kept.
+    fn keep_colors(&self, key: &str, colors: Arc<Image<u8>>) {
+        if let Some(entry) = self.lock().iter_mut().find(|(k, ..)| k == key) {
+            entry.2 = Some(colors);
+        }
     }
 
     /// The keys kept, most recently used first.
     #[cfg(test)]
     fn keys(&self) -> Vec<String> {
-        self.lock().iter().map(|(k, _)| k.clone()).collect()
+        self.lock().iter().map(|(k, ..)| k.clone()).collect()
     }
 }
 
@@ -1367,6 +1382,26 @@ impl StackPlan {
         Ok(image)
     }
 
+    /// The `k`-th frame to stack, read at full size and warped onto `rect` of the canvas as the full stack warps it,
+    /// its brightness and white balance matched, black where it doesn't cover the canvas; and its id.
+    pub(super) fn crop(&mut self, k: usize, rect: Rect) -> Result<(FrameId, Image<f32>), CommandError> {
+        let image = self.read(k)?;
+        let Some(f) = self.frames.get(k) else { return Err(self.internal()) };
+        let mut crop = warp_to_canvas(&image, &f.transform, &self.canvas, rect, DEFAULT_FEATHER)?.image;
+        drop(image);
+        let gained = florastack_stack::Gained { frame: (), gain: f.gain, white_balance: f.white_balance };
+        let c = crop.channels().max(1);
+        let colors = c.min(3);
+        for row in crop.rows_mut() {
+            for pixel in row.chunks_exact_mut(c) {
+                for (i, v) in pixel.iter_mut().take(colors).enumerate() {
+                    *v *= gained.factor(i, c);
+                }
+            }
+        }
+        Ok((f.id, crop))
+    }
+
     /// Reads the `k`-th frame to stack, at full size or, `reduced`, at a quarter of it, with what puts it on the
     /// canvas: its alignment, gain and coverage's feather.
     pub(super) fn load(&mut self, k: usize, reduced: bool) -> Result<Loaded, CommandError> {
@@ -1430,11 +1465,20 @@ impl StackPlan {
             _ => None,
         };
         let (compute, tiling) = (self.compute, self.tiling.clone());
+        let colors_key = match (&self.settings, &focus) {
+            (Chosen::DepthMap(depth), Some(_)) => Some(self.focus_key(depth)?),
+            _ => None,
+        };
         let mut feed = Warping { plan: self, range: 0..n, reduced };
-        stack_feed(&mut feed, &settings, focus, &tiling, &compute, ctx, ctx, &mut units, |stage, units| {
+        let stacked = stack_feed(&mut feed, &settings, focus, &tiling, &compute, ctx, ctx, &mut units, |stage, units| {
             ctx.stage(stage);
             *units = Units::new(n);
-        })
+        })?;
+        // A depth-map preview is the threshold's picture's colors too, at the preview's threshold.
+        if let Some(key) = colors_key {
+            self.focus.keep_colors(&key, Arc::new(srgb8(&stacked.0.image)?));
+        }
+        Ok(stacked)
     }
 
     /// The key of the focus measured from the plan's frames with `depth`'s radius: everything it depends on, hashed.
@@ -1490,9 +1534,56 @@ canvas {} {} {:?}
         Ok((stats, true))
     }
 
+    /// The colors of the depth map that `stats` (the plan's frames' focus at a quarter of their size, measured with
+    /// `depth` reduced) make at `depth`'s threshold and smoothing, sRGB 8-bit: the session's ([`SharedFocus`], from
+    /// this or a depth-map preview) when it has them, or composited now on the CPU, a second pass over the frames'
+    /// quarter-size copies, each frame's progress one of `units`, and kept. Later thresholds reuse them: what a
+    /// threshold changes is mostly where the depth is filled, which the threshold's picture shows black.
+    pub(super) fn reduced_colors(
+        &mut self,
+        depth: &DepthSettings,
+        stats: Arc<FocusStats>,
+        ctx: &dyn Monitor,
+        units: &mut Units,
+    ) -> Result<Arc<Image<u8>>, CommandError> {
+        let key = self.focus_key(depth)?;
+        if let Some(colors) = self.focus.colors(&key) {
+            units.done = units.total;
+            return Ok(colors);
+        }
+        let reduced = Chosen::DepthMap(depth.reduced(PREVIEW_FACTOR as f64));
+        let (tiling, n) = (self.tiling.clone(), self.frames.len());
+        let mut feed = Warping { plan: self, range: 0..n, reduced: true };
+        let (stacked, _) = stack_cpu(&mut feed, &reduced, Some(stats), &tiling, ctx, ctx, units, |_, units| *units = Units::new(n))?;
+        let colors = Arc::new(srgb8(&stacked.image)?);
+        self.focus.keep_colors(&key, Arc::clone(&colors));
+        Ok(colors)
+    }
+
     pub(super) fn ids(&self) -> Vec<FrameId> {
         self.frames.iter().map(|f| f.id).collect()
     }
+}
+
+/// `image` (linear, in its profile's primaries) as 8-bit sRGB in sRGB's primaries, three channels: what a picture made
+/// to be looked at takes.
+fn srgb8(image: &Image<f32>) -> Result<Image<u8>, CommandError> {
+    use florastack_core::Sample as _;
+    let mut linear = image.clone();
+    crate::view::to_srgb_primaries(&mut linear);
+    let mut out = Image::new(linear.width(), linear.height(), 3, florastack_core::ColorSpace::SRGB).map_err(StackError::from)?;
+    let c = linear.channels().max(1);
+    for (from, to) in linear.rows().zip(out.rows_mut()) {
+        for (pixel, rgb) in from.chunks_exact(c).zip(to.as_chunks_mut::<3>().0) {
+            let at = |i: usize| pixel.get(if c >= 3 { i } else { 0 }).copied().unwrap_or(0.0);
+            for (i, v) in rgb.iter_mut().enumerate() {
+                let linear = at(i);
+                let linear = if linear.is_finite() { linear.clamp(0.0, 1.0) } else { 0.0 };
+                *v = u8::from_normalized(florastack_core::convert::linear_to_srgb(linear));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Progress through a stage: a unit for each frame a stacker reads.
@@ -2270,6 +2361,7 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
         };
         // The session keeps the latest preview, for the viewer: a job's result is JSON, which carries no pixels.
         Ok(commit(move |session: &mut Session| {
+            session.stack_previews.insert(previewed.method, std::sync::Arc::clone(&shown));
             session.stack_preview = Some(shown);
             Ok(previewed)
         }))

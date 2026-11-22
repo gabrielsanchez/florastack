@@ -45,6 +45,16 @@ pub struct OutputRow {
     /// rendered (`output.render`), again when the fingerprint changes.
     pub edits: u64,
     pub edited: bool,
+    /// The canvas it was stacked on (`output.list`'s), when known: two outputs compared are lined up by it.
+    pub canvas: Option<crate::viewer::Canvas>,
+}
+
+/// The canvas of an output as `output.list` gives it.
+fn canvas_of(listed: &Value) -> Option<crate::viewer::Canvas> {
+    let canvas = &listed["canvas"];
+    let size = |key: &str| canvas[key].as_u64().and_then(|v| usize::try_from(v).ok());
+    let to_master: [[f64; 3]; 2] = serde_json::from_value(canvas["toMaster"].clone()).ok()?;
+    Some(crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master })
 }
 
 /// A fingerprint of `value`'s JSON.
@@ -77,6 +87,11 @@ pub struct Shell {
     pub preview: Option<PathBuf>,
     /// The latest stack preview's pixels, when that is what `preview` names.
     pub preview_image: Option<Arc<florastack_engine::Image<f32>>>,
+    /// The latest stack preview of each method, by its name: with both methods chosen, the pyramid's and the depth
+    /// map's are shown side by side.
+    pub previews: std::collections::BTreeMap<String, Arc<florastack_engine::Image<f32>>>,
+    /// Each frame's crop at full size that `filmstrip.crop` made, by frame, as they come in.
+    pub film_crops: BTreeMap<u64, PathBuf>,
     /// Advances when a running capture replaces the contents at its preview path.
     pub preview_revision: u64,
     /// The output a stacking job just made, for the viewer to show.
@@ -134,6 +149,8 @@ impl Shell {
             notices: Vec::new(),
             preview: None,
             preview_image: None,
+            previews: std::collections::BTreeMap::new(),
+            film_crops: BTreeMap::new(),
             preview_revision: 0,
             made: None,
             stacks_found: None,
@@ -284,6 +301,8 @@ impl Shell {
                     if matches!(state, ProjectEvent::Opened | ProjectEvent::Closed) {
                         self.preview = None;
                         self.preview_image = None;
+                        self.previews.clear();
+                        self.film_crops.clear();
                         self.threshold = None;
                         self.relief = None;
                         self.previews_made.clear();
@@ -299,6 +318,10 @@ impl Shell {
                 Event::Partial { command, item, .. } => {
                     if command == "filmstrip.update" {
                         self.preview_made(&item);
+                    } else if command == "filmstrip.crop"
+                        && let (Some(frame), Some(path)) = (item["frame"].as_u64(), item["path"].as_str())
+                    {
+                        self.film_crops.insert(frame, PathBuf::from(path));
                     }
                 }
             }
@@ -350,6 +373,11 @@ impl Shell {
                     self.notify(message, true);
                 }
                 JobState::Done if job.command == "stack.preview" => {
+                    if let Some(method) = job.result.as_ref().and_then(|r| r["method"].as_str())
+                        && let Some(image) = self.engine.stack_preview_of(method)
+                    {
+                        self.previews.insert(method.to_owned(), image);
+                    }
                     self.preview_image = self.engine.stack_preview();
                     self.preview = self.preview_image.is_some().then(|| PathBuf::from("stack preview"));
                     self.preview_revision = self.preview_revision.saturating_add(1);
@@ -386,6 +414,7 @@ impl Shell {
     /// Reads the frame list and the outputs again, and asks for the frames' missing previews once per project.
     fn refresh(&mut self) {
         self.revision += 1;
+        let listed = self.engine.run("output.list", json!({})).unwrap_or(Value::Null);
         let Some(project) = self.engine.project() else {
             self.frames.clear();
             self.outputs.clear();
@@ -394,6 +423,7 @@ impl Shell {
             return;
         };
         let root = self.engine.project_path().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let canvas = |id: u64| listed["outputs"].as_array().and_then(|o| o.iter().find(|o| o["id"] == id)).and_then(canvas_of);
         self.outputs = project
             .outputs
             .iter()
@@ -405,6 +435,7 @@ impl Shell {
                 parameters: o.parameters.clone(),
                 edits: fingerprint(&(&o.retouch, &o.adjustments)),
                 edited: o.adjustments.is_some() || o.retouch.iter().any(|l| l.visible && !l.strokes.is_empty()),
+                canvas: canvas(o.id().get()),
             })
             .collect();
         self.stack_settings = self.engine.run("stack.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());

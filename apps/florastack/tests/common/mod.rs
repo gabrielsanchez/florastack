@@ -40,12 +40,19 @@ fn png_file(path: &Path, width: u32, height: u32, pixels: &[u8]) {
 /// A synthetic stack of four frames: four depth bands with a common low-frequency texture, and fine detail that comes
 /// into focus one band at a time (the CLI's tests' frames).
 pub fn frames(folder: &Path) -> Vec<PathBuf> {
+    shifted_frames(folder, 0)
+}
+
+/// [`frames`], each `shift` pixels right of and half that below the one before, so that the framings make different
+/// canvases.
+pub fn shifted_frames(folder: &Path, shift: u32) -> Vec<PathBuf> {
     std::fs::create_dir_all(folder).unwrap();
     (0..4)
         .map(|focus| {
             let mut pixels = Vec::new();
             for y in 0..72_u32 {
                 for x in 0..96_u32 {
+                    let (x, y) = if shift == 0 { (x, y) } else { (x + 8 - focus * shift, y + 8 - focus * shift / 2) };
                     let texture = (x * 7 + y * 13 + (x * y) % 29) % 60;
                     let detail = if x / 24 == focus { (x + y) % 2 * 65 } else { 32 };
                     let sample = u8::try_from(60 + texture + detail).unwrap();

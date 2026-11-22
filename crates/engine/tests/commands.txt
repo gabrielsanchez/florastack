@@ -55,6 +55,7 @@ export.reproduce
 export.reset
 export.run
 export.set
+filmstrip.crop
 filmstrip.list
 filmstrip.update
 job.cancel

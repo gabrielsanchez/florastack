@@ -232,6 +232,12 @@ pub fn write_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f3
     } else {
         image
     };
+    write_jpeg_preview(folder, stem, image, key)
+}
+
+/// Writes `image` (linear) as an 8-bit sRGB JPEG in `previews/`, at its own size: [`write_preview`] once reduced, and
+/// what a viewer shows at 100% (`filmstrip.crop`).
+pub fn write_jpeg_preview(folder: &impl AsRef<CacheDir>, stem: &str, image: &Image<f32>, key: Option<String>) -> Result<CacheRef, ProjectDataError> {
     let spec = OutputSpec {
         format: OutputFormat::Jpeg { quality: 85, subsampling: ChromaSubsampling::S420 },
         depth: BitDepth::U8,

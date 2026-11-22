@@ -130,6 +130,90 @@ fn wide_framing_leaves_the_pixels_no_frame_covers_transparent() {
 }
 
 #[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::cast_precision_loss)] // Small pixel positions.
+fn outputs_list_the_canvases_that_map_one_onto_the_other() {
+    let dir = TempDir::new("stack-canvases");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(6, 0.02, None, 29));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    let narrow = run(&mut engine, "stack.average", "{}")["output"].as_u64().unwrap();
+    run(&mut engine, "align.set", r#"{ "framing": "wide" }"#);
+    let wide = run(&mut engine, "stack.average", "{}")["output"].as_u64().unwrap();
+    let list = run(&mut engine, "output.list", "{}");
+    let canvas = |id: u64| list["outputs"].as_array().unwrap().iter().find(|o| o["id"] == id).unwrap()["canvas"].clone();
+    let map = |c: &serde_json::Value| {
+        let m: [[f64; 3]; 2] = serde_json::from_value(c["toMaster"].clone()).unwrap();
+        florastack_core::Affine { m }
+    };
+    let (narrow_canvas, wide_canvas) = (canvas(narrow), canvas(wide));
+    let (a, b) = (output_image(&engine, narrow), output_image(&engine, wide));
+    assert_eq!((narrow_canvas["width"].as_u64(), narrow_canvas["height"].as_u64()), (Some(a.width() as u64), Some(a.height() as u64)));
+    assert_eq!((wide_canvas["width"].as_u64(), wide_canvas["height"].as_u64()), (Some(b.width() as u64), Some(b.height() as u64)));
+    // The narrow output's center, found in the wide one through the master frame, shows the same scene; at the same
+    // pixel coordinates the wide one shows another place.
+    let to_wide = map(&narrow_canvas).then(&map(&wide_canvas).inverse().unwrap());
+    let (x, y) = (a.width() as f64 / 2.0, a.height() as f64 / 2.0);
+    let (u, v) = to_wide.apply(x, y);
+    let mean_difference = |(bx, by): (f64, f64)| {
+        let (mut sum, mut n) = (0.0, 0.0);
+        for j in -10..=10 {
+            for i in -10..=10 {
+                let at = |image: &Image<f32>, cx: f64, cy: f64| {
+                    image.pixel((cx.round() as i64 + i) as usize, (cy.round() as i64 + j) as usize).unwrap()[0]
+                };
+                sum += f64::from((at(&a, x, y) - at(&b, bx, by)).abs());
+                n += 1.0;
+            }
+        }
+        sum / n
+    };
+    let (mapped, unmapped) = (mean_difference((u, v)), mean_difference((x, y)));
+    assert!(mapped < 0.03 && mapped * 3.0 < unmapped, "through the canvases {mapped}, by pixels {unmapped}");
+}
+
+/// An 8-bit image file's samples, from 0 to 1.
+fn eight_bit(path: &str) -> Image<f32> {
+    match florastack_codecs::read_file(Path::new(path), &florastack_codecs::ReadOptions::default()).unwrap().image {
+        AnyImage::U8(image) => {
+            let values = image.as_raw().iter().map(|&v| f32::from(v) / 255.0).collect();
+            Image::from_vec(image.width(), image.height(), image.channels(), ColorSpace::SRGB, values).unwrap()
+        }
+        other => panic!("an 8-bit picture, not {:?}", other.format()),
+    }
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)] // Sums of a few thousand samples.
+fn filmstrip_crops_are_the_frames_aligned_at_full_size() {
+    let dir = TempDir::new("stack-film-crop");
+    // Each frame 2% larger than the one before: as shot, they don't line up.
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.02, None, 30));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    // Frames this small have previews at their own size, aligned or as shot: the crop of the whole canvas is the
+    // aligned preview at full quality.
+    let crops = run(&mut engine, "stack.preview", "{}");
+    let canvas = (crops["width"].as_u64().unwrap() * 4, crops["height"].as_u64().unwrap() * 4);
+    let crops = run(&mut engine, "filmstrip.crop", &format!(r#"{{ "width": {}, "height": {} }}"#, canvas.0.min(160), canvas.1.min(120)));
+    let film = run(&mut engine, "filmstrip.list", "{}");
+    let difference = |a: &Image<f32>, b: &Image<f32>| {
+        let n = a.as_raw().len().min(b.as_raw().len());
+        a.as_raw().iter().zip(b.as_raw()).map(|(x, y)| f64::from((x - y).abs())).sum::<f64>() / n as f64
+    };
+    for crop in crops["frames"].as_array().unwrap() {
+        let row = film["frames"].as_array().unwrap().iter().find(|f| f["frame"] == crop["frame"]).unwrap();
+        let image = eight_bit(crop["path"].as_str().unwrap());
+        let (aligned, shot) = (eight_bit(row["alignedPreview"].as_str().unwrap()), eight_bit(row["preview"].as_str().unwrap()));
+        assert_eq!((image.width(), image.height()), (aligned.width(), aligned.height()));
+        let (to_aligned, to_shot) = (difference(&image, &aligned), difference(&image, &shot));
+        assert!(to_aligned < 0.02, "frame {}: {to_aligned} from its aligned preview", crop["frame"]);
+        if row["master"] != true {
+            assert!(to_aligned * 2.0 < to_shot, "frame {}: {to_aligned} aligned, {to_shot} as shot", crop["frame"]);
+        }
+    }
+}
+
+#[test]
 fn the_preview_is_a_quarter_of_the_stack_and_changes_nothing() {
     let dir = TempDir::new("stack-preview");
     let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 23));
@@ -224,6 +308,75 @@ fn the_depth_maps_previews_and_threshold_share_the_focus_they_measured() {
     assert_eq!(run(&mut engine, "stack.threshold", "{}")["measured"], false, "the preview kept it for the threshold");
     // Another radius is another measurement.
     assert_eq!(run(&mut engine, "stack.threshold", r#"{ "radius": 3.0 }"#)["measured"], true);
+}
+
+#[test]
+fn previews_of_two_methods_both_finish_and_each_is_kept() {
+    let dir = TempDir::new("stack-two-previews");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 28));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    // Asked for one after the other, without waiting: neither cancels the other.
+    let pyramid = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "pyramid" }"#).unwrap());
+    let depth = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "depth-map" }"#).unwrap());
+    assert_eq!(engine.wait(pyramid).unwrap()["method"], "pyramid");
+    assert_eq!(engine.wait(depth).unwrap()["method"], "depth-map");
+    let (p, d) = (engine.stack_preview_of("pyramid").unwrap(), engine.stack_preview_of("depth-map").unwrap());
+    assert_eq!((p.width(), p.height()), (d.width(), d.height()));
+    assert_ne!(*p, *d, "each method's own");
+    assert_eq!(*engine.stack_preview().unwrap(), *d, "the latest is the one committed last");
+    assert!(engine.stack_preview_of("average").is_none());
+    // A newer preview of the same method still replaces the older.
+    let older = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "pyramid", "grit": 0.5 }"#).unwrap());
+    let newer = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "pyramid", "grit": 0.25 }"#).unwrap());
+    assert!(engine.job(older).unwrap().cancel_requested);
+    engine.wait(newer).unwrap();
+    // The previews go with the project.
+    run(&mut engine, "project.close", r#"{ "discardChanges": true }"#);
+    assert!(engine.stack_preview_of("pyramid").is_none());
+}
+
+/// The 8-bit RGBA pixels of a threshold picture.
+fn threshold_picture(shown: &serde_json::Value) -> Vec<u8> {
+    let path = PathBuf::from(shown["path"].as_str().unwrap());
+    match florastack_codecs::read_file(&path, &florastack_codecs::ReadOptions::default()).unwrap().image {
+        AnyImage::U8(image) => {
+            assert_eq!(image.channels(), 4, "RGB with alpha");
+            image.as_raw().to_vec()
+        }
+        other => panic!("an 8-bit picture, not {:?}", other.format()),
+    }
+}
+
+#[test]
+fn the_threshold_shows_the_depth_maps_colors_above_it_and_black_below() {
+    let dir = TempDir::new("stack-threshold-colors");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 27));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    let settings = r#"{ "threshold": "percentile", "percentile": 40 }"#;
+    // The colors composited by the threshold itself, at its first threshold.
+    let shown = run(&mut engine, "stack.threshold", settings);
+    let own = threshold_picture(&shown);
+    let pixels = own.as_chunks::<4>().0;
+    let black = pixels.iter().filter(|p| p[..3] == [0, 0, 0] && p[3] == 255).count();
+    let below = shown["below"].as_f64().unwrap();
+    assert!((black as f64 / pixels.len() as f64 - below).abs() < 0.01, "black where below: {black} of {} against {below}", pixels.len());
+    let colored = pixels.iter().filter(|p| p[0] != p[1] || p[1] != p[2]).count();
+    assert!(colored > pixels.len() / 4, "the stack's colors, not gray: {colored} of {}", pixels.len());
+    // A later threshold keeps those colors, and darkens more.
+    let more = run(&mut engine, "stack.threshold", r#"{ "threshold": "percentile", "percentile": 70 }"#);
+    assert_eq!(more["measured"], false);
+    for (a, b) in own.as_chunks::<4>().0.iter().zip(threshold_picture(&more).as_chunks::<4>().0) {
+        assert!(b[..3] == [0, 0, 0] || a == b, "{a:?} became {b:?}");
+    }
+    // The same colors from a depth-map preview at that threshold, in a project opened again.
+    let path = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.save", "{}");
+    run(&mut engine, "project.close", "{}");
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(&path)));
+    run(&mut engine, "stack.preview", r#"{ "method": "depth-map", "threshold": "percentile", "percentile": 40 }"#);
+    assert_eq!(threshold_picture(&run(&mut engine, "stack.threshold", settings)), own, "the preview's colors are the threshold's own");
 }
 
 #[test]

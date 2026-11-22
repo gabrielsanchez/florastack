@@ -107,6 +107,30 @@ struct OutputInfo {
     preview: bool,
     /// Its retouch layers, bottom first.
     layers: Vec<LayerInfo>,
+    /// The canvas it was stacked on, as the alignment it was stacked with framed it; left out when that alignment
+    /// isn't known (an output made before outputs recorded it). Two outputs of the same frames on different canvases
+    /// (another framing) show the same point where their maps to the master frame meet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canvas: Option<CanvasInfo>,
+}
+
+/// An output's canvas.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CanvasInfo {
+    /// Its size, in pixels: the output's.
+    width: usize,
+    height: usize,
+    /// The affine map from its pixels to the master frame's, `[[a, b, c], [d, e, f]]` (a pixel's center at `(x, y)`
+    /// is the master's `(a x + b y + c, d x + e y + f)`, pixel centers at whole numbers).
+    to_master: [[f64; 3]; 2],
+}
+
+/// `output`'s canvas, from the project state it was stacked from.
+fn canvas(output: &florastack_project::Output) -> Option<CanvasInfo> {
+    let stored = crate::project::stored_alignment(output.source_state.as_deref()?).ok().flatten()?;
+    let canvas = stored.canvas(crate::retouch::output_framing(output)).ok()?;
+    Some(CanvasInfo { width: canvas.width, height: canvas.height, to_master: canvas.to_master.m })
 }
 
 /// The outputs.
@@ -131,6 +155,7 @@ fn list(session: &Session, _: NoParams) -> Result<OutputList, CommandError> {
             maps: o.maps.keys().map(|m| m.as_str().to_owned()).collect(),
             preview: o.preview.is_some(),
             layers: o.retouch.iter().map(|l| LayerInfo { id: l.id(), name: l.name.clone(), visible: l.visible, strokes: l.strokes.len() }).collect(),
+            canvas: canvas(o),
         })
         .collect();
     Ok(OutputList { outputs })
