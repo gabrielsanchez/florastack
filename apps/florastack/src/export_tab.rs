@@ -285,8 +285,17 @@ fn alongside(app: &mut FloraStackApp, ui: &mut egui::Ui, depth_map: bool) {
 /// The size the export takes and the main file's name, asked of the engine once for each output and change.
 fn estimate(app: &mut FloraStackApp, ui: &mut egui::Ui, id: u64) {
     let key = (id, app.shell.revision);
+    // A measurement that ended makes a better estimate.
+    if std::mem::take(&mut app.shell.measured) {
+        app.export.estimate = None;
+    }
     if app.export.estimate.as_ref().is_none_or(|(k, _)| *k != key) {
         let estimate = app.shell.run("export.estimate", json!({ "output": id })).unwrap_or(Value::Null);
+        // A compressed file's size, guessed from typical compression: the output's own is measured, once for these
+        // settings.
+        if estimate["approximate"] == json!(true) && estimate["measured"] == json!(false) && !app.shell.running(&["export.measure"]) {
+            app.shell.run("export.measure", json!({ "output": id }));
+        }
         app.export.estimate = Some((key, estimate));
     }
     let Some((_, estimate)) = &app.export.estimate else { return };

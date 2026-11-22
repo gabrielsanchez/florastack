@@ -6,13 +6,14 @@
 use florastack_codecs::{
     BitDepth, ChromaSubsampling, DngCompression, DngLook, ExrCompression, OutputFormat, OutputProfile, OutputSpec, TiffCompression,
 };
+use florastack_core::{AnyImage, Monitor};
 use florastack_project::{Edit, FrameId, Group, OutputId, Preferences, Project, Table};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::check_path;
 use crate::error::{CommandError, Invalid};
-use crate::jobs::Lane;
+use crate::jobs::{JobPlan, Lane, commit};
 use crate::registry::{CommandSpec, Effects, Meta, NoParams, Params, Requires};
 use crate::retouch::output_frames;
 use crate::session::Session;
@@ -57,11 +58,28 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             Meta::new("export.estimate", "Estimate export size", "About how many bytes exporting an output will write, and in how many files.")
                 .help(
                     "From the output's size and the settings (the project's, or the ones given): exact for uncompressed \
-                     files, an estimate from typical compression otherwise, with the extras the settings ask for.",
+                     files, an estimate otherwise, with the extras the settings ask for. A compressed main file is \
+                     estimated from how well the output compressed with these settings when `export.measure` measured \
+                     it (`measured`), and else from typical compression, which can be off by half for an image that \
+                     compresses unusually well or badly.",
                 )
                 .requires(Requires::Project)
                 .examples(&[r#"{ "output": 3 }"#, r#"{ "output": 3, "settings": { "format": "jpeg", "depth": "u8" } }"#]),
             estimate,
+        ),
+        CommandSpec::job(
+            Meta::new("export.measure", "Measure export compression", "Measures how well an output compresses with the export settings.")
+                .help(
+                    "Writes nine crops of 256 x 256 pixels of the output, spread over it, with the settings (the \
+                     project's, or the ones given), and keeps how many bytes they took per byte of samples for this \
+                     output and these settings, for `export.estimate`, until the project closes. Runs beside other \
+                     jobs; a newer call for the same output replaces one still running.",
+                )
+                .requires(Requires::Project)
+                .supersede_by("output", "")
+                .examples(&[r#"{ "output": 3 }"#, r#"{ "output": 3, "settings": { "format": "png" } }"#]),
+            Lane::Preview,
+            measure,
         ),
         CommandSpec::job(
             Meta::new("export.run", "Export output", "Writes an output into a folder with the output settings, and its extras alongside.")
@@ -413,6 +431,100 @@ struct Estimate {
     approximate: bool,
     /// The main file's name.
     name: String,
+    /// Whether the main file's size comes from the output's own compression (`export.measure`), rather than typical
+    /// compression.
+    measured: bool,
+}
+
+/// How well an output compressed.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Measured {
+    /// The bytes written per byte of samples (at the settings' depth).
+    ratio: f64,
+}
+
+/// What measured compression is kept by: the output, its image and the spec.
+pub(crate) fn measure_key(session: &Session, id: OutputId, spec: OutputSpec) -> Result<String, CommandError> {
+    let project = session.project()?;
+    let output = project.output(id).ok_or(CommandError::NotFound { what: id.to_string() })?;
+    Ok(format!("{id} {} {spec:?}", output.image.hash))
+}
+
+/// The bytes of the samples of `pixels` pixels of `channels` at `depth`.
+#[allow(clippy::cast_precision_loss)] // A size, estimated.
+fn sample_bytes(pixels: u64, channels: u64, depth: BitDepth) -> f64 {
+    let sample = match depth {
+        BitDepth::U8 => 1.0,
+        BitDepth::U16 | BitDepth::F16 => 2.0,
+        BitDepth::F32 => 4.0,
+    };
+    pixels as f64 * channels as f64 * sample
+}
+
+/// The bytes of a DNG's preview of an image of `w` x `h` pixels written with `spec`: 8-bit RGB, uncompressed, at
+/// most 1024 pixels a side (florastack-codecs' DNG writer); none for another format or without a preview.
+fn dng_preview_bytes(w: u64, h: u64, spec: OutputSpec) -> u64 {
+    let OutputFormat::Dng { preview: true, .. } = spec.format else { return 0 };
+    let factor = w.max(h).div_ceil(1024).max(1);
+    (w / factor).max(1).saturating_mul((h / factor).max(1)).saturating_mul(3)
+}
+
+/// The side of the crops `export.measure` writes, and how many on each side of the grid they are spread on.
+const SAMPLE_SIDE: usize = 256;
+const SAMPLE_GRID: usize = 3;
+
+/// How many bytes `image` takes written with `spec` per byte of samples, from crops spread over it: each crop's file
+/// less what a file of a few pixels takes (the headers and the profile).
+fn sample_ratio(image: &AnyImage, spec: OutputSpec) -> Result<f64, CommandError> {
+    // A DNG's preview is a picture of the whole crop at this size, far more than of the whole image: measured
+    // without it, and counted apart (`dng_preview_bytes`).
+    let spec = match spec.format {
+        OutputFormat::Dng { compression, look, .. } => OutputSpec { format: OutputFormat::Dng { compression, look, preview: false }, ..spec },
+        _ => spec,
+    };
+    let (w, h, c) = (image.width(), image.height(), image.channels());
+    let side = SAMPLE_SIDE.min(w).min(h).max(1);
+    let written = |rect: florastack_core::Rect| -> Result<f64, CommandError> {
+        let crop = match image {
+            AnyImage::U8(i) => AnyImage::U8(i.crop(rect).map_err(florastack_stack::StackError::from)?),
+            AnyImage::U16(i) => AnyImage::U16(i.crop(rect).map_err(florastack_stack::StackError::from)?),
+            AnyImage::F32(i) => AnyImage::F32(i.crop(rect).map_err(florastack_stack::StackError::from)?),
+        };
+        let encoded = florastack_codecs::write(&crop, &spec, &florastack_codecs::OutputMetadata::default())?;
+        #[allow(clippy::cast_precision_loss)] // A file's size.
+        Ok(encoded.bytes.len() as f64)
+    };
+    let tiny = side.min(8);
+    let header = written(florastack_core::Rect::new(0, 0, tiny, tiny))?;
+    let (mut bytes, mut samples) = (0.0, 0.0);
+    for j in 0..SAMPLE_GRID {
+        for i in 0..SAMPLE_GRID {
+            let (x, y) = ((w - side) * i / (SAMPLE_GRID - 1), (h - side) * j / (SAMPLE_GRID - 1));
+            bytes += (written(florastack_core::Rect::new(x, y, side, side))? - header).max(0.0);
+            samples += sample_bytes((side * side) as u64, c as u64, spec.depth);
+        }
+    }
+    Ok(if samples > 0.0 { bytes / samples } else { 1.0 })
+}
+
+fn measure(session: &Session, p: EstimateParams) -> Result<JobPlan<Measured>, CommandError> {
+    let settings = merged(session, p.settings.as_ref().map(|s| &s.0))?;
+    let spec = settings.spec();
+    let key = measure_key(session, p.output, spec)?;
+    let mut notes = Vec::new();
+    let pixels = crate::commands::output::Pixels::of(session, p.output, None, spec, &mut notes)?;
+    let cache = session.cache_dir()?;
+    let job = JobPlan::new(move |ctx| {
+        let image = pixels.read(&cache, &mut notes)?;
+        ctx.checkpoint()?;
+        let ratio = sample_ratio(&image, spec)?;
+        Ok(commit(move |session: &mut Session| {
+            session.export_ratios.insert(key, ratio);
+            Ok(Measured { ratio })
+        }))
+    });
+    Ok(job.stages(&[("Measuring compression", 1.0)]))
 }
 
 /// The output's size in pixels and channels: from its canvas as the project's alignment frames it, else from its
@@ -446,27 +558,36 @@ fn file_bytes(pixels: u64, channels: u64, spec: OutputSpec) -> (u64, bool) {
         OutputFormat::Tiff { compression: TiffCompression::None } => (1.0, true),
         // A preview adds up to 3 MB.
         OutputFormat::Dng { compression: DngCompression::Uncompressed, preview, .. } => (1.0, !preview),
+        // Typical compression, until `export.measure` measures the output's own: what two real macro stacks of the
+        // corpus took (a ladybug and a spider, 17 and 5 frames; their smooth backgrounds compress well), each format's
+        // ratio between theirs. 8-bit samples compress much better than 16-bit ones, whose low bits are noise.
         OutputFormat::Dng { compression: DngCompression::Deflate, .. } => (0.85, false),
-        OutputFormat::Tiff { compression: TiffCompression::Lzw } => (0.75, false),
-        OutputFormat::Tiff { compression: TiffCompression::Deflate } | OutputFormat::Png => {
-            (if spec.depth == BitDepth::F32 { 0.85 } else { 0.6 }, false)
-        }
+        OutputFormat::Tiff { compression: TiffCompression::Lzw } => (if spec.depth == BitDepth::U8 { 0.35 } else { 0.85 }, false),
+        OutputFormat::Tiff { compression: TiffCompression::Deflate } => (
+            match spec.depth {
+                BitDepth::U8 => 0.25,
+                BitDepth::U16 | BitDepth::F16 => 0.72,
+                BitDepth::F32 => 0.85,
+            },
+            false,
+        ),
+        OutputFormat::Png => (if spec.depth == BitDepth::U8 { 0.3 } else { 0.8 }, false),
         OutputFormat::OpenExr { compression, half } => {
             let half = if half { 0.5 } else { 1.0 };
             let ratio = match compression {
                 ExrCompression::None => 1.0,
-                ExrCompression::Rle => 0.9,
-                ExrCompression::Zips | ExrCompression::Zip => 0.7,
-                ExrCompression::Piz => 0.65,
+                ExrCompression::Rle => 0.95,
+                ExrCompression::Zips | ExrCompression::Zip => 0.9,
+                ExrCompression::Piz => 0.85,
             };
             (ratio * half, compression == ExrCompression::None)
         }
-        OutputFormat::Dng { .. } => (0.55, false),
+        OutputFormat::Dng { .. } => (0.65, false),
         OutputFormat::Jpeg { quality, .. } => {
-            // Bits per pixel grow steeply with the quality: about 1 at 75, 3.5 at 95.
-            let q = f64::from(quality) / 100.0;
+            // Bits per pixel grow steeply with the quality: about 0.3 at 75 and 0.6 at 90 on those stacks.
+            let bits = 0.6 * (0.042 * (f64::from(quality) - 90.0)).exp();
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A size, estimated, positive.
-            return (((0.6 + 3.4 * q * q * q) * pixels as f64 / 8.0) as u64, false);
+            return ((bits * pixels as f64 / 8.0) as u64 + 4096, false);
         }
     };
     // The headers, the profile and the metadata: a few KiB, unless a camera's EXIF is large.
@@ -513,7 +634,14 @@ fn estimate(session: &Session, p: EstimateParams) -> Result<Estimate, CommandErr
     let settings = merged(session, p.settings.as_ref().map(|s| &s.0))?;
     let (w, h, channels) = output_shape(session, p.output)?;
     let pixels = w.saturating_mul(h);
-    let (mut bytes, mut exact) = file_bytes(pixels, channels, settings.spec());
+    let spec = settings.spec();
+    let (mut bytes, mut exact) = file_bytes(pixels, channels, spec);
+    let ratio = if exact { None } else { session.export_ratios.get(&measure_key(session, p.output, spec)?).copied() };
+    if let Some(ratio) = ratio {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A size, estimated, positive.
+        let measured = (sample_bytes(pixels, channels, spec.depth) * ratio) as u64 + 4096;
+        bytes = measured.saturating_add(dng_preview_bytes(w, h, spec));
+    }
     let mut files = 1;
     let project = session.project()?;
     let output = project.output(p.output).ok_or(CommandError::NotFound { what: p.output.to_string() })?;
@@ -554,7 +682,7 @@ fn estimate(session: &Session, p: EstimateParams) -> Result<Estimate, CommandErr
     bytes = bytes.saturating_add(sidecar.estimated_bytes()?).saturating_add((files as u64).saturating_mul(300));
     files += 1;
     let name = format!("{}.{}", file_name(&settings.template, &template_values(session, p.output)?), settings.format.extension());
-    Ok(Estimate { bytes, files, approximate: !exact, name })
+    Ok(Estimate { bytes, files, approximate: !exact, name, measured: ratio.is_some() })
 }
 
 /// An export.
@@ -623,7 +751,8 @@ mod tests {
         settings.format = FileFormat::Jpeg;
         settings.depth = BitDepth::U8;
         let (jpeg, exact) = file_bytes(24_000_000, 3, settings.spec());
-        assert!(!exact && (8_000_000..14_000_000).contains(&jpeg), "{jpeg}");
+        // Quality 95 on a macro stack, as the corpus's compress: under a bit per pixel.
+        assert!(!exact && (1_500_000..4_000_000).contains(&jpeg), "{jpeg}");
         assert!(OutputSettings { format: FileFormat::Jpeg, ..OutputSettings::default() }.validate().is_err(), "16-bit JPEG");
         assert!(OutputSettings::default().validate().is_ok());
     }

@@ -316,3 +316,30 @@ fn every_built_in_preset_is_valid_and_applies() {
     run(&mut engine, "project.new", "{}");
     assert_eq!(engine.dispatch_json("preset.apply", r#"{ "builtin": "underwater" }"#).unwrap_err().code(), "params");
 }
+
+#[test]
+fn an_estimate_from_the_outputs_measured_compression_is_near_what_is_written() {
+    let dir = TempDir::new("measured");
+    let mut engine = Engine::new(config(dir.path()));
+    let (pyramid, _) = stacked(&mut engine, dir.path(), 4);
+    let folder = dir.path().join("out");
+    let cases = [
+        json!({ "format": "tiff", "depth": "u16", "tiff_compression": "deflate" }),
+        json!({ "format": "tiff", "depth": "u16", "tiff_compression": "lzw" }),
+        json!({ "format": "png", "depth": "u8" }),
+        json!({ "format": "jpeg", "depth": "u8", "jpeg_quality": 90 }),
+        json!({ "format": "open-exr", "depth": "f32", "exr_compression": "zip" }),
+    ];
+    for (i, mut settings) in cases.into_iter().enumerate() {
+        settings["template"] = json!(format!("measured {i}"));
+        let params = json!({ "output": pyramid, "settings": settings }).to_string();
+        assert_eq!(run(&mut engine, "export.estimate", &params)["measured"], false, "{settings}");
+        assert!(run(&mut engine, "export.measure", &params)["ratio"].as_f64().unwrap() > 0.0);
+        let estimate = run(&mut engine, "export.estimate", &params);
+        assert_eq!(estimate["measured"], true, "{settings}");
+        let files = export(&mut engine, &pyramid, &folder, &settings);
+        let written: u64 = files.iter().map(|(p, _)| std::fs::metadata(p).unwrap().len()).sum();
+        let estimated = estimate["bytes"].as_u64().unwrap();
+        assert!(written.abs_diff(estimated) * 5 < written, "{settings}: estimated {estimated} bytes, wrote {written}");
+    }
+}

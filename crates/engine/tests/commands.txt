@@ -52,6 +52,7 @@ edit.redo
 edit.undo
 export.estimate
 export.get
+export.measure
 export.reproduce
 export.reset
 export.run

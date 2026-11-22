@@ -72,6 +72,9 @@ pub struct Session {
     /// the project.
     pub(crate) reduced_focus: crate::commands::stack::SharedFocus,
     /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
+    /// How well outputs compressed with export settings (`export.measure`), by `commands::export::measure_key`;
+    /// dropped with the project.
+    pub(crate) export_ratios: std::collections::BTreeMap<String, f64>,
     pub(crate) retouch: Option<crate::retouch::RetouchSession>,
     pub(crate) retouch_closed: bool,
     /// The frames whose warped images retouching kept or read, the most recently used first: what eviction keeps
@@ -127,6 +130,7 @@ impl Session {
             reduced_focus: crate::commands::stack::SharedFocus::default(),
             retouch: None,
             retouch_closed: false,
+            export_ratios: std::collections::BTreeMap::new(),
             source_use: Vec::new(),
             adjust: None,
             adjust_closed: false,
@@ -371,6 +375,7 @@ impl Session {
         self.stack_preview = None;
         self.stack_previews.clear();
         self.source_use.clear();
+        self.export_ratios.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
         self.reduced_focus = crate::commands::stack::SharedFocus::default();
         self.close_retouch();
@@ -436,6 +441,7 @@ impl Session {
         self.stack_preview = None;
         self.stack_previews.clear();
         self.source_use.clear();
+        self.export_ratios.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
         self.reduced_focus = crate::commands::stack::SharedFocus::default();
         let cleaned = if open.folder.is_read_only() {

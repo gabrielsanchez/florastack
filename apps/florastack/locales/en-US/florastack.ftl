@@ -495,7 +495,7 @@ export-estimate-about = About { $size } in { $files ->
     [one] one file
    *[other] { $files } files
 }
-tip-export-estimate = Compressed files' sizes depend on the picture: this is a guess.
+tip-export-estimate = Compressed files' sizes depend on the picture: the main file's is measured on a few crops of the output, which takes a moment, so it is close but not exact; the files alongside are a guess.
 export-overwrite = Replace files that exist
 tip-export-overwrite = Off, an export that would replace a file stops and says which.
 export-run = Export…

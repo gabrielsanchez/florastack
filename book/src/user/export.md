@@ -22,7 +22,9 @@ A 32-bit float DNG holds white at 1 and needs a raw converter that reads DNG 1.4
 
 **Retain extended range** (float files only) keeps the values the pyramid pushed beyond black and white, before they
 were brought back into range. The tab shows the size the export will take, and the name of the main file; an export
-that would replace a file stops and says which, unless **Replace files that exist** is on.
+that would replace a file stops and says which, unless **Replace files that exist** is on. A compressed file's size
+depends on the picture: the tab first shows a typical size, then, a moment later, one measured on a few crops of the
+output written with the settings, usually within a fifth of what is written.
 
 Every export also writes a JSON *sidecar* beside the image (`<file>.json`) that records the software version, every
 setting and the inputs' hashes, from which `florastack-cli reproduce` makes the same image again.
