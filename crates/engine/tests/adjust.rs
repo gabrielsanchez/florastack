@@ -446,3 +446,20 @@ fn an_output_renders_as_it_is_written_and_is_kept() {
     run(&mut engine, "adjust.reset", &json!({"output": output}).to_string());
     assert_eq!(render(&mut engine)["how"], "stacked");
 }
+
+#[test]
+fn files_are_written_from_the_result_rendered_before() {
+    let dir = TempDir::new("adjust-reuse");
+    let (mut engine, output) = stacked(dir.path());
+    let image = run(&mut engine, "output.render", &json!({"output": output}).to_string())["path"].as_str().unwrap().to_owned();
+    run(&mut engine, "adjust.set", &json!({"output": output, "adjustments": {"global": {"clarity": 30}}}).to_string());
+    let mask = json!({"components": [{"shape": {"kind": "linear", "start": [0, 0.3], "end": [0, 0.6]}}], "adjust": {"exposure": -1}});
+    run(&mut engine, "adjust.addMask", &json!({"output": output, "mask": mask}).to_string());
+    let (first, second) = (dir.path().join("first.tif"), dir.path().join("second.tif"));
+    saved(&mut engine, output, &first);
+    assert_eq!(run(&mut engine, "output.render", &json!({"output": output}).to_string())["how"], "rendered");
+    // Without the stacked image, only the result kept can give the file.
+    std::fs::remove_file(&image).unwrap();
+    saved(&mut engine, output, &second);
+    assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap(), "the same bytes as rendering again");
+}
