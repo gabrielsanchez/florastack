@@ -37,7 +37,7 @@ pub use codec::{Codecs, Decoded, Encoded, FileInfo, ImageDecoder, ImageEncoder, 
 pub use color::{ColorEngine, ColorHint, CurveKind, LightCraftColor, NamedSpace, Primaries, Profile, StandardCurve};
 pub use error::{BackendError, CodecError, MetadataKind, Warning};
 pub use format::{Format, sniff};
-pub use metadata::{ExifSummary, Metadata, OutputMetadata, PreparedMetadata, Timestamp, read_metadata};
+pub use metadata::{ExifSummary, Metadata, OutputMetadata, PreparedMetadata, Timestamp, read_metadata, read_metadata_file};
 pub use options::{
     BitDepth, ChromaSubsampling, DngCompression, DngLook, ExrCompression, OrientationPolicy, OutputFormat, OutputProfile, OutputSpec, ReadOptions,
     TiffCompression, WideSpace,

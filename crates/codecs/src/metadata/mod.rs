@@ -9,7 +9,10 @@
 
 pub(crate) mod exif;
 pub(crate) mod iptc;
+mod sparse;
 pub(crate) mod xmp;
+
+pub use sparse::read_metadata_file;
 
 use std::sync::Arc;
 
