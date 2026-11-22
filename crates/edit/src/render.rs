@@ -54,11 +54,15 @@ pub struct Request {
     pub overlay: Option<u32>,
     /// Renders only this part of the image `size` gives (a zoomed view), its pixels as in the whole render.
     pub window: Option<Window>,
+    /// Renders on the GPU when LightCraft's GPU renderer can ([`crate::gpu`]), and on the CPU otherwise: for
+    /// previews, as its samples differ from the CPU's by a fraction of an 8-bit step (`tests/gpu.rs`). Files are
+    /// rendered on the CPU, the same on every machine.
+    pub gpu: bool,
 }
 
 impl Request {
     /// The full-size render, as an export writes it.
-    pub const FULL: Request = Request { size: Size::Full, draft: false, overlay: None, window: None };
+    pub const FULL: Request = Request { size: Size::Full, draft: false, overlay: None, window: None, gpu: false };
 }
 
 /// A rectangle of a render's pixels: its top left corner and its size.
@@ -95,6 +99,8 @@ pub struct Renderer {
     /// The stack's depth map, from 0 (the first frame) to 1 (the last).
     depth: Option<Arc<Plane>>,
     cache: StageCache,
+    /// How many renders the GPU made.
+    on_gpu: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl std::fmt::Debug for Renderer {
@@ -140,6 +146,7 @@ impl Renderer {
             subject: Arc::default(),
             depth: None,
             cache: StageCache::default(),
+            on_gpu: Arc::default(),
         })
     }
 
@@ -167,6 +174,7 @@ impl Renderer {
             subject: Arc::clone(&self.subject),
             depth: Some(Arc::new(plane)),
             cache: StageCache::default(),
+            on_gpu: Arc::clone(&self.on_gpu),
         })
     }
 
@@ -183,6 +191,11 @@ impl Renderer {
 
     pub fn width(&self) -> usize {
         self.source.width
+    }
+
+    /// How many renders of this image the GPU made ([`Request::gpu`]), the renderers made from this one included.
+    pub fn gpu_renders(&self) -> u64 {
+        self.on_gpu.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The image's id: another for every image, the same for a renderer made from this one with a depth map.
@@ -252,7 +265,10 @@ impl Renderer {
             window: window.map(|w| PixelWindow { x: w.x, y: w.y, w: w.width, h: w.height }),
             display: None,
         };
-        let rendered = lightcraft_pipeline::render_cached(&self.source, &info, &settings, &req, &self.cache);
+        let rendered = match self.on_gpu(request.gpu, &info, &settings, &req) {
+            Some(rendered) => rendered,
+            None => lightcraft_pipeline::render_cached(&self.source, &info, &settings, &req, &self.cache),
+        };
         if let Some(deep) = rendered.deep {
             let lightcraft_pipeline::DeepSamples::F32(samples) = deep.samples else {
                 return Err(EditError::image("the pipeline gave integer samples for a float render"));
@@ -264,6 +280,26 @@ impl Renderer {
         let image = rendered.image;
         let samples: Vec<f32> = image.data.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| trc.decode(f32::from(v) / 255.0))).collect();
         self.placed(&samples, (image.width, image.height), (w, h), window)
+    }
+
+    /// `req` rendered on the GPU, when `gpu` asks for it and the GPU renders it; `None` otherwise. Its float render is
+    /// the HDR one, which with HDR off (always, here) is the linear float render the CPU makes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_gpu(&self, gpu: bool, info: &SourceInfo, settings: &DevelopSettings, req: &RenderRequest) -> Option<lightcraft_pipeline::Rendered> {
+        if !gpu {
+            return None;
+        }
+        let depth = if req.depth == OutputDepth::F32Linear { OutputDepth::F32Hdr } else { req.depth };
+        let rendered = lightcraft_gpu::try_render(&self.source, info, settings, &RenderRequest { depth, ..*req }, Some(&self.cache)).ok()?;
+        self.on_gpu.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(rendered)
+    }
+
+    /// The browser build renders on the CPU (LightCraft's GPU renderer has no WebGPU device there).
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)] // The native version's signature.
+    fn on_gpu(&self, _: bool, _: &SourceInfo, _: &DevelopSettings, _: &RenderRequest) -> Option<lightcraft_pipeline::Rendered> {
+        None
     }
 
     /// [`Renderer::assemble`] for a render of `got` pixels asked for at `full` size, or of `window` of it.

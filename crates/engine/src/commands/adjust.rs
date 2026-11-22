@@ -143,7 +143,8 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             Meta::new("adjust.preview", "Preview adjustments", "Renders the output open for adjusting with its adjustments, reduced to fit a view.")
                 .help(
                     "The preview fits in `width` by `height` pixels (never enlarged), or is the `window` of that \
-                     preview a zoomed view shows. When the output's retouch strokes \
+                     preview a zoomed view shows. It renders on the GPU unless `compute.set` chose the CPU, and on the \
+                     CPU when the GPU can't. When the output's retouch strokes \
                      changed since it was read, it is read again first. `draft` renders quickly while a \
                      slider moves, skipping the most expensive refinements; `overlay` shows a mask's region tinted red; \
                      `before` also renders the output without its adjustments at the same size, for comparing. \
@@ -760,7 +761,9 @@ fn preview(session: &Session, p: PreviewParams) -> Result<JobPlan<Previewed>, Co
     let (renderer, working, id) = (Arc::clone(&open.renderer), Arc::clone(&open.working), open.output);
     let size = Size::Fit { width: p.width, height: p.height };
     let window = p.window.map(|w| florastack_edit::Window { x: w.x, y: w.y, width: w.width, height: w.height });
-    let request = Request { size, draft: p.draft, overlay: p.overlay, window };
+    // On the GPU unless the preference is the CPU: a preview needn't be the same on every machine.
+    let gpu = session.compute().device != crate::compute::Device::Cpu;
+    let request = Request { size, draft: p.draft, overlay: p.overlay, window, gpu };
     let with_before = p.before;
     let job = JobPlan::new(move |ctx| {
         let reread = match reading {

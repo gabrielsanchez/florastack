@@ -33,7 +33,10 @@ fn main() -> ExitCode {
         }
     };
     let json_progress = cli.json_progress;
-    match execute(cli) {
+    let result = execute(cli);
+    // No GPU work may be in flight when the process ends.
+    florastack_engine::end_gpu_work(std::time::Duration::from_secs(2));
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => {
             report_error(&failure, json_progress);

@@ -161,6 +161,9 @@ lightcraft-develop = { git = "https://github.com/storytold/lightcraft", rev = "1
 lightcraft-raster = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
 # The points that florastack-edit's linear and radial masks and brush strokes are given to the develop pipeline as.
 lightcraft-geom = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
+# The develop pipeline on the GPU (wgpu compute, with the CPU pipeline as its reference), for florastack-edit's
+# previews; it brings LightCraft's face-model crate (pure Rust, for its convolutions), which FloraStack never calls.
+lightcraft-gpu = { git = "https://github.com/storytold/lightcraft", rev = "192ff72923c39e6623f2c7ff67ab3a119deb8071" }
 # SAM 3 inference (florastack-sam, adapted from LightCraft's lightcraft-segment), pinned as LightCraft pins them: later
 # releases pull `tokenizers` with the Oniguruma C library into candle-core. Without default features: no CUDA, no MKL,
 # nothing compiled from C.
