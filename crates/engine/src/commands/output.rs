@@ -500,10 +500,12 @@ impl Pixels {
             (None, _) => output.image.clone(),
         };
         // The result rendered before, which is what painting and adjusting again would give, bit for bit.
-        if reuse && map.is_none() && image == output.image {
-            if let Some(result) = cached_result(output)? {
-                return Ok(Pixels { image: result.clone(), base: result, retouched: None, adjust: None, depth: None });
-            }
+        if reuse
+            && map.is_none()
+            && image == output.image
+            && let Some(result) = cached_result(output)?
+        {
+            return Ok(Pixels { image: result.clone(), base: result, retouched: None, adjust: None, depth: None });
         }
         // A retouched output is written with its visible strokes: the result open for retouching, the result cached,
         // or the strokes painted again.

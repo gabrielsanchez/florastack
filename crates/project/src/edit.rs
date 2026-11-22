@@ -425,6 +425,19 @@ impl Edit {
         }
     }
 
+    /// The output whose own fields the edit changes: its name, annotations, adjustments or maps.
+    fn own_output(&self) -> Option<OutputId> {
+        match self {
+            Edit::RenameOutput { output, .. }
+            | Edit::SetAnnotations { output, .. }
+            | Edit::SetAdjustments { output, .. }
+            | Edit::PushAdjustment { output, .. }
+            | Edit::PopAdjustment { output, .. }
+            | Edit::SetOutputMap { output, .. } => Some(*output),
+            _ => None,
+        }
+    }
+
     /// Whether the edit sets a value whole: applied after `earlier`, which set the same value, it leaves no trace of
     /// it. The engine uses it to keep the undo step of a slider drag small: of the inverses of a run of such edits,
     /// only the oldest matters.
@@ -451,9 +464,19 @@ impl Edit {
     }
 }
 
+/// The list that `pointer` names in output `output`'s `adjustments`.
+fn adjustment_list<'a>(adjustments: &'a mut Option<Value>, output: OutputId, pointer: &str) -> Result<&'a mut Vec<Value>, EditError> {
+    adjustments
+        .as_mut()
+        .and_then(|a| a.pointer_mut(pointer))
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| EditError::NoList { output, pointer: pointer.to_owned() })
+}
+
 impl Project {
     /// Makes `edit` and returns its inverse, or changes nothing and returns why it can't be made. See the module
     /// documentation.
+    #[allow(clippy::too_many_lines)] // One arm for each kind of edit.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, EditError> {
         match edit {
             Edit::Batch(edits) => self.apply_batch(edits),
@@ -521,9 +544,12 @@ impl Project {
                 let output = self.outputs.remove(index);
                 Ok(Edit::InsertOutput { index, output: Box::new(output) })
             }
-            edit @ (Edit::RenameOutput { .. } | Edit::SetAnnotations { .. } | Edit::SetAdjustments { .. } | Edit::SetOutputMap { .. }) => {
-                self.apply_to_output(edit)
-            }
+            edit @ (Edit::RenameOutput { .. }
+            | Edit::SetAnnotations { .. }
+            | Edit::SetAdjustments { .. }
+            | Edit::PushAdjustment { .. }
+            | Edit::PopAdjustment { .. }
+            | Edit::SetOutputMap { .. }) => self.apply_to_output(edit),
             Edit::AddLayer { output, name } => {
                 check_name("retouch layer name", &name)?;
                 let layer = self.add_layer(output, &name).ok_or(EditError::NoOutput(output))?;
@@ -544,14 +570,6 @@ impl Project {
                 let stroke = self.layer_mut(output, layer)?.strokes.pop().ok_or(EditError::NoStroke { output, layer })?;
                 Ok(Edit::PushStroke { output, layer, stroke })
             }
-            Edit::PushAdjustment { output, pointer, value } => {
-                self.adjustment_list(output, &pointer)?.push(value);
-                Ok(Edit::PopAdjustment { output, pointer })
-            }
-            Edit::PopAdjustment { output, pointer } => {
-                let value = self.adjustment_list(output, &pointer)?.pop().ok_or_else(|| EditError::NoList { output, pointer: pointer.clone() })?;
-                Ok(Edit::PushAdjustment { output, pointer, value })
-            }
             Edit::SetLayerVisible { output, layer, visible } => {
                 let l = self.layer_mut(output, layer)?;
                 Ok(Edit::SetLayerVisible { output, layer, visible: std::mem::replace(&mut l.visible, visible) })
@@ -563,25 +581,9 @@ impl Project {
         }
     }
 
-    /// The list that `pointer` names in an output's adjustments.
-    fn adjustment_list(&mut self, output: OutputId, pointer: &str) -> Result<&mut Vec<Value>, EditError> {
-        let o = self.output_mut(output).ok_or(EditError::NoOutput(output))?;
-        o.adjustments
-            .as_mut()
-            .and_then(|a| a.pointer_mut(pointer))
-            .and_then(Value::as_array_mut)
-            .ok_or_else(|| EditError::NoList { output, pointer: pointer.to_owned() })
-    }
-
     /// Makes an edit of one output's own fields: its name, annotations, adjustments and maps.
     fn apply_to_output(&mut self, edit: Edit) -> Result<Edit, EditError> {
-        let output = match &edit {
-            Edit::RenameOutput { output, .. }
-            | Edit::SetAnnotations { output, .. }
-            | Edit::SetAdjustments { output, .. }
-            | Edit::SetOutputMap { output, .. } => *output,
-            other => return self.apply(other.clone()),
-        };
+        let Some(output) = edit.own_output() else { return self.apply(edit) };
         if let Edit::RenameOutput { name, .. } = &edit {
             check_name("output name", name)?;
         }
@@ -591,6 +593,14 @@ impl Project {
             Edit::SetAnnotations { layers, .. } => Edit::SetAnnotations { output, layers: std::mem::replace(&mut o.annotations, layers) },
             Edit::SetAdjustments { adjustments, .. } => {
                 Edit::SetAdjustments { output, adjustments: std::mem::replace(&mut o.adjustments, adjustments) }
+            }
+            Edit::PushAdjustment { pointer, value, .. } => {
+                adjustment_list(&mut o.adjustments, output, &pointer)?.push(value);
+                Edit::PopAdjustment { output, pointer }
+            }
+            Edit::PopAdjustment { pointer, .. } => {
+                let value = adjustment_list(&mut o.adjustments, output, &pointer)?.pop().ok_or_else(|| EditError::NoList { output, pointer: pointer.clone() })?;
+                Edit::PushAdjustment { output, pointer, value }
             }
             Edit::SetOutputMap { name, map, .. } => {
                 let old = match map {
