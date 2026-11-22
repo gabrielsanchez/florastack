@@ -368,8 +368,8 @@ impl FloraStackApp {
         app
     }
 
-    /// Hands the machine's settings the preferences remember to the engine: the device, the memory budget and the
-    /// cache folder, each only when one is set.
+    /// Hands the machine's settings the preferences remember to the engine: the device, the memory budget, the cache
+    /// folder and the retouch sources' disk limit, each only when one is set.
     fn apply_saved(&mut self) {
         let mut compute = serde_json::Map::new();
         if let Some(device) = self.prefs.device {
@@ -384,6 +384,15 @@ impl FloraStackApp {
         if let Some(folder) = self.prefs.cache_folder.clone() {
             self.set_cache_folder(&folder);
         }
+        if let Some(mb) = self.prefs.source_limit_mb {
+            self.set_source_limit(mb);
+        }
+    }
+
+    /// Limits the disk the frames warped for retouching take in a project's cache to `mb` MiB
+    /// (`cache.setSourceLimit`); whether the engine took it.
+    pub(crate) fn set_source_limit(&mut self, mb: u32) -> bool {
+        self.shell.run("cache.setSourceLimit", json!({ "bytes": u64::from(mb) << 20 })).is_some()
     }
 
     /// Puts temporary projects and spilled tiles in `folder` (`cache.setFolder`); whether it could.

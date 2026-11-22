@@ -28,6 +28,7 @@ batch.run files
 cache.info none
 cache.removeAbandoned files
 cache.setFolder files
+cache.setSourceLimit project
 calibration.get none
 calibration.set files
 capture.calculate none

@@ -133,7 +133,13 @@ impl Engine {
     /// An engine with the commands of `registry` (the standard ones and a test's, say).
     pub fn with_registry(config: EngineConfig, registry: Arc<Registry>) -> Engine {
         let jobs = Jobs::new(config.executor, config.clock, config.waker, config.max_heavy_jobs, config.max_preview_jobs);
-        let host = Host { temporary_projects: config.temporary_projects, trash: config.trash, compute: config.compute, tiling: config.tiling };
+        let host = Host {
+            temporary_projects: config.temporary_projects,
+            trash: config.trash,
+            compute: config.compute,
+            tiling: config.tiling,
+            source_limit: crate::retouch::DEFAULT_SOURCE_LIMIT,
+        };
         Engine { registry, session: Session::new(host, jobs), subscribers: Vec::new() }
     }
 

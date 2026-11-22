@@ -198,3 +198,48 @@ fn two_outputs_render_side_by_side() {
     assert_eq!((a["output"].as_u64(), b["output"].as_u64()), (Some(pyramid), Some(depth)));
     assert_ne!(a["path"], b["path"], "each output's own result");
 }
+
+/// Frame `id`'s warped image kept in the cache, if any.
+fn aligned_of(engine: &Engine, id: u64) -> Option<florastack_engine::model::CacheRef> {
+    engine.project().unwrap().frames.iter().find(|f| f.id().get() == id).unwrap().aligned.clone()
+}
+
+/// The source as the viewer gets it: half floats of every pixel.
+fn source(engine: &Engine) -> Vec<u16> {
+    let view = engine.retouch().unwrap();
+    let (w, h) = view.size();
+    view.source_pixels(Rect::new(0, 0, w, h), 1).unwrap().unwrap().0.rgba
+}
+
+#[test]
+fn warped_frames_beyond_the_limit_go_least_recently_used_first_and_come_back_the_same() {
+    let dir = TempDir::new("retouch-evict");
+    let (mut engine, pyramid, _, frames) = stacked(dir.path());
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let set = |engine: &mut Engine, frame: u64| run(engine, "retouch.setSource", &format!(r#"{{ "frame": {frame} }}"#))["loaded"].clone();
+    assert_eq!(set(&mut engine, frames[0]), "decoded");
+    let first = source(&engine);
+    let size = run(&mut engine, "cache.info", "{}")["retouchSources"]["bytes"].as_u64().unwrap();
+    assert!(size > 0);
+    // Room for one warped frame, not two.
+    let limit = size + size / 2;
+    assert_eq!(run(&mut engine, "cache.setSourceLimit", &format!(r#"{{ "bytes": {limit} }}"#))["evicted"], serde_json::json!([]));
+    let evicted_file = aligned_of(&engine, frames[0]).unwrap().path.resolve(engine.project_path().unwrap());
+    assert!(evicted_file.is_file());
+    assert_eq!(set(&mut engine, frames[1]), "decoded");
+    assert!(aligned_of(&engine, frames[0]).is_none(), "the least recently used goes");
+    assert!(!evicted_file.exists(), "and its file with it");
+    assert!(aligned_of(&engine, frames[1]).is_some(), "the one used last stays");
+    let info = run(&mut engine, "cache.info", "{}");
+    assert_eq!(info["retouchSources"]["frames"], 1, "{info}");
+    // Two more frames push the first out of memory too; it is then warped again, to the same pixels.
+    set(&mut engine, frames[2]);
+    set(&mut engine, frames[3]);
+    assert_eq!(set(&mut engine, frames[0]), "decoded");
+    assert!(source(&engine) == first, "an evicted frame comes back the same");
+    // A limit of 0 keeps only the frame used last.
+    let evicted = run(&mut engine, "cache.setSourceLimit", r#"{ "bytes": 0 }"#)["evicted"].clone();
+    assert_eq!(evicted, serde_json::json!([]), "one frame is all there is");
+    set(&mut engine, frames[1]);
+    assert_eq!(run(&mut engine, "cache.info", "{}")["retouchSources"]["frames"], 1);
+}

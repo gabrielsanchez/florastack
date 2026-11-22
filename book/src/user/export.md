@@ -85,8 +85,9 @@ keys, and `develop.get`, `align.get`, `stack.get` and `export.get` show them all
 - **Processing**: the GPU when it passes its test, the CPU only, or any GPU (software ones too, for testing); **Test the
   GPU** runs its self-test again, after a driver update for example.
 - **Cache**: where temporary projects and stacking's work on disk go, how much each takes, after how many days
-  unused a temporary project is offered for the trash, and **Clean up**, which removes what crashed stacks left
-  behind.
+  unused a temporary project is offered for the trash, how much disk the frames warped for retouching may take in a
+  project's cache (4 GiB by default; the least recently used go beyond it), and **Clean up**, which removes what
+  crashed stacks left behind.
 - **Autosave**: saves the project a few minutes after the first unsaved change (0 for never).
 - **Appearance**: the theme (dark or light, also Ctrl+Shift+T) and the language.
 - **Display profile**: how the viewer's colors are made for your monitor. **Automatic** uses the profile your system

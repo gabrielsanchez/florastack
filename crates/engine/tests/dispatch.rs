@@ -97,6 +97,9 @@ fn every_command_dispatches_from_json() {
     assert!(calls.run("cache.removeAbandoned", "{}")["removed"].is_array());
     let caches = calls.run("cache.info", "{}");
     assert!(caches["project"]["bytes"].is_u64() && caches["tiles"]["folder"].is_string(), "{caches}");
+    assert_eq!(caches["retouchSources"]["limit"], 4u64 << 30, "{caches}");
+    assert_eq!(calls.run("cache.setSourceLimit", r#"{ "bytes": 1073741824 }"#)["limit"], 1u64 << 30);
+    assert_eq!(calls.run("cache.info", "{}")["retouchSources"]["limit"], 1u64 << 30);
     // Presets shipped with FloraStack, applied by id.
     let built_in = calls.run("preset.list", "{}");
     assert_eq!(built_in["presets"].as_array().unwrap().len(), 4, "{built_in}");

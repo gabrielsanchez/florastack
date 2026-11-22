@@ -14,7 +14,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.setMaster`](#alignsetmaster), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
-| [cache](#cache) | [`cache.info`](#cacheinfo), [`cache.removeAbandoned`](#cacheremoveabandoned), [`cache.setFolder`](#cachesetfolder) |
+| [cache](#cache) | [`cache.info`](#cacheinfo), [`cache.removeAbandoned`](#cacheremoveabandoned), [`cache.setFolder`](#cachesetfolder), [`cache.setSourceLimit`](#cachesetsourcelimit) |
 | [calibration](#calibration) | [`calibration.get`](#calibrationget), [`calibration.set`](#calibrationset) |
 | [capture](#capture) | [`capture.calculate`](#capturecalculate), [`capture.camera`](#capturecamera), [`capture.info`](#captureinfo), [`capture.rail`](#capturerail), [`capture.run`](#capturerun) |
 | [compute](#compute) | [`compute.info`](#computeinfo), [`compute.set`](#computeset), [`compute.test`](#computetest) |
@@ -968,6 +968,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `project` | object | The open project's `cache/` and `previews/` folders; none without a project. |
+| `retouchSources` | object | The frames warped for retouching, which count in `project`, and their limit (`cache.setSourceLimit`). |
 | `temporaryProjects` | object | Temporary projects; none when the engine has no folder for them. |
 | `tiles` | object | Tiles of running stacks, and of crashed runs. In the system's temporary directory, only FloraStack's tile folders count. |
 
@@ -1023,6 +1024,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `project` | object | The open project's `cache/` and `previews/` folders; none without a project. |
+| `retouchSources` | object | The frames warped for retouching, which count in `project`, and their limit (`cache.setSourceLimit`). |
 | `temporaryProjects` | object | Temporary projects; none when the engine has no folder for them. |
 | `tiles` | object | Tiles of running stacks, and of crashed runs. In the system's temporary directory, only FloraStack's tile folders count. |
 
@@ -1030,6 +1032,36 @@ Example:
 
 ```json
 {"folder":"D:/FloraStack cache"}
+```
+
+### `cache.setSourceLimit`
+
+**Set retouch source limit.** Limits the disk the frames warped for retouching take in the project's cache.
+
+A frame used as a retouch source is warped onto the output's canvas and kept in the project's cache at 32 bits a sample (about 300 MB for 24 MP), so that it is read rather than decoded and warped again. Beyond `bytes`, the least recently used are removed, at once and whenever another is kept; the one used last stays whatever its size. A frame removed so is warped again when it is needed, to the same pixels: nothing painted changes. 4 GiB by default. For this engine; it isn't stored in the project.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | No | Nothing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `bytes` | integer, from 0 to 1125899906842624 | **Required.** In bytes: 0 keeps only the frame used last. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `evicted` | array of integer |  |
+| `limit` | integer |  |
+
+Examples:
+
+```json
+{"bytes":4294967296}
+{"bytes":0}
 ```
 
 ## calibration

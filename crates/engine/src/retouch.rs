@@ -34,6 +34,9 @@ pub(crate) const RETOUCHED: &str = "retouched";
 pub(crate) const SHARPEST: &str = "sharpest";
 /// How many sources stay in memory.
 const KEPT_SOURCES: usize = 3;
+/// How much disk the frames warped for retouching may take in a project's cache, by default: 4 GiB, about 13 frames
+/// of 24 MP (each is kept at 32 bits a sample, with its coverage).
+pub const DEFAULT_SOURCE_LIMIT: u64 = 4 << 30;
 /// In the sharpest map, a point no frame covers.
 pub(crate) const NO_FRAME: u16 = u16::MAX;
 
@@ -561,13 +564,86 @@ impl Session {
             session.touched(Some(region));
             session.unsaved = true;
             for (frame, reference) in cached {
-                if let Err(e) = self.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) }) {
+                if let Err(e) = self.keep_aligned(frame, reference) {
                     tracing::debug!("the warped frame isn't kept: {e}");
                 }
             }
         }
         session.painted = strokes;
         self.retouch = Some(session);
+    }
+
+    /// Keeps `reference` as frame `frame`'s warped image, then evicts the least recently used others beyond the
+    /// limit ([`Session::evict_sources`]).
+    pub(crate) fn keep_aligned(&mut self, frame: FrameId, reference: CacheRef) -> Result<(), CommandError> {
+        self.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) })?;
+        self.used_source(frame);
+        self.evict_sources();
+        Ok(())
+    }
+
+    /// Notes that frame `frame`'s warped image was used: the last to be evicted.
+    pub(crate) fn used_source(&mut self, frame: FrameId) {
+        self.source_use.retain(|f| *f != frame);
+        self.source_use.insert(0, frame);
+    }
+
+    /// Removes frames' warped images from the cache, the least recently used first (those not used since the project
+    /// opened before any, in the frame list's order), until they take no more than the limit, keeping the one used
+    /// last whatever its size. An evicted frame is warped again when a stroke or the source needs it, to the same
+    /// pixels, so nothing painted changes. Returns the frames evicted.
+    pub(crate) fn evict_sources(&mut self) -> Vec<FrameId> {
+        let limit = self.host.source_limit;
+        let Ok(project) = self.project() else { return Vec::new() };
+        let kept: Vec<(FrameId, CacheRef)> = project.frames.iter().filter_map(|f| Some((f.id(), f.aligned.clone()?))).collect();
+        let mut total: u64 = kept.iter().map(|(_, r)| r.size).fold(0, u64::saturating_add);
+        if total <= limit {
+            return Vec::new();
+        }
+        let rank = |frame: &FrameId| self.source_use.iter().position(|f| f == frame);
+        let mut order: Vec<&(FrameId, CacheRef)> = kept.iter().filter(|(f, _)| self.source_use.first() != Some(f)).collect();
+        // Never used this session first, then from the least recently used; a stable sort keeps the frame order.
+        order.sort_by_key(|(f, _)| std::cmp::Reverse(rank(f).unwrap_or(usize::MAX)));
+        let mut evicted = Vec::new();
+        let root = self.cache_dir().ok().map(|c| c.path().to_path_buf());
+        for (frame, reference) in order {
+            if total <= limit {
+                break;
+            }
+            evicted.push((*frame, reference.clone()));
+            total = total.saturating_sub(reference.size);
+        }
+        let mut frames = Vec::new();
+        for (frame, reference) in evicted {
+            if let Err(e) = self.apply_system(Edit::SetAlignedImage { frame, aligned: None }) {
+                tracing::debug!("{frame}'s warped image isn't evicted: {e}");
+                continue;
+            }
+            // The file goes at once: a reference to it that comes back (an undo restoring the frame) only fails to
+            // read, and the frame is warped again.
+            if let Some(root) = &root
+                && let Err(e) = florastack_core::fs::remove_file(reference.path.resolve(root))
+            {
+                tracing::debug!("{frame}'s evicted warped image can't be removed now: {e}");
+            }
+            self.source_use.retain(|f| *f != frame);
+            frames.push(frame);
+        }
+        if !frames.is_empty() {
+            tracing::debug!("evicted the warped images of {} frames, beyond the limit of {limit} bytes", frames.len());
+        }
+        frames
+    }
+
+    /// The limit of the frames' warped images in the cache, in bytes.
+    pub(crate) fn source_limit(&self) -> u64 {
+        self.host.source_limit
+    }
+
+    /// Changes the limit of the frames' warped images in the cache, evicting what is beyond it now.
+    pub(crate) fn set_source_limit(&mut self, bytes: u64) -> Vec<FrameId> {
+        self.host.source_limit = bytes;
+        self.evict_sources()
     }
 
     /// Caches the retouched result, if the session has strokes the cache doesn't: when the project is saved and when

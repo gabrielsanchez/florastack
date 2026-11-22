@@ -1,6 +1,7 @@
 //! Files kept outside the project and what the caches hold: removing the tile folders of runs that crashed
-//! (`cache.removeAbandoned`, which the desktop app does at startup), how much the caches take (`cache.info`), and the
-//! folder that holds temporary projects and spilled tiles (`cache.setFolder`).
+//! (`cache.removeAbandoned`, which the desktop app does at startup), how much the caches take (`cache.info`), the
+//! folder that holds temporary projects and spilled tiles (`cache.setFolder`), and how much disk the frames warped for
+//! retouching may take (`cache.setSourceLimit`).
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,23 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                 .effects(Effects::Files)
                 .examples(&[r#"{ "folder": "D:/FloraStack cache" }"#]),
             set_folder,
+        ),
+        CommandSpec::instant(
+            Meta::new(
+                "cache.setSourceLimit",
+                "Set retouch source limit",
+                "Limits the disk the frames warped for retouching take in the project's cache.",
+            )
+            .help(
+                "A frame used as a retouch source is warped onto the output's canvas and kept in the project's \
+                     cache at 32 bits a sample (about 300 MB for 24 MP), so that it is read rather than decoded and \
+                     warped again. Beyond `bytes`, the least recently used are removed, at once and whenever another \
+                     is kept; the one used last stays whatever its size. A frame removed so is warped again when it is \
+                     needed, to the same pixels: nothing painted changes. 4 GiB by default. For this engine; it isn't \
+                     stored in the project.",
+            )
+            .examples(&[r#"{ "bytes": 4294967296 }"#, r#"{ "bytes": 0 }"#]),
+            set_source_limit,
         ),
     ]
 }
@@ -175,6 +193,17 @@ struct CacheInfo {
     tiles: FolderSize,
     /// The open project's `cache/` and `previews/` folders; none without a project.
     project: Option<FolderSize>,
+    /// The frames warped for retouching, which count in `project`, and their limit (`cache.setSourceLimit`).
+    retouch_sources: SourceSizes,
+}
+
+/// What the frames warped for retouching take in the open project's cache, and the most they may.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct SourceSizes {
+    frames: usize,
+    bytes: u64,
+    limit: u64,
 }
 
 /// The size of the files under `path`, following no links; 0 for what can't be read.
@@ -211,7 +240,9 @@ fn info(session: &Session, _: NoParams) -> Result<CacheInfo, CommandError> {
         folder: display(root),
         bytes: size_of(&root.join("cache"), None).saturating_add(size_of(&root.join("previews"), None)),
     });
-    Ok(CacheInfo { temporary_projects, tiles, project })
+    let kept: Vec<u64> = session.project().map(|p| p.frames.iter().filter_map(|f| f.aligned.as_ref().map(|r| r.size)).collect()).unwrap_or_default();
+    let retouch_sources = SourceSizes { frames: kept.len(), bytes: kept.iter().copied().fold(0, u64::saturating_add), limit: session.source_limit() };
+    Ok(CacheInfo { temporary_projects, tiles, project, retouch_sources })
 }
 
 /// The cache folder.
@@ -239,6 +270,37 @@ fn set_folder(session: &mut Session, p: FolderParams) -> Result<CacheInfo, Comma
     tiling.spill_dir = Some(tiles);
     session.set_tiling(tiling);
     info(session, NoParams::default())
+}
+
+/// The most the frames warped for retouching may take.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SourceLimitParams {
+    /// In bytes: 0 keeps only the frame used last.
+    #[schemars(range(max = 1_125_899_906_842_624u64))]
+    bytes: u64,
+}
+
+impl Params for SourceLimitParams {
+    fn check(&self) -> Result<(), Invalid> {
+        if self.bytes > 1 << 50 {
+            return Err(Invalid::new("bytes", "is at most 1 PiB"));
+        }
+        Ok(())
+    }
+}
+
+/// The limit set, and the frames whose warped images went to keep within it.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct SourceLimitSet {
+    limit: u64,
+    evicted: Vec<florastack_project::FrameId>,
+}
+
+fn set_source_limit(session: &mut Session, p: SourceLimitParams) -> Result<SourceLimitSet, CommandError> {
+    let evicted = session.set_source_limit(p.bytes);
+    Ok(SourceLimitSet { limit: p.bytes, evicted })
 }
 
 #[cfg(test)]

@@ -28,6 +28,7 @@ batch.run
 cache.info
 cache.removeAbandoned
 cache.setFolder
+cache.setSourceLimit
 calibration.get
 calibration.set
 capture.calculate

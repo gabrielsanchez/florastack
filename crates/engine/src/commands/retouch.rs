@@ -214,7 +214,7 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
             let project = session.project()?;
             let left_out = project.output(id).map(|o| crate::retouch::left_out(project, o)).unwrap_or_default();
             for (frame, reference) in aligned {
-                session.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) })?;
+                session.keep_aligned(frame, reference)?;
             }
             session.retouch = Some(RetouchSession {
                 output: id,
@@ -333,8 +333,10 @@ fn set_source(session: &Session, p: SourceParams) -> Result<JobPlan<SourceSet>, 
             (None, None) => return Err(CommandError::Internal { command: "retouch.setSource".to_owned() }),
         };
         Ok(commit(move |session: &mut Session| {
-            if let Some((frame, reference)) = cached {
-                session.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) })?;
+            match (cached, source) {
+                (Some((frame, reference)), _) => session.keep_aligned(frame, reference)?,
+                (None, Source::Frame(frame)) => session.used_source(frame),
+                (None, Source::Output(_)) => {}
             }
             let open = session.retouch.as_mut().filter(|s| s.output == output).ok_or_else(|| CommandError::Unavailable {
                 command: "retouch.setSource".to_owned(),

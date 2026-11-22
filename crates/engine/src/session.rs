@@ -24,6 +24,8 @@ pub(crate) struct Host {
     pub(crate) compute: Compute,
     /// How stacks keep their working data: the memory they may take, and where tiles beyond it go.
     pub(crate) tiling: florastack_stack::Tiling,
+    /// How much disk the frames warped for retouching may take in a project's cache (`cache.setSourceLimit`).
+    pub(crate) source_limit: u64,
 }
 
 /// An open project.
@@ -45,7 +47,7 @@ struct Current {
 
 /// What a command sees of the engine. See the module documentation.
 pub struct Session {
-    host: Host,
+    pub(crate) host: Host,
     /// User settings stay at the startup location even when the scratch cache is moved.
     pub(crate) calibration_path: Option<PathBuf>,
     open: Option<Open>,
@@ -72,6 +74,9 @@ pub struct Session {
     /// The output open for retouching (`crate::retouch`), and whether a session closed since an app last asked.
     pub(crate) retouch: Option<crate::retouch::RetouchSession>,
     pub(crate) retouch_closed: bool,
+    /// The frames whose warped images retouching kept or read, the most recently used first: what eviction keeps
+    /// longest (`crate::retouch`).
+    pub(crate) source_use: Vec<florastack_project::FrameId>,
     /// The output open for adjusting (`crate::adjust`), and whether a session closed since an app last asked.
     pub(crate) adjust: Option<crate::adjust::AdjustSession>,
     pub(crate) adjust_closed: bool,
@@ -122,6 +127,7 @@ impl Session {
             reduced_focus: crate::commands::stack::SharedFocus::default(),
             retouch: None,
             retouch_closed: false,
+            source_use: Vec::new(),
             adjust: None,
             adjust_closed: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -364,6 +370,7 @@ impl Session {
         self.film_crops.clear();
         self.stack_preview = None;
         self.stack_previews.clear();
+        self.source_use.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
         self.reduced_focus = crate::commands::stack::SharedFocus::default();
         self.close_retouch();
@@ -428,6 +435,7 @@ impl Session {
         self.film_crops.clear();
         self.stack_preview = None;
         self.stack_previews.clear();
+        self.source_use.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
         self.reduced_focus = crate::commands::stack::SharedFocus::default();
         let cleaned = if open.folder.is_read_only() {

@@ -17,6 +17,9 @@ use crate::prefs::{DEFAULT_AUTOSAVE_MINUTES, Theme};
 
 /// The memory budgets the dialog allows, in MiB.
 const MEMORY_RANGE: std::ops::RangeInclusive<u32> = 256..=262_144;
+/// The retouch sources' disk limits the dialog allows, in MiB (up to 1 TiB), and the engine's default.
+const SOURCE_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 0..=1_048_576;
+pub const DEFAULT_SOURCE_LIMIT_MB: u32 = 4096;
 
 /// The Preferences dialog's state: what it shows and what the user changes, applied by OK.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +33,8 @@ pub struct Form {
     opened: (u32, Device, String),
     /// Days unused before a temporary project is offered for the trash.
     pub orphan_days: u32,
+    /// The disk the frames warped for retouching may take in a project's cache, in MiB (`cache.setSourceLimit`).
+    pub source_limit_mb: u32,
     pub autosave_minutes: u32,
     pub theme: Theme,
     pub language: String,
@@ -56,6 +61,7 @@ impl Form {
             opened: (memory_mb, device, cache_folder.clone()),
             cache_folder,
             orphan_days: app.prefs.orphan_days.unwrap_or(Orphans::DEFAULT_DAYS),
+            source_limit_mb: app.prefs.source_limit_mb.unwrap_or(DEFAULT_SOURCE_LIMIT_MB),
             autosave_minutes: app.prefs.autosave_minutes.unwrap_or(DEFAULT_AUTOSAVE_MINUTES),
             theme: app.prefs.theme,
             language: app.prefs.language.clone().unwrap_or_else(|| crate::i18n::LANGUAGES[0].0.to_owned()),
@@ -237,8 +243,19 @@ fn cache(app: &mut FloraStackApp, ui: &mut egui::Ui, form: &mut Form) {
     })
     .response
     .on_hover_text(tr("tip-orphan-days"));
+    ui.horizontal(|ui| {
+        ui.label(tr("prefs-source-limit"));
+        ui.add(egui::DragValue::new(&mut form.source_limit_mb).range(SOURCE_LIMIT_RANGE).speed(64).suffix(" MiB"));
+    })
+    .response
+    .on_hover_text(tr("tip-source-limit"));
     let size = |key: &str| form.caches[key]["bytes"].as_u64().map(crate::export_tab::size_text);
-    let rows = [("prefs-cache-projects", size("temporaryProjects")), ("prefs-cache-tiles", size("tiles")), ("prefs-cache-project", size("project"))];
+    let rows = [
+        ("prefs-cache-projects", size("temporaryProjects")),
+        ("prefs-cache-tiles", size("tiles")),
+        ("prefs-cache-project", size("project")),
+        ("prefs-cache-sources", size("retouchSources")),
+    ];
     egui::Grid::new("prefs.caches").show(ui, |ui| {
         for (label, size) in rows {
             if let Some(size) = size {
@@ -284,6 +301,13 @@ impl FloraStackApp {
                 && self.set_cache_folder(&target)
             {
                 self.prefs.cache_folder = (!folder.is_empty()).then(|| PathBuf::from(folder));
+            } else {
+                applied = false;
+            }
+        }
+        if form.source_limit_mb != self.prefs.source_limit_mb.unwrap_or(DEFAULT_SOURCE_LIMIT_MB) {
+            if self.set_source_limit(form.source_limit_mb) {
+                self.prefs.source_limit_mb = (form.source_limit_mb != DEFAULT_SOURCE_LIMIT_MB).then_some(form.source_limit_mb);
             } else {
                 applied = false;
             }

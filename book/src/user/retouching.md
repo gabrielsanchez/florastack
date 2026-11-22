@@ -78,7 +78,9 @@ see.
   and later sessions reliable.
 - When the project is saved (and when another output is opened for retouching), the retouched result is cached with
   the output, so that opening it again needs no recomputation. Frames used as sources are cached too, warped onto the
-  output's canvas, so that they are read rather than decoded again.
+  output's canvas, so that they are read rather than decoded again. They take about 300 MB each at 24 MP, so beyond
+  4 GiB (**Preferences > Cache**) the least recently used are removed; one needed again is warped again, to the same
+  pixels.
 - Exporting a retouched output (Export tab, `output.save`) writes it with its visible strokes.
 - A stroke whose source has left the project (a frame removed, or no longer aligned; an output removed) can't be
   painted again. The result on screen may still show it, but undo, hiding a layer, exporting and reopening without the
