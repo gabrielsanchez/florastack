@@ -154,4 +154,4 @@ The thumbnails are small, so movement of a few pixels doesn't show in them. Zoom
 
 ## Outputs
 
-Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared. Outputs stacked with different framings line up by what they show, not by their pixels.
+Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared. Outputs stacked with different framings line up by what they show, not by their pixels. Outputs with retouch strokes or adjustments are shown, alone or compared, as they will be written: with them.

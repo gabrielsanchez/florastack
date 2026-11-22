@@ -80,6 +80,8 @@ pub enum ViewError {
     Reduce(#[source] florastack_align::AlignError),
     #[error("the display profile can't be used")]
     Profile(#[source] florastack_codecs::CodecError),
+    #[error("the retouch session's images can't be read")]
+    Retouch(#[source] Box<crate::error::CommandError>),
 }
 
 /// The display transform for the monitor profile `icc`, as a table of [`LUT_SIZE`] points a side: an error for a

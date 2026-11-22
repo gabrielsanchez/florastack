@@ -28,6 +28,7 @@ batch.run
 cache.info
 cache.removeAbandoned
 cache.setFolder
+cache.setSourceLimit
 calibration.get
 calibration.set
 capture.calculate
@@ -96,6 +97,7 @@ retouch.mapFocus
 retouch.open
 retouch.paint
 retouch.removeLayer
+retouch.repaint
 retouch.setLayerVisible
 retouch.setSource
 retouch.sharpest

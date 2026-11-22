@@ -48,12 +48,16 @@ same framing can be a source.
   together. The brush's circle shows at the same point in both.
 - **The source.** Pick a frame or another output in the panel. Or Ctrl+click a point of the output, and the source
   becomes the frame where that point is sharpest. With **Follow the sharpest frame** on, resting the pointer on a point
-  does the same.
+  does the same. While a frame loads at full size, its small aligned preview stands in for it in the left view
+  (without its brightness matched), so that you see at once which frame is coming.
 - **Painting.** Drag on the output to paint; the stroke shows as you draw it and becomes one undo step when you let go.
   Pan with the middle or right button, or with Space and the left button; zoom with the wheel. `[` and `]` make the
   brush smaller and larger.
 - **Layers.** Strokes go into the layer picked in the panel, or the top one; the first stroke makes "Layer 1". Hide a
   layer to see the output without its strokes.
+- **Undo and redo** paint the strokes again where they changed. When a stroke there paints from a frame that is no
+  longer in memory (FloraStack keeps the last three sources), the frame is loaded in the background first, which takes
+  a few seconds: the output view says so, and the brush waits until it is done.
 
 ## Brushes
 
@@ -77,5 +81,13 @@ see.
   and later sessions reliable.
 - When the project is saved (and when another output is opened for retouching), the retouched result is cached with
   the output, so that opening it again needs no recomputation. Frames used as sources are cached too, warped onto the
-  output's canvas, so that they are read rather than decoded again.
+  output's canvas, so that they are read rather than decoded again. They take about 300 MB each at 24 MP, so beyond
+  4 GiB (**Preferences > Cache**) the least recently used are removed; one needed again is warped again, to the same
+  pixels.
 - Exporting a retouched output (Export tab, `output.save`) writes it with its visible strokes.
+- A stroke whose source has left the project (a frame removed, or no longer aligned; an output removed) can't be
+  painted again. The result on screen may still show it, but undo, hiding a layer, exporting and reopening without the
+  cached result paint the strokes again without it. The Layers section says which layer's strokes are affected and
+  why; adding the frame back and aligning again brings them back.
+- The views show an output at full size up to twice the GPU's largest texture (16384 pixels on most GPUs), tiling it
+  beyond that texture; a larger output is shown reduced.

@@ -141,6 +141,9 @@ pub struct Prefs {
     pub device: Option<Device>,
     /// The cache folder: temporary projects and spilled tiles; `None` for the app's local data folder.
     pub cache_folder: Option<PathBuf>,
+    /// The disk the frames warped for retouching may take in a project's cache, in MiB; `None` for the engine's 4 GiB
+    /// (`cache.setSourceLimit`).
+    pub source_limit_mb: Option<u32>,
     /// Days a temporary project must be unused before it is offered for the trash; `None` for the engine's 30.
     pub orphan_days: Option<u32>,
     /// Minutes between a project's first unsaved change and its autosave, 0 for none; `None` for the default.

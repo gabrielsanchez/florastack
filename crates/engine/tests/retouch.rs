@@ -144,3 +144,215 @@ fn the_result_opens_again_with_no_recomputation_and_exports_retouched() {
     assert_eq!(opened["rendered"], "painted", "{opened}");
     assert_eq!(result(&engine), painted);
 }
+
+#[test]
+fn strokes_whose_frame_is_removed_are_named_as_left_out() {
+    let dir = TempDir::new("retouch-left-out");
+    let (mut engine, pyramid, depth, frames) = stacked(dir.path());
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let from_frame = format!(r#""source": {{ "frame": {} }},"#, frames[1]);
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[1]));
+    for samples in ["[[30, 30, 1], [60, 40, 1]]", "[[90, 70, 1]]"] {
+        run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &from_frame, samples)));
+    }
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "output": {depth} }}"#));
+    run(
+        &mut engine,
+        "retouch.stroke",
+        &format!(r#"{{ "stroke": {} }}"#, stroke("details", &format!(r#""source": {{ "output": {depth} }},"#), "[[20, 90, 1]]")),
+    );
+    assert_eq!(engine.retouch().unwrap().left_out(), [], "every source is there");
+
+    run(&mut engine, "project.removeFrames", &format!(r#"{{ "frames": [{}] }}"#, frames[1]));
+    let left_out = engine.retouch().unwrap().left_out().to_vec();
+    assert_eq!(left_out.len(), 1, "{left_out:?}");
+    let gone = &left_out[0];
+    assert_eq!((gone.strokes, gone.why), (2, florastack_engine::retouch::Gone::FrameRemoved));
+    assert!(matches!(gone.source, florastack_engine::RetouchSource::Frame(id) if id.get() == frames[1]), "{gone:?}");
+    // Undoing the removal brings the source back.
+    run(&mut engine, "edit.undo", "{}");
+    assert_eq!(engine.retouch().unwrap().left_out(), [], "the frame is back");
+    // A source output removed is named too.
+    run(&mut engine, "output.remove", &format!(r#"{{ "output": {depth} }}"#));
+    let left_out = engine.retouch().unwrap().left_out().to_vec();
+    assert_eq!(left_out.iter().map(|l| (l.strokes, l.why)).collect::<Vec<_>>(), [(1, florastack_engine::retouch::Gone::OutputRemoved)]);
+}
+
+#[test]
+fn two_outputs_render_side_by_side() {
+    let dir = TempDir::new("retouch-render-two");
+    let (mut engine, pyramid, depth, frames) = stacked(dir.path());
+    // A stroke on each output.
+    for output in [pyramid, depth] {
+        run(&mut engine, "retouch.open", &format!(r#"{{ "output": {output} }}"#));
+        run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[0]));
+        let source = format!(r#""source": {{ "frame": {} }},"#, frames[0]);
+        run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &source, "[[30, 30, 1], [100, 60, 1]]")));
+    }
+    run(&mut engine, "retouch.close", "{}");
+    // Asked for one after the other, without waiting: neither cancels the other.
+    let first = common::job_of(engine.dispatch_json("output.render", &format!(r#"{{ "output": {pyramid} }}"#)).unwrap());
+    let second = common::job_of(engine.dispatch_json("output.render", &format!(r#"{{ "output": {depth} }}"#)).unwrap());
+    assert!(!engine.job(first).is_some_and(|j| j.cancel_requested), "the other output's render goes on");
+    let (a, b) = (engine.wait(first).unwrap(), engine.wait(second).unwrap());
+    assert_eq!((a["output"].as_u64(), b["output"].as_u64()), (Some(pyramid), Some(depth)));
+    assert_ne!(a["path"], b["path"], "each output's own result");
+}
+
+/// Frame `id`'s warped image kept in the cache, if any.
+fn aligned_of(engine: &Engine, id: u64) -> Option<florastack_engine::model::CacheRef> {
+    engine.project().unwrap().frames.iter().find(|f| f.id().get() == id).unwrap().aligned.clone()
+}
+
+/// The source as the viewer gets it: half floats of every pixel.
+fn source(engine: &Engine) -> Vec<u16> {
+    let view = engine.retouch().unwrap();
+    let (w, h) = view.size();
+    view.source_pixels(Rect::new(0, 0, w, h), 1).unwrap().unwrap().0.rgba
+}
+
+#[test]
+fn warped_frames_beyond_the_limit_go_least_recently_used_first_and_come_back_the_same() {
+    let dir = TempDir::new("retouch-evict");
+    let (mut engine, pyramid, _, frames) = stacked(dir.path());
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let set = |engine: &mut Engine, frame: u64| run(engine, "retouch.setSource", &format!(r#"{{ "frame": {frame} }}"#))["loaded"].clone();
+    assert_eq!(set(&mut engine, frames[0]), "decoded");
+    let first = source(&engine);
+    let size = run(&mut engine, "cache.info", "{}")["retouchSources"]["bytes"].as_u64().unwrap();
+    assert!(size > 0);
+    // Room for one warped frame, not two.
+    let limit = size + size / 2;
+    assert_eq!(run(&mut engine, "cache.setSourceLimit", &format!(r#"{{ "bytes": {limit} }}"#))["evicted"], serde_json::json!([]));
+    let evicted_file = aligned_of(&engine, frames[0]).unwrap().path.resolve(engine.project_path().unwrap());
+    assert!(evicted_file.is_file());
+    assert_eq!(set(&mut engine, frames[1]), "decoded");
+    assert!(aligned_of(&engine, frames[0]).is_none(), "the least recently used goes");
+    assert!(!evicted_file.exists(), "and its file with it");
+    assert!(aligned_of(&engine, frames[1]).is_some(), "the one used last stays");
+    let info = run(&mut engine, "cache.info", "{}");
+    assert_eq!(info["retouchSources"]["frames"], 1, "{info}");
+    // Two more frames push the first out of memory too; it is then warped again, to the same pixels.
+    set(&mut engine, frames[2]);
+    set(&mut engine, frames[3]);
+    assert_eq!(set(&mut engine, frames[0]), "decoded");
+    assert!(source(&engine) == first, "an evicted frame comes back the same");
+    // A limit of 0 keeps only the frame used last.
+    let evicted = run(&mut engine, "cache.setSourceLimit", r#"{ "bytes": 0 }"#)["evicted"].clone();
+    assert_eq!(evicted, serde_json::json!([]), "one frame is all there is");
+    set(&mut engine, frames[1]);
+    assert_eq!(run(&mut engine, "cache.info", "{}")["retouchSources"]["frames"], 1);
+}
+
+/// A saved project in `dir` with an aligned stack, stacked by pyramid and by depth map: its folder, the two outputs and
+/// the frames.
+fn saved_stack(dir: &Path) -> (std::path::PathBuf, u64, u64, Vec<u64>) {
+    let (mut engine, pyramid, depth, frames) = stacked(dir);
+    run(&mut engine, "project.save", "{}");
+    let folder = engine.project_path().unwrap().to_path_buf();
+    run(&mut engine, "project.close", "{}");
+    (folder, pyramid, depth, frames)
+}
+
+/// What retouching the project in `folder` gives with `tiling`: the result as shown after each step, reduced by 3 at
+/// the end, and the cached result's 32-bit samples.
+fn retouched_with(
+    dir: &Path,
+    folder: &Path,
+    (pyramid, depth, frames): (u64, u64, &[u64]),
+    tiling: florastack_engine::Tiling,
+) -> (Vec<Vec<u16>>, Vec<u32>) {
+    let mut engine = Engine::new(florastack_engine::EngineConfig { tiling, ..config(dir) });
+    run(&mut engine, "project.open", &format!(r#"{{ "path": {} }}"#, quoted(folder)));
+    let mut shown = Vec::new();
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let from_frame = format!(r#""source": {{ "frame": {} }},"#, frames[1]);
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[1]));
+    let big = r#"{ "brush": "details", SOURCE "size": 70, "hardness": 0.2, "opacity": 0.9, "samples": [[5, 10, 1], [150, 60, 0.7], [20, 110, 1]] }"#;
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, big.replace("SOURCE ", &from_frame)));
+    shown.push(result(&engine));
+    // Drawn live in pieces, then committed.
+    let live = |samples: &str| stroke("lighten", &from_frame, samples);
+    run(&mut engine, "retouch.paint", &format!(r#"{{ "begin": true, "stroke": {} }}"#, live("[[100, 100, 1]]")));
+    run(&mut engine, "retouch.paint", &format!(r#"{{ "stroke": {} }}"#, live("[[60, 20, 0.8], [10, 50, 1]]")));
+    shown.push(result(&engine));
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, live("[[100, 100, 1], [60, 20, 0.8], [10, 50, 1]]")));
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "output": {depth} }}"#));
+    let from_depth = format!(r#""source": {{ "output": {depth} }},"#);
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("details", &from_depth, "[[80, 60, 1], [140, 20, 1]]")));
+    shown.push(result(&engine));
+    // Cancelled part way, undone, hidden and shown.
+    run(&mut engine, "retouch.paint", &format!(r#"{{ "begin": true, "stroke": {} }}"#, stroke("pixels", &from_depth, "[[0, 0, 1], [159, 119, 1]]")));
+    run(&mut engine, "retouch.cancelPaint", "{}");
+    shown.push(result(&engine));
+    run(&mut engine, "edit.undo", "{}");
+    shown.push(result(&engine));
+    let layer = engine.project().unwrap().outputs.iter().find(|o| o.id().get() == pyramid).unwrap().retouch[0].id().get();
+    run(&mut engine, "retouch.setLayerVisible", &format!(r#"{{ "output": {pyramid}, "layer": {layer}, "visible": false }}"#));
+    shown.push(result(&engine));
+    run(&mut engine, "retouch.setLayerVisible", &format!(r#"{{ "output": {pyramid}, "layer": {layer}, "visible": true }}"#));
+    shown.push(result(&engine));
+    shown.push(engine.retouch().unwrap().result(Rect::new(0, 0, 160, 120), 3).unwrap().0.rgba);
+    // The result cached when the session closes, read back.
+    run(&mut engine, "retouch.close", "{}");
+    let output = engine.project().unwrap().outputs.iter().find(|o| o.id().get() == pyramid).unwrap().clone();
+    let cached = output.maps.iter().find(|(name, _)| name.as_str() == "retouched").unwrap().1.path.resolve(engine.project_path().unwrap());
+    let read = florastack_codecs::read_file(&cached, &florastack_codecs::ReadOptions::default()).unwrap().image;
+    let bits = read.into_image::<f32>().unwrap().as_raw().iter().map(|v| v.to_bits()).collect();
+    run(&mut engine, "project.close", r#"{ "discardChanges": true }"#);
+    (shown, bits)
+}
+
+#[test]
+fn retouching_in_small_tiles_spilled_to_disk_gives_the_same_bits() {
+    let dir = TempDir::new("retouch-tiles");
+    let (folder, pyramid, depth, frames) = saved_stack(dir.path());
+    let ids = (pyramid, depth, frames.as_slice());
+    let whole = retouched_with(dir.path(), &folder, ids, florastack_engine::Tiling::default());
+    // Tiles of 24 pixels, pieces of 48, and room for two tiles in memory: everything else goes to disk and back.
+    let spill = dir.path().join("spill");
+    std::fs::create_dir_all(&spill).unwrap();
+    let small = florastack_engine::Tiling { tile_size: 24, budget: 2 * 24 * 24 * 4 * 4, spill_dir: Some(spill) };
+    let tiled = retouched_with(dir.path(), &folder, ids, small);
+    assert_eq!(whole.0.len(), tiled.0.len());
+    for (i, (a, b)) in whole.0.iter().zip(&tiled.0).enumerate() {
+        assert!(a == b, "step {i} differs in small tiles");
+    }
+    assert!(whole.1 == tiled.1, "the cached result differs in small tiles");
+    assert!(whole.0.windows(2).any(|w| w[0] != w[1]), "the steps changed the result");
+}
+
+#[test]
+fn an_undo_that_needs_a_source_out_of_memory_paints_again_in_a_job() {
+    let dir = TempDir::new("retouch-repaint");
+    let (mut engine, pyramid, _, frames) = stacked(dir.path());
+    run(&mut engine, "retouch.open", &format!(r#"{{ "output": {pyramid} }}"#));
+    let source = |frame: u64| format!(r#""source": {{ "frame": {frame} }},"#);
+    run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[0]));
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &source(frames[0]), "[[30, 60, 1], [130, 60, 1]]")));
+    let one = result(&engine);
+    // Three more frames as sources push the first out of memory; a stroke from the last crosses the first stroke.
+    for &frame in &frames[1..4] {
+        run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {frame} }}"#));
+    }
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &source(frames[3]), "[[80, 10, 1], [80, 110, 1]]")));
+    let two = result(&engine);
+    assert_ne!(one, two);
+    // Undoing it paints its region again with the first stroke, whose frame isn't in memory: a job loads it, and the
+    // undo returns at once.
+    run(&mut engine, "edit.undo", "{}");
+    assert!(engine.retouch().unwrap().repainting());
+    let job = engine.jobs().iter().find(|j| j.command == "retouch.repaint" && !j.state.is_finished()).map(|j| j.id).expect("a repaint job");
+    assert_eq!(result(&engine), two, "the result keeps the strokes as they were until the job ends");
+    let early = engine.dispatch_json("retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("eraser", "", "[[10, 10, 1]]")));
+    assert!(early.is_err(), "painting waits for the job");
+    let repainted = engine.wait(job).unwrap();
+    assert_eq!(repainted["loaded"], serde_json::json!([{ "frame": frames[0] }]), "{repainted}");
+    assert!(!engine.retouch().unwrap().repainting());
+    assert_eq!(result(&engine), one, "the same pixels as before the stroke undone");
+    // Redoing it needs only the last frame, which is in memory: painted at once.
+    run(&mut engine, "edit.redo", "{}");
+    assert!(!engine.retouch().unwrap().repainting());
+    assert_eq!(result(&engine), two);
+    run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("eraser", "", "[[10, 10, 1]]")));
+}

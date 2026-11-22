@@ -179,6 +179,8 @@ pub struct FloraStackApp {
     view_loader: Loader,
     /// The second image of a pair compared, and the first one while it waits for it.
     pair_loader: Loader,
+    /// The Retouch tab's stand-in for a frame loading as the source: its small aligned preview.
+    pub(crate) standin_loader: Loader,
     pair: [Option<Arc<florastack_engine::view::DisplayImage>>; 2],
     thumb_loader: Loader,
     /// The display images of the frames around the selection, and the frames still to read ahead into it, one at a
@@ -190,9 +192,11 @@ pub struct FloraStackApp {
     /// replacing one of its size, such as the next preview).
     pub loading: Option<(PathBuf, Selection, bool)>,
     /// An output with strokes or adjustments being rendered to be shown (`output.render`), with the selection to
-    /// show it as; and the fingerprint of the output's edits shown (`OutputRow::edits`).
+    /// show it as; the second output compared, when it is being rendered too; and the fingerprints of the edits of
+    /// the outputs shown (`OutputRow::edits`).
     pub rendering: Option<(u64, Selection, bool)>,
-    shown_edits: Option<(u64, u64)>,
+    rendering_second: Option<u64>,
+    shown_edits: Vec<(u64, u64)>,
     /// The outputs picked for comparing, at most two.
     pub compare: Vec<u64>,
     /// The filmstrip, while it is shown instead of the viewer; and whether it plays the crops at 100%
@@ -315,6 +319,7 @@ impl FloraStackApp {
             thumbnail_requests: std::collections::HashSet::new(),
             view_loader: Loader::latest_only("viewer", ctx),
             pair_loader: Loader::latest_only("compare", ctx),
+            standin_loader: Loader::latest_only("stand-in", ctx),
             pair: [None, None],
             thumb_loader: Loader::every("thumbnails", ctx),
             frame_cache: crate::frame_cache::FrameCache::default(),
@@ -322,7 +327,8 @@ impl FloraStackApp {
             ahead_loader: Loader::every("read ahead", ctx),
             loading: None,
             rendering: None,
-            shown_edits: None,
+            rendering_second: None,
+            shown_edits: Vec::new(),
             compare: Vec::new(),
             film: None,
             film_crop: false,
@@ -362,8 +368,8 @@ impl FloraStackApp {
         app
     }
 
-    /// Hands the machine's settings the preferences remember to the engine: the device, the memory budget and the
-    /// cache folder, each only when one is set.
+    /// Hands the machine's settings the preferences remember to the engine: the device, the memory budget, the cache
+    /// folder and the retouch sources' disk limit, each only when one is set.
     fn apply_saved(&mut self) {
         let mut compute = serde_json::Map::new();
         if let Some(device) = self.prefs.device {
@@ -378,6 +384,15 @@ impl FloraStackApp {
         if let Some(folder) = self.prefs.cache_folder.clone() {
             self.set_cache_folder(&folder);
         }
+        if let Some(mb) = self.prefs.source_limit_mb {
+            self.set_source_limit(mb);
+        }
+    }
+
+    /// Limits the disk the frames warped for retouching take in a project's cache to `mb` MiB
+    /// (`cache.setSourceLimit`); whether the engine took it.
+    pub(crate) fn set_source_limit(&mut self, mb: u32) -> bool {
+        self.shell.run("cache.setSourceLimit", json!({ "bytes": u64::from(mb) << 20 })).is_some()
     }
 
     /// Puts temporary projects and spilled tiles in `folder` (`cache.setFolder`); whether it could.
@@ -592,15 +607,24 @@ impl FloraStackApp {
             Selection::Threshold => self.shell.threshold.as_ref().and_then(|t| t["path"].as_str()).map(PathBuf::from),
             Selection::Nothing => None,
         };
+        self.rendering_second = None;
+        self.shown_edits.clear();
         if let Selection::Compare(_, second) = selection {
             self.pair = [None, None];
-            if let Some(path) = output(second) {
+            // An output with strokes or adjustments is compared as it is written, rendered first.
+            let row = self.shell.outputs.iter().find(|o| o.id == second).map(|o| (o.edited, o.edits));
+            if let Some((_, edits)) = row {
+                self.shown_edits.push((second, edits));
+            }
+            if row.is_some_and(|(edited, _)| edited) {
+                self.rendering_second = Some(second);
+                self.shell.run("output.render", json!({ "output": second }));
+            } else if let Some(path) = output(second) {
                 self.pair_loader.request(Request::file(path, Some(self.viewer.max_side())));
             }
         }
         self.selection = selection.clone();
         self.rendering = None;
-        self.shown_edits = None;
         // With both methods chosen, their previews are compared once both are made.
         if selection == Selection::Preview
             && let Some([first, second]) = self.preview_pair_images()
@@ -614,10 +638,10 @@ impl FloraStackApp {
             return;
         }
         // An output with strokes or adjustments is shown as it is written: rendered, then loaded.
-        if let Selection::Output(id) = selection
+        if let Selection::Output(id) | Selection::Compare(id, _) = selection
             && let Some(row) = self.shell.outputs.iter().find(|o| o.id == id)
         {
-            self.shown_edits = Some((id, row.edits));
+            self.shown_edits.push((id, row.edits));
             if row.edited {
                 self.rendering = Some((id, selection.clone(), keep));
                 self.shell.run("output.render", json!({ "output": id }));
@@ -799,6 +823,14 @@ impl FloraStackApp {
         self.film_at(at, false);
     }
 
+    /// The canvas of the framing set, as the alignment gives it: the stack preview's and the aligned previews'.
+    pub(crate) fn framing_canvas(&self) -> Option<crate::viewer::Canvas> {
+        let framing = &self.shell.align_settings["framing"];
+        let f = self.shell.alignment["run"]["framings"].as_array()?.iter().find(|f| f["framing"] == *framing)?;
+        let size = |k: &str| f[k].as_u64().and_then(|v| usize::try_from(v).ok());
+        Some(crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: serde_json::from_value(f["toMaster"].clone()).ok()? })
+    }
+
     /// The point at the viewer's middle in the master frame's pixels, when what it shows is placed there.
     fn view_center_in_master(&self) -> Option<[f64; 2]> {
         let (center, shown) = self.viewer.view_center()?;
@@ -806,12 +838,7 @@ impl FloraStackApp {
         let canvas = match &self.selection {
             Selection::Output(id) | Selection::Compare(id, _) => self.shell.outputs.iter().find(|o| o.id == *id)?.canvas?,
             // The preview is the canvas of the framing set, reduced.
-            Selection::Preview => {
-                let framing = &self.shell.align_settings["framing"];
-                let f = run["framings"].as_array()?.iter().find(|f| f["framing"] == *framing)?;
-                let size = |k: &str| f[k].as_u64().and_then(|v| usize::try_from(v).ok());
-                crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master: serde_json::from_value(f["toMaster"].clone()).ok()? }
-            }
+            Selection::Preview => self.framing_canvas()?,
             // A frame's pixels go to the master's by the inverse of its alignment.
             Selection::Frame(id) => {
                 let f = run["frames"].as_array()?.iter().find(|f| f["frame"] == *id)?;
@@ -942,6 +969,9 @@ impl FloraStackApp {
             }
         }
         self.show_pair();
+        for done in self.standin_loader.done() {
+            crate::retouch_tab::standin_read(self, done);
+        }
         self.reading_ahead();
         for done in self.thumb_loader.done() {
             if let Ok(image) = done.image {
@@ -998,20 +1028,23 @@ impl FloraStackApp {
         if let Some(output) = self.shell.made.take() {
             self.select(Selection::Output(output));
         }
-        if let Some(rendered) = self.shell.rendered.take()
-            && let Some((id, selection, keep)) = self.rendering.clone()
-            && rendered["output"].as_u64() == Some(id)
-            && let Some(path) = rendered["path"].as_str().map(PathBuf::from)
-        {
-            self.rendering = None;
-            self.view_loader.request(Request::file(path.clone(), Some(self.viewer.max_side())));
-            self.loading = Some((path, selection, keep));
+        for rendered in std::mem::take(&mut self.shell.rendered) {
+            let (Some(output), Some(path)) = (rendered["output"].as_u64(), rendered["path"].as_str().map(PathBuf::from)) else { continue };
+            if let Some((id, selection, keep)) = self.rendering.clone()
+                && id == output
+            {
+                self.rendering = None;
+                self.view_loader.request(Request::file(path.clone(), Some(self.viewer.max_side())));
+                self.loading = Some((path, selection, keep));
+            } else if self.rendering_second == Some(output) {
+                self.rendering_second = None;
+                self.pair_loader.request(Request::file(path, Some(self.viewer.max_side())));
+            }
         }
-        if let (Selection::Output(id), Some((shown, edits))) = (self.selection.clone(), self.shown_edits)
-            && id == shown
-            && self.shell.outputs.iter().find(|o| o.id == id).is_some_and(|o| o.edits != edits)
-        {
-            self.select_keeping(Selection::Output(id), true);
+        // The output shown, or either output compared, rendered again when its strokes or adjustments changed.
+        let changed = self.shown_edits.iter().any(|(id, edits)| self.shell.outputs.iter().find(|o| o.id == *id).is_some_and(|o| o.edits != *edits));
+        if changed && matches!(self.selection, Selection::Output(_) | Selection::Compare(..)) {
+            self.select_keeping(self.selection.clone(), true);
         }
     }
 

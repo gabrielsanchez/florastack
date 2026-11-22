@@ -359,6 +359,7 @@ retouch-nothing = Stack the frames first: retouching paints onto an output.
 retouch-output = Output
 retouch-pick-output = Pick an output
 retouch-opening = Opening the output for retouching…
+retouch-repainting = Loading the sources to paint the strokes again…
 retouch-hint = Pick an output to retouch in the panel on the right.
 retouch-layers = Layers
 retouch-no-layers = No layers yet: the first stroke makes one.
@@ -366,11 +367,24 @@ retouch-layer = { $name } ({ $strokes ->
     [one] one stroke
    *[other] { $strokes } strokes
 })
+retouch-left-out = { $strokes ->
+    [one] One stroke of { $layer } paints
+   *[other] { $strokes } strokes of { $layer } paint
+} from { $why ->
+    [frame-removed] frame { $source }, which was removed from the project
+    [frame-not-aligned] frame { $source }, which the alignment no longer has
+   *[output-removed] output { $source }, which was removed
+}: { $strokes ->
+    [one] it is
+   *[other] they are
+} left out when the strokes are painted again.
+tip-left-out = The result shown may still hold these strokes, painted while their source was there. Undo, hiding a layer and exporting paint the strokes again, without them; adding the frame back and aligning again brings them back.
 tip-layer-visible = Show or hide this layer's strokes.
 tip-layer-active = Strokes go into this layer.
 retouch-add-layer = Add layer
 retouch-remove-layer = Remove layer
 retouch-source = Source
+retouch-standin = Source: preview while the frame loads
 retouch-source-frame = Frame: { $name }
 retouch-source-output = Output: { $name }
 retouch-source-none = No source yet: pick a frame or an output, or Ctrl+click the output.
@@ -544,6 +558,9 @@ prefs-cache-help = Temporary projects and the work beyond the memory above go he
 prefs-cache-projects = Temporary projects
 prefs-cache-tiles = Stacking's work on disk
 prefs-cache-project = The open project's cache
+prefs-cache-sources = Frames warped for retouching (in the project's cache)
+prefs-source-limit = Keep frames warped for retouching up to
+tip-source-limit = A frame used as a retouch source is kept warped onto the output, at full precision (about 300 MB for 24 MP), so that picking it again is quick. Beyond this, the least recently used are removed; they are warped again when needed, and nothing painted changes.
 prefs-cache-clean = Clean up
 prefs-orphan-days = Offer unnamed projects for the trash after
 prefs-days = {" "}days

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use florastack_core::{AnyImage, Image, Monitor};
 use florastack_project::{Area, CacheRef, Edit, FrameId, LayerId, OutputId};
 use florastack_raw::Quality;
-use florastack_retouch::{Fields, LiveStroke, Painted, Source, Stroke, union};
+use florastack_retouch::{LiveStroke, Source, Stroke, union};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +18,8 @@ use crate::jobs::{JobPlan, Lane, commit};
 use crate::project::{stack_settings, write_image_in};
 use crate::registry::{CommandSpec, Meta, NoParams, Params, Requires};
 use crate::retouch::{
-    NO_FRAME, RETOUCHED, RetouchChanges, RetouchSession, SHARPEST, Sharpest, SourceLoader, load_sources, map_name, output_frames, output_framing,
-    paintable, painted, read_f32, render_key, visible_strokes,
+    Images, NO_FRAME, RETOUCHED, RetouchChanges, RetouchSession, SHARPEST, Sharpest, SourceLoader, SourceTiles, Store, Tiled, load_tiled, map_name,
+    output_frames, output_framing, paintable, read_f32, render_key, replay_tiled, visible_strokes,
 };
 use crate::session::Session;
 
@@ -59,6 +59,23 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 .examples(&[r#"{ "frame": 7 }"#, r#"{ "output": 2 }"#]),
             Lane::Preview,
             set_source,
+        ),
+        CommandSpec::job(
+            Meta::new("retouch.repaint", "Paint strokes again", "Loads the sources the visible strokes need and paints them again where they changed.")
+                .help(
+                    "After an undo, a redo or a layer shown or hidden, the region where the visible strokes changed is \
+                     painted again from the output. When a stroke there paints from a frame or output that isn't in \
+                     memory, loading it takes seconds, so the engine starts this job instead of waiting: it loads the \
+                     sources (a frame from its warped image in the cache, or decoded and warped again), and the region \
+                     is painted when it ends. Until then the result keeps the strokes as they were, and `retouch.paint` \
+                     and `retouch.stroke` wait. A source that can't be loaded is left out of the painting, with a \
+                     warning, and not asked for again while the output is open. Runs beside other jobs; a newer call \
+                     replaces one still running.",
+                )
+                .requires(Requires::Project)
+                .supersede(),
+            Lane::Preview,
+            repaint,
         ),
         CommandSpec::query(
             Meta::new("retouch.sharpest", "Sharpest frame", "The frame where a point of the output is sharpest.")
@@ -181,8 +198,11 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
     // The loader is made once the output's size is known, from what it needs of the project now: to paint the strokes
     // when there is no cached result, or when it can't be read.
     let mut loader = if strokes.is_empty() { None } else { Some(SourceLoader::new(session, "retouch.open", id)?) };
+    // The session's images go into tiles within a share of the memory budget.
+    let store = Store::new(&session.tiling())?;
     let job = JobPlan::new(move |ctx| {
-        let base = Arc::new(read_f32(&cache, &base_ref)?);
+        let base = Tiled::from_image(&store, &read_f32(&cache, &base_ref)?)?;
+        let size = (base.width(), base.height());
         ctx.checkpoint()?;
         let mut sources = Vec::new();
         let mut aligned = Vec::new();
@@ -192,17 +212,20 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
                 .ok()
         });
         let (canvas, rendered, skipped) = match (read, &mut loader) {
-            (Some(canvas), _) => (canvas, "cached", 0),
+            (Some(canvas), _) => (Tiled::from_image(&store, &canvas)?, "cached", 0),
             (None, Some(loader)) => {
-                aligned = load_sources(&strokes, &mut sources, loader, (base.width(), base.height()));
+                aligned = load_tiled(&strokes, &mut sources, loader, size, &store)?;
                 let usable = paintable(&strokes, &sources);
-                let canvas = florastack_retouch::render(&base, &painted(&usable, &base, &sources))?;
+                let canvas = base.copy()?;
+                let region = usable.iter().fold(None, |r, s| union(r, Stroke::reach(&s.dabs(), 1.0, size.0, size.1)));
+                if let Some(region) = region {
+                    replay_tiled(Images { base: &base, canvas: &canvas, sources: &sources }, &usable, region)?;
+                }
                 (canvas, "painted", strokes.len() - usable.len())
             }
-            (None, None) => ((*base).clone(), "none", 0),
+            (None, None) => (base.copy()?, "none", 0),
         };
         ctx.checkpoint()?;
-        let size = (base.width(), base.height());
         let sharpest = match (&depth, &focus) {
             (Some(reference), _) => sharpest_map(&cache, reference, size, &frames, Some(65535.0)),
             (None, Some(reference)) => sharpest_map(&cache, reference, size, &frames, None),
@@ -211,11 +234,14 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
         let opened = Opened { output: id, width: size.0, height: size.1, rendered, strokes: strokes.len(), skipped, sharpest: sharpest.is_some() };
         Ok(commit(move |session: &mut Session| {
             session.flush_retouch()?;
+            let project = session.project()?;
+            let left_out = project.output(id).map(|o| crate::retouch::left_out(project, o)).unwrap_or_default();
             for (frame, reference) in aligned {
-                session.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) })?;
+                session.keep_aligned(frame, reference)?;
             }
             session.retouch = Some(RetouchSession {
                 output: id,
+                store,
                 base,
                 canvas,
                 painted: strokes,
@@ -225,6 +251,10 @@ fn open(session: &Session, p: OpenParams) -> Result<JobPlan<Opened>, CommandErro
                 sharpest,
                 changes: RetouchChanges { opened: true, ..RetouchChanges::default() },
                 unsaved: false,
+                left_out,
+                repainting: false,
+                unloadable: Vec::new(),
+                start_repaint: false,
             });
             Ok(opened)
         }))
@@ -315,8 +345,9 @@ fn set_source(session: &Session, p: SourceParams) -> Result<JobPlan<SourceSet>, 
         (None, None) => return Err(session.invalid("frame", "give either `frame` or `output`")),
     };
     let output = open.output;
-    let size = (open.canvas.width(), open.canvas.height());
+    let size = open.size();
     let in_memory = open.source(source);
+    let store = Arc::clone(&open.store);
     let mut loader = if in_memory.is_some() { None } else { Some(SourceLoader::new(session, "retouch.setSource", output)?) };
     let job = JobPlan::new(move |_ctx| {
         let (image, cached, how) = match (in_memory, &mut loader) {
@@ -325,13 +356,15 @@ fn set_source(session: &Session, p: SourceParams) -> Result<JobPlan<SourceSet>, 
                 let (image, cached) = loader.load(source, size)?;
                 // A frame's warped image newly cached was decoded; otherwise it was read from the cache.
                 let from = if cached.is_some() { "decoded" } else { "cache" };
-                (Arc::new(image), cached, from)
+                (Arc::new(SourceTiles::of(&store, &image)?), cached, from)
             }
             (None, None) => return Err(CommandError::Internal { command: "retouch.setSource".to_owned() }),
         };
         Ok(commit(move |session: &mut Session| {
-            if let Some((frame, reference)) = cached {
-                session.apply_system(Edit::SetAlignedImage { frame, aligned: Some(reference) })?;
+            match (cached, source) {
+                (Some((frame, reference)), _) => session.keep_aligned(frame, reference)?,
+                (None, Source::Frame(frame)) => session.used_source(frame),
+                (None, Source::Output(_)) => {}
             }
             let open = session.retouch.as_mut().filter(|s| s.output == output).ok_or_else(|| CommandError::Unavailable {
                 command: "retouch.setSource".to_owned(),
@@ -344,6 +377,77 @@ fn set_source(session: &Session, p: SourceParams) -> Result<JobPlan<SourceSet>, 
         }))
     });
     Ok(job.stages(&[("Loading the source", 1.0)]))
+}
+
+/// What `retouch.repaint` did.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Repainted {
+    /// The sources loaded, and those that couldn't be (their strokes are left out).
+    loaded: Vec<Source>,
+    failed: Vec<Source>,
+}
+
+fn repaint(session: &Session, _: NoParams) -> Result<JobPlan<Repainted>, CommandError> {
+    let open = open_session(session)?;
+    let output = open.output;
+    let strokes = session.project()?.output(output).map(visible_strokes).unwrap_or_default();
+    let missing = open.missing(&strokes);
+    let size = open.size();
+    let store = Arc::clone(&open.store);
+    let mut loader = if missing.is_empty() { None } else { Some(SourceLoader::new(session, "retouch.repaint", output)?) };
+    let job = JobPlan::new(move |ctx| {
+        let (mut got, mut failed, mut cached) = (Vec::new(), Vec::new(), Vec::new());
+        for &source in &missing {
+            ctx.checkpoint()?;
+            let Some(loader) = &mut loader else { break };
+            match loader.load(source, size).and_then(|(image, new)| Ok((SourceTiles::of(&store, &image)?, new))) {
+                Ok((tiles, new)) => {
+                    got.push((source, Arc::new(tiles)));
+                    cached.extend(new);
+                }
+                Err(e) => {
+                    tracing::warn!("strokes from {source:?} can't be painted: {e}");
+                    failed.push(source);
+                }
+            }
+        }
+        Ok(commit(move |session: &mut Session| {
+            let Some(open) = session.retouch.as_mut().filter(|s| s.output == output) else {
+                return Ok(Repainted { loaded: Vec::new(), failed: Vec::new() });
+            };
+            let names: Vec<Source> = got.iter().map(|(s, _)| *s).collect();
+            for (source, tiles) in got {
+                if open.source(source).is_none() {
+                    open.sources.push((source, tiles));
+                }
+            }
+            open.unloadable.extend(failed.iter().copied());
+            for (frame, reference) in cached {
+                session.keep_aligned(frame, reference)?;
+            }
+            // With the sources in, the region is painted now.
+            session.sync_retouch();
+            Ok(Repainted { loaded: names, failed })
+        }))
+    });
+    Ok(job.stages(&[("Loading the sources", 1.0)]))
+}
+
+/// Refuses painting while the result waits to be painted again (`retouch.repaint`), starting that job again if it
+/// was cancelled.
+fn wait_for_repaint(session: &mut Session, command: &str) -> Result<(), CommandError> {
+    if !session.retouch.as_ref().is_some_and(|r| r.repainting) {
+        return Ok(());
+    }
+    let running = session.jobs.list().iter().any(|j| j.command == "retouch.repaint" && !j.state.is_finished());
+    if let Some(open) = session.retouch.as_mut().filter(|_| !running) {
+        open.start_repaint = true;
+    }
+    Err(CommandError::Unavailable {
+        command: command.to_owned(),
+        reason: "the strokes are being painted again after an undo, a redo or a layer change: paint once that is done".to_owned(),
+    })
 }
 
 /// A point of the output.
@@ -472,14 +576,13 @@ struct PaintedRegion {
     region: Option<[usize; 4]>,
 }
 
-/// The source a stroke from `source` reads in the open session: none for the eraser.
-fn source_of(open: &RetouchSession, source: Option<Source>) -> Result<Option<Arc<crate::retouch::SourceImage>>, CommandError> {
-    let Some(source) = source else { return Ok(None) };
-    let image = open.source(source).ok_or_else(|| CommandError::Unavailable {
+/// Checks that the source a stroke from `source` reads is loaded in the open session (the eraser reads none).
+fn source_of(open: &RetouchSession, source: Option<Source>) -> Result<(), CommandError> {
+    let Some(source) = source else { return Ok(()) };
+    open.source(source).map(|_| ()).ok_or_else(|| CommandError::Unavailable {
         command: "retouch".to_owned(),
         reason: format!("{source:?} isn't loaded: set it with `retouch.setSource` first"),
-    })?;
-    Ok(Some(image))
+    })
 }
 
 fn region(rect: Option<florastack_core::Rect>) -> Option<[usize; 4]> {
@@ -487,31 +590,39 @@ fn region(rect: Option<florastack_core::Rect>) -> Option<[usize; 4]> {
 }
 
 fn paint(session: &mut Session, p: PaintParams) -> Result<PaintedRegion, CommandError> {
+    wait_for_repaint(session, "retouch.paint")?;
     let settings_changed = session.invalid("stroke", "changes its settings part way: begin a new stroke");
     let open = session.retouch.as_mut().ok_or_else(|| CommandError::Unavailable {
         command: "retouch.paint".to_owned(),
         reason: "no output is open for retouching: open one with `retouch.open`".to_owned(),
     })?;
     let stroke = p.stroke.quantized();
-    let source = source_of(open, stroke.source)?;
-    let base = Arc::clone(&open.base);
-    let fields = Fields { base: &base, source: source.as_ref().map(|s| &s.image), coverage: source.as_ref().and_then(|s| s.coverage.as_ref()) };
-    let changed = if let (Some(live), false) = (&mut open.live, p.begin) {
-        let same = Stroke { samples: Vec::new(), ..live.stroke().clone() } == Stroke { samples: Vec::new(), ..stroke.clone() };
-        if !same {
-            return Err(settings_changed);
+    source_of(open, stroke.source)?;
+    let changed = match open.live.take() {
+        Some(mut live) if !p.begin => {
+            let same = Stroke { samples: Vec::new(), ..live.stroke().clone() } == Stroke { samples: Vec::new(), ..stroke.clone() };
+            if !same {
+                open.live = Some(live);
+                return Err(settings_changed);
+            }
+            let changed = open.extend_live(&mut live, &stroke.samples);
+            open.live = Some(live);
+            changed?
         }
-        live.extend(&mut open.canvas, &fields, &stroke.samples)?
-    } else {
-        let undone = open.live.take().and_then(|live| live.cancel(&mut open.canvas));
-        let first = Stroke { samples: stroke.samples.first().copied().into_iter().collect(), ..stroke.clone() };
-        let mut live = LiveStroke::new(first)?;
-        let mut changed = live.extend(&mut open.canvas, &fields, &[])?;
-        if let Some(rest) = stroke.samples.get(1..).filter(|r| !r.is_empty()) {
-            changed = union(changed, live.extend(&mut open.canvas, &fields, rest)?);
+        earlier => {
+            let undone = match earlier {
+                Some(live) => open.cancel_live(live)?,
+                None => None,
+            };
+            let first = Stroke { samples: stroke.samples.first().copied().into_iter().collect(), ..stroke.clone() };
+            let mut live = LiveStroke::new(first)?;
+            let mut changed = open.extend_live(&mut live, &[]);
+            if let (Ok(c), Some(rest)) = (&changed, stroke.samples.get(1..).filter(|r| !r.is_empty())) {
+                changed = open.extend_live(&mut live, rest).map(|more| union(*c, more));
+            }
+            open.live = Some(live);
+            union(undone, changed?)
         }
-        open.live = Some(live);
-        union(undone, changed)
     };
     open.touched(changed);
     Ok(PaintedRegion { region: region(changed) })
@@ -526,7 +637,7 @@ struct Cancelled {
 fn cancel_paint(session: &mut Session, _: NoParams) -> Result<Cancelled, CommandError> {
     let Some(open) = session.retouch.as_mut() else { return Ok(Cancelled { cancelled: false }) };
     let Some(live) = open.live.take() else { return Ok(Cancelled { cancelled: false }) };
-    let changed = live.cancel(&mut open.canvas);
+    let changed = open.cancel_live(live)?;
     open.touched(changed);
     Ok(Cancelled { cancelled: true })
 }
@@ -561,6 +672,7 @@ struct Stroked {
 }
 
 fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandError> {
+    wait_for_repaint(session, "retouch.stroke")?;
     let stroke = p.stroke.quantized();
     let output = open_session(session)?.output;
     // The layer: the one given, which must be visible, the top one, or a new one.
@@ -581,21 +693,21 @@ fn stroke(session: &mut Session, p: StrokeParams) -> Result<Stroked, CommandErro
     };
     let on_top = layer.is_none() || layer == top.map(|t| t.0);
     let open = session.retouch.as_mut().ok_or(CommandError::Internal { command: "retouch.stroke".to_owned() })?;
-    stroke.validate_for(open.canvas.width(), open.canvas.height())?;
-    let source = source_of(open, stroke.source)?;
-    let base = Arc::clone(&open.base);
+    let (w, h) = open.size();
+    stroke.validate_for(w, h)?;
+    source_of(open, stroke.source)?;
     // The stroke drawn live is committed as painted; any other is painted now.
     let changed = match open.live.take() {
         Some(live) if *live.stroke() == stroke => None,
         live => {
-            let undone = live.and_then(|l| l.cancel(&mut open.canvas));
-            let fields =
-                Fields { base: &base, source: source.as_ref().map(|s| &s.image), coverage: source.as_ref().and_then(|s| s.coverage.as_ref()) };
-            let whole = florastack_core::Rect::new(0, 0, open.canvas.width(), open.canvas.height());
-            union(undone, florastack_retouch::apply(&mut open.canvas, Painted { stroke: &stroke, fields }, whole)?)
+            let undone = match live {
+                Some(l) => open.cancel_live(l)?,
+                None => None,
+            };
+            union(undone, open.apply(&stroke, florastack_core::Rect::new(0, 0, w, h))?)
         }
     };
-    let reach = Stroke::reach(&stroke.dabs(), 1.0, open.canvas.width(), open.canvas.height());
+    let reach = Stroke::reach(&stroke.dabs(), 1.0, w, h);
     open.touched(union(changed, reach));
     // On the top layer the canvas is already right; under other layers, the sync paints the region again in order.
     if on_top {

@@ -14,7 +14,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [align](#align) | [`align.get`](#alignget), [`align.info`](#aligninfo), [`align.reset`](#alignreset), [`align.run`](#alignrun), [`align.set`](#alignset), [`align.setMaster`](#alignsetmaster), [`align.sortByScale`](#alignsortbyscale) |
 | [annotation](#annotation) | [`annotation.get`](#annotationget), [`annotation.set`](#annotationset) |
 | [batch](#batch) | [`batch.run`](#batchrun) |
-| [cache](#cache) | [`cache.info`](#cacheinfo), [`cache.removeAbandoned`](#cacheremoveabandoned), [`cache.setFolder`](#cachesetfolder) |
+| [cache](#cache) | [`cache.info`](#cacheinfo), [`cache.removeAbandoned`](#cacheremoveabandoned), [`cache.setFolder`](#cachesetfolder), [`cache.setSourceLimit`](#cachesetsourcelimit) |
 | [calibration](#calibration) | [`calibration.get`](#calibrationget), [`calibration.set`](#calibrationset) |
 | [capture](#capture) | [`capture.calculate`](#capturecalculate), [`capture.camera`](#capturecamera), [`capture.info`](#captureinfo), [`capture.rail`](#capturerail), [`capture.run`](#capturerun) |
 | [compute](#compute) | [`compute.info`](#computeinfo), [`compute.set`](#computeset), [`compute.test`](#computetest) |
@@ -28,7 +28,7 @@ Everything FloraStack does is one of these commands: the desktop app's buttons a
 | [parallax](#parallax) | [`parallax.animate`](#parallaxanimate), [`parallax.mesh`](#parallaxmesh), [`parallax.preview`](#parallaxpreview), [`parallax.stereo`](#parallaxstereo) |
 | [preset](#preset) | [`preset.apply`](#presetapply), [`preset.list`](#presetlist), [`preset.read`](#presetread), [`preset.save`](#presetsave) |
 | [project](#project) | [`project.addFrames`](#projectaddframes), [`project.checkFrames`](#projectcheckframes), [`project.close`](#projectclose), [`project.findOrphans`](#projectfindorphans), [`project.findStacks`](#projectfindstacks), [`project.frames`](#projectframes), [`project.info`](#projectinfo), [`project.moveFrames`](#projectmoveframes), [`project.new`](#projectnew), [`project.open`](#projectopen), [`project.removeFrames`](#projectremoveframes), [`project.rename`](#projectrename), [`project.save`](#projectsave), [`project.saveAs`](#projectsaveas), [`project.setFramesEnabled`](#projectsetframesenabled), [`project.trashOrphans`](#projecttrashorphans) |
-| [retouch](#retouch) | [`retouch.addLayer`](#retouchaddlayer), [`retouch.cancelPaint`](#retouchcancelpaint), [`retouch.close`](#retouchclose), [`retouch.mapFocus`](#retouchmapfocus), [`retouch.open`](#retouchopen), [`retouch.paint`](#retouchpaint), [`retouch.removeLayer`](#retouchremovelayer), [`retouch.setLayerVisible`](#retouchsetlayervisible), [`retouch.setSource`](#retouchsetsource), [`retouch.sharpest`](#retouchsharpest), [`retouch.stroke`](#retouchstroke) |
+| [retouch](#retouch) | [`retouch.addLayer`](#retouchaddlayer), [`retouch.cancelPaint`](#retouchcancelpaint), [`retouch.close`](#retouchclose), [`retouch.mapFocus`](#retouchmapfocus), [`retouch.open`](#retouchopen), [`retouch.paint`](#retouchpaint), [`retouch.removeLayer`](#retouchremovelayer), [`retouch.repaint`](#retouchrepaint), [`retouch.setLayerVisible`](#retouchsetlayervisible), [`retouch.setSource`](#retouchsetsource), [`retouch.sharpest`](#retouchsharpest), [`retouch.stroke`](#retouchstroke) |
 | [stack](#stack) | [`stack.average`](#stackaverage), [`stack.depthMap`](#stackdepthmap), [`stack.get`](#stackget), [`stack.preview`](#stackpreview), [`stack.pyramid`](#stackpyramid), [`stack.reset`](#stackreset), [`stack.set`](#stackset), [`stack.slabbed`](#stackslabbed), [`stack.threshold`](#stackthreshold), [`stack.wavelet`](#stackwavelet) |
 | [watch](#watch) | [`watch.run`](#watchrun) |
 
@@ -968,6 +968,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `project` | object | The open project's `cache/` and `previews/` folders; none without a project. |
+| `retouchSources` | object | The frames warped for retouching, which count in `project`, and their limit (`cache.setSourceLimit`). |
 | `temporaryProjects` | object | Temporary projects; none when the engine has no folder for them. |
 | `tiles` | object | Tiles of running stacks, and of crashed runs. In the system's temporary directory, only FloraStack's tile folders count. |
 
@@ -1023,6 +1024,7 @@ Result:
 | Name | Type | Description |
 |---|---|---|
 | `project` | object | The open project's `cache/` and `previews/` folders; none without a project. |
+| `retouchSources` | object | The frames warped for retouching, which count in `project`, and their limit (`cache.setSourceLimit`). |
 | `temporaryProjects` | object | Temporary projects; none when the engine has no folder for them. |
 | `tiles` | object | Tiles of running stacks, and of crashed runs. In the system's temporary directory, only FloraStack's tile folders count. |
 
@@ -1030,6 +1032,36 @@ Example:
 
 ```json
 {"folder":"D:/FloraStack cache"}
+```
+
+### `cache.setSourceLimit`
+
+**Set retouch source limit.** Limits the disk the frames warped for retouching take in the project's cache.
+
+A frame used as a retouch source is warped onto the output's canvas and kept in the project's cache at 32 bits a sample (about 300 MB for 24 MP), so that it is read rather than decoded and warped again. Beyond `bytes`, the least recently used are removed, at once and whenever another is kept; the one used last stays whatever its size. A frame removed so is warped again when it is needed, to the same pixels: nothing painted changes. 4 GiB by default. For this engine; it isn't stored in the project.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Instant | No | Nothing | The project or the session |
+
+Parameters:
+
+| Name | Type | Description |
+|---|---|---|
+| `bytes` | integer, from 0 to 1125899906842624 | **Required.** In bytes: 0 keeps only the frame used last. |
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `evicted` | array of integer |  |
+| `limit` | integer |  |
+
+Examples:
+
+```json
+{"bytes":4294967296}
+{"bytes":0}
 ```
 
 ## calibration
@@ -2149,7 +2181,7 @@ Example:
 
 **Render output.** Renders an output as it is written: with its visible retouch strokes and its adjustments.
 
-For viewers: the result is a lossless image in the project's cache, whose `path` the result gives, kept as the output's `result` map and keyed by what it is made from, so that rendering it again reads it back until a stroke or an adjustment changes. An output with neither is its own image, with nothing rendered. Runs beside other jobs; a newer call replaces one still running.
+For viewers: the result is a lossless image in the project's cache, whose `path` the result gives, kept as the output's `result` map and keyed by what it is made from, so that rendering it again reads it back until a stroke or an adjustment changes. An output with neither is its own image, with nothing rendered. Runs beside other jobs; a newer call for the same output replaces one still running, so that two outputs compared render side by side.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -3195,6 +3227,31 @@ Example:
 
 ```json
 {"layer":5,"output":3}
+```
+
+### `retouch.repaint`
+
+**Paint strokes again.** Loads the sources the visible strokes need and paints them again where they changed.
+
+After an undo, a redo or a layer shown or hidden, the region where the visible strokes changed is painted again from the output. When a stroke there paints from a frame or output that isn't in memory, loading it takes seconds, so the engine starts this job instead of waiting: it loads the sources (a frame from its warped image in the cache, or decoded and warped again), and the region is painted when it ends. Until then the result keeps the strokes as they were, and `retouch.paint` and `retouch.stroke` wait. A source that can't be loaded is left out of the painting, with a warning, and not asked for again while the output is open. Runs beside other jobs; a newer call replaces one still running.
+
+| Runs | Undoable | Requires | Changes |
+|---|---|---|---|
+| Job, on the preview lane | No | An open project | The project or the session |
+
+Parameters: none.
+
+Result:
+
+| Name | Type | Description |
+|---|---|---|
+| `failed` | array of object |  |
+| `loaded` | array of object | The sources loaded, and those that couldn't be (their strokes are left out). |
+
+Example:
+
+```json
+{}
 ```
 
 ### `retouch.setLayerVisible`

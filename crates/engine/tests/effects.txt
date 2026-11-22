@@ -28,6 +28,7 @@ batch.run files
 cache.info none
 cache.removeAbandoned files
 cache.setFolder files
+cache.setSourceLimit project
 calibration.get none
 calibration.set files
 capture.calculate none
@@ -96,6 +97,7 @@ retouch.mapFocus project
 retouch.open project
 retouch.paint project
 retouch.removeLayer project
+retouch.repaint project
 retouch.setLayerVisible project
 retouch.setSource project
 retouch.sharpest none

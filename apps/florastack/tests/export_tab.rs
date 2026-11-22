@@ -200,18 +200,21 @@ fn preferences_reach_the_engine_and_say_nothing_is_sent() {
     changed.cache_folder = cache.display().to_string();
     changed.autosave_minutes = 0;
     changed.orphan_days = 7;
+    changed.source_limit_mb = 1024;
     let ctx = harness.ctx.clone();
     assert!(harness.state_mut().apply_preferences(&ctx, &changed));
     let info = harness.state_mut().shell.run("compute.info", json!({})).unwrap();
     assert_eq!((&info["memory"]["budgetMb"], &info["preference"]), (&json!(2048), &json!("cpu")), "{info}");
     let caches = harness.state_mut().shell.run("cache.info", json!({})).unwrap();
     assert_eq!(caches["temporaryProjects"]["folder"].as_str().map(PathBuf::from), Some(cache.join("projects")), "{caches}");
+    assert_eq!(caches["retouchSources"]["limit"], 1u64 << 30, "{caches}");
     let prefs = harness.state().prefs.clone();
     assert_eq!(
         (prefs.memory_mb, prefs.device, prefs.cache_folder.as_deref(), prefs.autosave()),
         (Some(2048), Some(florastack_engine::Device::Cpu), Some(cache.as_path()), None)
     );
     assert_eq!(prefs.orphan_days, Some(7), "the age at which temporary projects are offered for the trash");
+    assert_eq!(prefs.source_limit_mb, Some(1024), "the retouch sources' disk limit");
     // A new project goes into the cache folder's temporary projects.
     harness.state_mut().shell.run("project.new", json!({}));
     harness.step();

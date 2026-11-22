@@ -97,6 +97,9 @@ fn every_command_dispatches_from_json() {
     assert!(calls.run("cache.removeAbandoned", "{}")["removed"].is_array());
     let caches = calls.run("cache.info", "{}");
     assert!(caches["project"]["bytes"].is_u64() && caches["tiles"]["folder"].is_string(), "{caches}");
+    assert_eq!(caches["retouchSources"]["limit"], 4u64 << 30, "{caches}");
+    assert_eq!(calls.run("cache.setSourceLimit", r#"{ "bytes": 1073741824 }"#)["limit"], 1u64 << 30);
+    assert_eq!(calls.run("cache.info", "{}")["retouchSources"]["limit"], 1u64 << 30);
     // Presets shipped with FloraStack, applied by id.
     let built_in = calls.run("preset.list", "{}");
     assert_eq!(built_in["presets"].as_array().unwrap().len(), 4, "{built_in}");
@@ -274,6 +277,8 @@ fn every_command_dispatches_from_json() {
     assert!(calls.run("retouch.paint", &format!(r#"{{ "begin": true, "stroke": {stroke} }}"#))["region"].is_array());
     assert_eq!(calls.run("retouch.stroke", &format!(r#"{{ "stroke": {stroke} }}"#))["strokes"], 1);
     assert_eq!(calls.run("retouch.cancelPaint", "{}")["cancelled"], false);
+    // Every source the strokes need is in memory: nothing to load.
+    assert_eq!(calls.run("retouch.repaint", "{}")["loaded"], json!([]));
     let layer = calls.run("retouch.addLayer", &format!(r#"{{ "output": {target}, "name": "Bristles" }}"#))["layer"].clone();
     calls.run("retouch.setLayerVisible", &format!(r#"{{ "output": {target}, "layer": {layer}, "visible": false }}"#));
     calls.run("retouch.removeLayer", &format!(r#"{{ "output": {target}, "layer": {layer} }}"#));
