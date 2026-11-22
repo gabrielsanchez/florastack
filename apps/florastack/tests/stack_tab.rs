@@ -150,6 +150,30 @@ fn outputs_of_different_framings_compared_line_up_by_their_canvases() {
 }
 
 #[test]
+fn a_settings_question_mark_opens_its_section_of_the_guide_in_the_app() {
+    let (dir, mut harness) = app("help");
+    drop_files(&mut harness, &frames(&dir.join("photos")));
+    until(&mut harness, "the frames to be listed", |app| app.shell.frames.len() == 4 && !app.shell.stack_settings.is_null());
+    // The first "?" is the method's: its section, from the guide the app carries.
+    harness.get_all_by_label("?").next().unwrap().click();
+    // A window shows from its second frame, the first measuring it.
+    harness.step();
+    harness.step();
+    assert_eq!(florastack_app::help::shown(&harness.ctx).as_deref(), Some("method"));
+    harness.get_by_label_contains("picks the sharpest detail scale by scale. It is the best all-rounder");
+    harness.get_by_label("Open the whole guide online");
+    // A link to another section of the page opens it in the window.
+    // (Through AccessKit: egui_kittest's pointer clicks miss widgets in a scroll area inside a window, as the roadmap
+    // notes for the Preferences dialog.)
+    harness.get_by_label("contrast threshold").click_accesskit();
+    harness.step();
+    harness.step();
+    assert_eq!(florastack_app::help::shown(&harness.ctx).as_deref(), Some("contrast-threshold"));
+    harness.get_by_label_contains("follows each pixel's sharpest frame only where that frame stands out clearly");
+    done(dir, harness);
+}
+
+#[test]
 fn settings_change_through_their_controls() {
     let (dir, mut harness) = aligned("settings");
     // A framing applies when stacking, so a preview follows it at once.

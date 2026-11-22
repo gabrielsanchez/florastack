@@ -1147,5 +1147,6 @@ impl FloraStackApp {
         if let Some(picked) = self.palette.ui(&ctx, registry) {
             self.picked(&ctx, picked);
         }
+        crate::help::show(&ctx);
     }
 }

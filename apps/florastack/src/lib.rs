@@ -25,6 +25,7 @@ pub mod display_profile;
 pub mod export_tab;
 pub mod files;
 pub mod frame_cache;
+pub mod help;
 pub mod i18n;
 pub mod loader;
 #[cfg(not(target_arch = "wasm32"))]

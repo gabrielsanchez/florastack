@@ -2,7 +2,8 @@
 //! always on screen (the method, radius and smoothing, the alignment's terms, the framing) with an Advanced section for
 //! the rest, the depth map's contrast-threshold step, and the outputs with their parameters, two of which can be
 //! compared. Every setting has a tooltip that says what it does and when to change it, and a "?" that opens its section
-//! of `book/src/user/stack-tab.md`. Settings change through `stack.set` and `align.set` (a slider's drag is one undo step), and
+//! of `book/src/user/stack-tab.md`, bundled with the app, in a window (`help.rs`). Settings change through `stack.set`
+//! and `align.set` (a slider's drag is one undo step), and
 //! each change of a stacking setting asks for a quarter-scale preview once the frames are aligned, beside any full
 //! stack still running.
 
@@ -14,16 +15,16 @@ use crate::app::{FloraStackApp, Selection};
 use crate::i18n::{tr, tr_args};
 use crate::prefs::{Compare, Method};
 
-/// The docs page that every "?" opens, at the setting's section.
+/// The docs page online, at a section: the help window's link to the whole guide.
 pub fn docs_url(anchor: &str) -> String {
     format!("{}/blob/main/book/src/user/stack-tab.md#{anchor}", env!("CARGO_PKG_REPOSITORY"))
 }
 
-/// A "?" after a setting: its section of the docs, opened in the browser.
+/// A "?" after a setting: its section of the docs, opened in the help window from the copy the app carries.
 fn learn_more(ui: &mut egui::Ui, anchor: &str) {
     let response = ui.add(egui::Button::new(RichText::new("?").small()).small()).on_hover_text(tr("learn-more"));
     if response.clicked() {
-        ui.ctx().open_url(egui::OpenUrl::new_tab(docs_url(anchor)));
+        crate::help::open(ui.ctx(), anchor);
     }
 }
 
@@ -561,24 +562,10 @@ mod tests {
         assert!(docs_url("radius").ends_with("/blob/main/book/src/user/stack-tab.md#radius"));
     }
 
-    /// GitHub's anchor for a heading: lower case, spaces as hyphens, other punctuation dropped.
-    fn anchor(heading: &str) -> String {
-        heading
-            .trim()
-            .to_lowercase()
-            .chars()
-            .filter_map(|c| match c {
-                ' ' => Some('-'),
-                c if c.is_alphanumeric() || c == '-' => Some(c),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn every_learn_more_link_has_its_section_in_the_docs() {
-        let docs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../book/src/user/stack-tab.md")).unwrap();
-        let sections: Vec<String> = docs.lines().filter_map(|l| l.strip_prefix("## ")).map(anchor).collect();
+        let docs = crate::help::STACK_TAB;
+        let sections: Vec<String> = docs.lines().filter_map(|l| l.strip_prefix("## ")).map(crate::help::anchor).collect();
         let source = include_str!("stack_tab.rs");
         // A setting's section is the literal after its tooltip's key, or the one `learn_more` and `row` are given.
         let mut anchors: Vec<&str> = source
@@ -593,6 +580,11 @@ mod tests {
         assert!(anchors.len() > 20, "{anchors:?}");
         for a in anchors {
             assert!(sections.iter().any(|s| s == a), "book/src/user/stack-tab.md has no section for #{a}: {sections:?}");
+            assert!(crate::help::section(docs, a).is_some_and(|(_, text)| !text.is_empty()), "the help window finds #{a}");
+        }
+        // The page's own links to its sections lead somewhere too.
+        for target in docs.split("](#").skip(1).filter_map(|piece| piece.split(')').next()) {
+            assert!(sections.iter().any(|s| s == target), "a link to #{target}, which has no section");
         }
     }
 }

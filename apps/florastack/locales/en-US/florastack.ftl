@@ -206,6 +206,9 @@ align-missing = { $count ->
    *[other] { $count } frames aren't aligned yet: align again.
 }
 learn-more = Learn more
+help-title = Help
+help-missing = This version of the guide has no such section.
+help-online = Open the whole guide online
 
 stack-method = Method
 method-pyramid = Pyramid

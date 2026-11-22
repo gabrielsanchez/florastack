@@ -1,6 +1,6 @@
 # The Stack tab
 
-The Stack tab, on the right of the desktop app's window, takes a stack of photos from frames to finished image in three steps: add the frames, align them, and stack them. Its settings are always on screen; the ones most stacks never need are under **Advanced**. Every setting has a tooltip, and its **?** opens its section of this page.
+The Stack tab, on the right of the desktop app's window, takes a stack of photos from frames to finished image in three steps: add the frames, align them, and stack them. Its settings are always on screen; the ones most stacks never need are under **Advanced**. Every setting has a tooltip, and its **?** opens its section of this page in a window, from the copy of this guide that comes with the app, so it needs no network and matches the version you run.
 
 Changing a stacking setting renders a quarter-size preview once the frames are aligned: the first in a few seconds, while the frames are read, and the next ones in under a second, from the reduced frames FloraStack keeps. A full-size stack runs in the background: you can keep changing settings and previewing while it runs, and each stack you make is kept in the outputs list.
 
