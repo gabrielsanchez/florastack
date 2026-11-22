@@ -8,7 +8,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{app, drop_files, frames, until};
+use common::{app, drop_files, frames, shifted_frames, until};
 use egui::Key;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -19,8 +19,14 @@ use florastack_app::prefs::{Compare, Method};
 /// The app for test `name` with the synthetic stack dropped on it and aligned with the Stack tab's Align button, its
 /// filmstrip previews made.
 fn aligned(name: &str) -> (PathBuf, Harness<'static, FloraStackApp>) {
+    aligned_shifted(name, 0)
+}
+
+/// [`aligned`], each frame `shift` pixels right of the one before (`shifted_frames`).
+fn aligned_shifted(name: &str, shift: u32) -> (PathBuf, Harness<'static, FloraStackApp>) {
     let (dir, mut harness) = app(name);
-    drop_files(&mut harness, &frames(&dir.join("photos")));
+    let photos = dir.join("photos");
+    drop_files(&mut harness, &if shift == 0 { frames(&photos) } else { shifted_frames(&photos, shift) });
     until(&mut harness, "the frames to be listed", |app| app.shell.frames.len() == 4);
     harness.get_by_label("Align").click();
     until(&mut harness, "the alignment and the previews", |app| app.aligned() && !app.shell.busy());
@@ -113,6 +119,33 @@ fn both_methods_make_two_outputs_to_compare() {
     harness.get_by_label("Side by side").click();
     harness.step();
     assert_eq!(harness.state().prefs.compare, Compare::SideBySide);
+    done(dir, harness);
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation)] // Pixel positions, well within f32.
+fn outputs_of_different_framings_compared_line_up_by_their_canvases() {
+    let (dir, mut harness) = aligned_shifted("framings", 2);
+    harness.get_by_label("Stack frames").click();
+    until(&mut harness, "the narrow output", |app| app.shell.outputs.len() == 1 && !app.shell.busy());
+    harness.get_by_label("Wide").click();
+    until(&mut harness, "the wide framing", |app| app.shell.align_settings["framing"] == "wide" && !app.shell.busy());
+    harness.get_by_label("Stack frames").click();
+    until(&mut harness, "the wide output", |app| app.shell.outputs.len() == 2 && !app.shell.busy());
+    let canvases: Vec<_> = harness.state().shell.outputs.iter().map(|o| o.canvas.unwrap()).collect();
+    assert_ne!(canvases[0].size, canvases[1].size, "the wide canvas is larger");
+    for checkbox in harness.get_all_by_label("Compare") {
+        checkbox.click();
+    }
+    until(&mut harness, "the comparison", |app| app.viewer.is_comparing());
+    // The narrow output's pixels are found in the wide one through the master frame, not at the same coordinates.
+    let map = harness.state().viewer.pair_map().expect("the outputs' canvases place the second image");
+    let (zoom, center) = map.view(1.0, egui::Vec2::new(10.0, 10.0));
+    let [[a, _, c], [_, e, f]] = canvases[0].to_master;
+    let [[_, _, wc], [_, _, wf]] = canvases[1].to_master;
+    let want = egui::Vec2::new((a * 9.5 + c - wc + 0.5) as f32, (e * 9.5 + f - wf + 0.5) as f32);
+    assert!((zoom - 1.0).abs() < 0.05 && (center - want).length() < 0.5, "{zoom} {center:?} against {want:?}");
+    assert!((center - egui::Vec2::new(10.0, 10.0)).length() > 1.0, "the wide canvas starts elsewhere: {center:?}");
     done(dir, harness);
 }
 

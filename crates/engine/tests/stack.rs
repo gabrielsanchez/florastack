@@ -130,6 +130,48 @@ fn wide_framing_leaves_the_pixels_no_frame_covers_transparent() {
 }
 
 #[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::cast_precision_loss)] // Small pixel positions.
+fn outputs_list_the_canvases_that_map_one_onto_the_other() {
+    let dir = TempDir::new("stack-canvases");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(6, 0.02, None, 29));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    let narrow = run(&mut engine, "stack.average", "{}")["output"].as_u64().unwrap();
+    run(&mut engine, "align.set", r#"{ "framing": "wide" }"#);
+    let wide = run(&mut engine, "stack.average", "{}")["output"].as_u64().unwrap();
+    let list = run(&mut engine, "output.list", "{}");
+    let canvas = |id: u64| list["outputs"].as_array().unwrap().iter().find(|o| o["id"] == id).unwrap()["canvas"].clone();
+    let map = |c: &serde_json::Value| {
+        let m: [[f64; 3]; 2] = serde_json::from_value(c["toMaster"].clone()).unwrap();
+        florastack_core::Affine { m }
+    };
+    let (narrow_canvas, wide_canvas) = (canvas(narrow), canvas(wide));
+    let (a, b) = (output_image(&engine, narrow), output_image(&engine, wide));
+    assert_eq!((narrow_canvas["width"].as_u64(), narrow_canvas["height"].as_u64()), (Some(a.width() as u64), Some(a.height() as u64)));
+    assert_eq!((wide_canvas["width"].as_u64(), wide_canvas["height"].as_u64()), (Some(b.width() as u64), Some(b.height() as u64)));
+    // The narrow output's center, found in the wide one through the master frame, shows the same scene; at the same
+    // pixel coordinates the wide one shows another place.
+    let to_wide = map(&narrow_canvas).then(&map(&wide_canvas).inverse().unwrap());
+    let (x, y) = (a.width() as f64 / 2.0, a.height() as f64 / 2.0);
+    let (u, v) = to_wide.apply(x, y);
+    let mean_difference = |(bx, by): (f64, f64)| {
+        let (mut sum, mut n) = (0.0, 0.0);
+        for j in -10..=10 {
+            for i in -10..=10 {
+                let at = |image: &Image<f32>, cx: f64, cy: f64| {
+                    image.pixel((cx.round() as i64 + i) as usize, (cy.round() as i64 + j) as usize).unwrap()[0]
+                };
+                sum += f64::from((at(&a, x, y) - at(&b, bx, by)).abs());
+                n += 1.0;
+            }
+        }
+        sum / n
+    };
+    let (mapped, unmapped) = (mean_difference((u, v)), mean_difference((x, y)));
+    assert!(mapped < 0.03 && mapped * 3.0 < unmapped, "through the canvases {mapped}, by pixels {unmapped}");
+}
+
+#[test]
 fn the_preview_is_a_quarter_of_the_stack_and_changes_nothing() {
     let dir = TempDir::new("stack-preview");
     let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 23));

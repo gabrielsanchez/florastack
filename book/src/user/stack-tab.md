@@ -152,4 +152,4 @@ Drag up and down over the thumbnails in the frame list to play the stack frame b
 
 ## Outputs
 
-Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared.
+Every stack is kept in the outputs list with its method and main parameters; the full parameters are in its tooltip. Click an output to view it. Tick **Compare** on two outputs to compare them, either with a **Split** line that you drag across the view, or **Side by side**, with zoom and pan shared. Outputs stacked with different framings line up by what they show, not by their pixels.

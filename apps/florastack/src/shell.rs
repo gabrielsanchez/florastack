@@ -45,6 +45,16 @@ pub struct OutputRow {
     /// rendered (`output.render`), again when the fingerprint changes.
     pub edits: u64,
     pub edited: bool,
+    /// The canvas it was stacked on (`output.list`'s), when known: two outputs compared are lined up by it.
+    pub canvas: Option<crate::viewer::Canvas>,
+}
+
+/// The canvas of an output as `output.list` gives it.
+fn canvas_of(listed: &Value) -> Option<crate::viewer::Canvas> {
+    let canvas = &listed["canvas"];
+    let size = |key: &str| canvas[key].as_u64().and_then(|v| usize::try_from(v).ok());
+    let to_master: [[f64; 3]; 2] = serde_json::from_value(canvas["toMaster"].clone()).ok()?;
+    Some(crate::viewer::Canvas { size: [size("width")?, size("height")?], to_master })
 }
 
 /// A fingerprint of `value`'s JSON.
@@ -396,6 +406,7 @@ impl Shell {
     /// Reads the frame list and the outputs again, and asks for the frames' missing previews once per project.
     fn refresh(&mut self) {
         self.revision += 1;
+        let listed = self.engine.run("output.list", json!({})).unwrap_or(Value::Null);
         let Some(project) = self.engine.project() else {
             self.frames.clear();
             self.outputs.clear();
@@ -404,6 +415,7 @@ impl Shell {
             return;
         };
         let root = self.engine.project_path().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let canvas = |id: u64| listed["outputs"].as_array().and_then(|o| o.iter().find(|o| o["id"] == id)).and_then(canvas_of);
         self.outputs = project
             .outputs
             .iter()
@@ -415,6 +427,7 @@ impl Shell {
                 parameters: o.parameters.clone(),
                 edits: fingerprint(&(&o.retouch, &o.adjustments)),
                 edited: o.adjustments.is_some() || o.retouch.iter().any(|l| l.visible && !l.strokes.is_empty()),
+                canvas: canvas(o.id().get()),
             })
             .collect();
         self.stack_settings = self.engine.run("stack.get", json!({})).map_or(Value::Null, |v| v["settings"].clone());

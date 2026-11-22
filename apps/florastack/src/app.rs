@@ -917,14 +917,18 @@ impl FloraStackApp {
     /// previews (only these two fill the pair).
     fn show_pair(&mut self) {
         let [Some(_), Some(_)] = &self.pair else { return };
-        let name = |id: u64| self.shell.outputs.iter().find(|o| o.id == id).map(|o| o.name.clone()).unwrap_or_default();
-        let labels = match &self.selection {
-            Selection::Compare(a, b) => [name(*a), name(*b)],
-            Selection::Preview => [tr("method-pyramid"), tr("method-depth-map")],
+        let output = |id: u64| self.shell.outputs.iter().find(|o| o.id == id);
+        let name = |id: u64| output(id).map(|o| o.name.clone()).unwrap_or_default();
+        let (labels, canvases) = match &self.selection {
+            Selection::Compare(a, b) => ([name(*a), name(*b)], output(*a).and_then(|o| o.canvas).zip(output(*b).and_then(|o| o.canvas))),
+            // The previews of the two methods share the canvas, at the same size.
+            Selection::Preview => ([tr("method-pyramid"), tr("method-depth-map")], None),
             _ => return,
         };
         if let [Some(first), Some(second)] = std::mem::take(&mut self.pair) {
-            self.viewer.show_pair(first, second, labels);
+            // Outputs of different framings line up by their canvases, not their pixels.
+            let map = canvases.and_then(|(a, b)| crate::viewer::PairMap::between(&a, [first.width, first.height], &b, [second.width, second.height]));
+            self.viewer.show_pair(first, second, labels, map);
         }
     }
 

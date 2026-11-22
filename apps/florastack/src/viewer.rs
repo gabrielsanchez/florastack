@@ -98,6 +98,66 @@ impl Picture {
 /// How far from the split line, in points, a drag moves the line rather than the image.
 const SPLIT_GRAB: f32 = 8.0;
 
+/// A canvas an image shows: its size, and the affine map from its pixels to the master frame's (pixel centers at
+/// whole numbers), as `output.list` gives it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Canvas {
+    pub size: [usize; 2],
+    pub to_master: [[f64; 3]; 2],
+}
+
+/// Where the second image of a pair shows what the first shows: the affine map from the first image's pixels to the
+/// second's (pixel edges at whole numbers, as the view's center is), for images of different canvases (outputs of
+/// different framings) or reduced differently. The second image is drawn at the point and the scale the map gives;
+/// a rotation between the canvases (the narrow framing's, of a degree or so at most) isn't drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PairMap(pub [[f64; 3]; 2]);
+
+impl PairMap {
+    /// The map between an image of `first` shown at `first_shown` pixels and one of `second` at `second_shown`; `None`
+    /// when a size is 0 or the second canvas's map can't be inverted.
+    pub fn between(first: &Canvas, first_shown: [usize; 2], second: &Canvas, second_shown: [usize; 2]) -> Option<PairMap> {
+        let ratio = |canvas: usize, shown: usize| (canvas > 0 && shown > 0).then(|| canvas as f64 / shown as f64);
+        // From the first image's pixel edges to its canvas's pixel centers.
+        let (kx, ky) = (ratio(first.size[0], first_shown[0])?, ratio(first.size[1], first_shown[1])?);
+        let to_first = [[kx, 0.0, -0.5], [0.0, ky, -0.5]];
+        // From the second canvas's pixel centers to the second image's pixel edges.
+        let (lx, ly) = (ratio(second_shown[0], second.size[0])?, ratio(second_shown[1], second.size[1])?);
+        let to_second = [[lx, 0.0, 0.5 * lx], [0.0, ly, 0.5 * ly]];
+        let m = then(&then(&then(&to_first, &first.to_master), &inverse(&second.to_master)?), &to_second);
+        m.iter().flatten().all(|v| v.is_finite()).then_some(PairMap(m))
+    }
+
+    /// The second image's zoom and center for the first's `zoom` and `center`.
+    #[allow(clippy::cast_possible_truncation, reason = "image coordinates and zooms, well within f32")]
+    pub fn view(&self, zoom: f32, center: Vec2) -> (f32, Vec2) {
+        let [[a, b, c], [d, e, f]] = self.0;
+        let (x, y) = (f64::from(center.x), f64::from(center.y));
+        // The second image's pixels per one of the first's.
+        let scale = (a * e - b * d).abs().sqrt();
+        let zoom = if scale > 0.0 { (f64::from(zoom) / scale) as f32 } else { zoom };
+        (zoom, Vec2::new((a * x + b * y + c) as f32, (d * x + e * y + f) as f32))
+    }
+}
+
+/// `first` then `next`, as affine maps.
+fn then(first: &[[f64; 3]; 2], next: &[[f64; 3]; 2]) -> [[f64; 3]; 2] {
+    let [[a, b, c], [d, e, f]] = *first;
+    let [[na, nb, nc], [nd, ne, nf]] = *next;
+    [[na * a + nb * d, na * b + nb * e, na * c + nb * f + nc], [nd * a + ne * d, nd * b + ne * e, nd * c + ne * f + nf]]
+}
+
+/// The inverse of an affine map, if it has one.
+fn inverse(m: &[[f64; 3]; 2]) -> Option<[[f64; 3]; 2]> {
+    let [[a, b, c], [d, e, f]] = *m;
+    let det = a * e - b * d;
+    if !det.is_finite() || det == 0.0 {
+        return None;
+    }
+    let (ia, ib, id, ie) = (e / det, -b / det, -d / det, a / det);
+    Some([[ia, ib, -(ia * c + ib * f)], [id, ie, -(id * c + ie * f)]])
+}
+
 /// See the module documentation.
 pub struct Viewer {
     shown: Option<Picture>,
@@ -110,6 +170,8 @@ pub struct Viewer {
     dragging_split: bool,
     /// The two images' names, shown in the view's corners when comparing.
     labels: [String; 2],
+    /// Where the second image shows what the first shows, when not at the same pixels.
+    pair_map: Option<PairMap>,
     /// Device pixels per image pixel, now and where it is going.
     zoom: f32,
     target: f32,
@@ -132,6 +194,7 @@ impl Viewer {
             split: 0.5,
             dragging_split: false,
             labels: [String::new(), String::new()],
+            pair_map: None,
             zoom: 1.0,
             target: 1.0,
             center: Vec2::ZERO,
@@ -168,14 +231,21 @@ impl Viewer {
         self.fit |= !same;
     }
 
-    /// Shows `first` and `second` compared, named `labels`; the view stays where it was when the first has the size of
-    /// the image shown before (the same stack's other output), and fits otherwise.
-    pub fn show_pair(&mut self, first: Arc<DisplayImage>, second: Arc<DisplayImage>, labels: [String; 2]) {
+    /// Shows `first` and `second` compared, named `labels`, the second placed by `map` (at the first's pixels without
+    /// one); the view stays where it was when the first has the size of the image shown before (the same stack's other
+    /// output), and fits otherwise.
+    pub fn show_pair(&mut self, first: Arc<DisplayImage>, second: Arc<DisplayImage>, labels: [String; 2], map: Option<PairMap>) {
         let same = self.shown.as_ref().is_some_and(|s| (s.image.width, s.image.height) == (first.width, first.height));
         self.shown = Some(Picture::new(first));
         self.other = Some(Picture::new(second));
         self.labels = labels;
+        self.pair_map = map;
         self.fit |= !same;
+    }
+
+    /// Where the second image of the pair shown is placed, when not at the first's pixels.
+    pub fn pair_map(&self) -> Option<PairMap> {
+        self.pair_map.filter(|_| self.other.is_some())
     }
 
     pub fn set_compare(&mut self, compare: Compare) {
@@ -297,10 +367,13 @@ impl Viewer {
         let second_view = if side_by_side { views.get(1).copied().unwrap_or(rect) } else { rect };
         let second_clip = if splitting { Rect::from_min_max(Pos2::new(split_x, rect.top()), rect.max) } else { second_view };
         let (zoom, center) = (self.zoom, self.center);
+        let (second_zoom, second_center) = self.pair_map.map_or((zoom, center), |m| m.view(zoom, center));
         let ctx = ui.ctx().clone();
         let gpu = self.gpu.is_some();
-        for (slot, (shown, area, clip)) in
-            [(self.shown.as_mut(), view, view), (self.other.as_mut(), second_view, second_clip)].into_iter().enumerate()
+        for (slot, (shown, area, clip, zoom, center)) in
+            [(self.shown.as_mut(), view, view, zoom, center), (self.other.as_mut(), second_view, second_clip, second_zoom, second_center)]
+                .into_iter()
+                .enumerate()
         {
             let Some(shown) = shown else { continue };
             draw(ui, &ctx, gpu, slot, shown, (area, clip), zoom, center, 1.0);
@@ -1239,6 +1312,26 @@ pub(crate) mod tests {
         assert_eq!(at(48, 32), 255);
         // Linear 0.214, twice as bright, through sRGB's curve.
         assert!(at(16, 32).abs_diff(175) <= 2, "{}", at(16, 32));
+    }
+
+    #[test]
+    fn a_pair_of_canvases_maps_the_first_image_onto_the_second() {
+        // The first canvas is the master's 100 x 80 pixels, shown at half size; the second is wider, starting 10
+        // pixels left of and above the master's, shown whole.
+        let first = Canvas { size: [100, 80], to_master: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] };
+        let second = Canvas { size: [120, 100], to_master: [[1.0, 0.0, -10.0], [0.0, 1.0, -10.0]] };
+        let map = PairMap::between(&first, [50, 40], &second, [120, 100]).unwrap();
+        // The first image's center, master pixel 49.5, is the second's 59.5, whose pixel edges are at 60; a pixel of
+        // the first is two of the second.
+        let (zoom, center) = map.view(2.0, Vec2::new(25.0, 20.0));
+        assert!((zoom - 1.0).abs() < 1e-6 && (center - Vec2::new(60.0, 50.0)).length() < 1e-4, "{zoom} {center:?}");
+        // The same canvas at the same size is the identity.
+        let same = PairMap::between(&first, [100, 80], &first, [100, 80]).unwrap();
+        assert_eq!(same.view(1.5, Vec2::new(7.0, 3.0)), (1.5, Vec2::new(7.0, 3.0)));
+        // A canvas whose map can't be inverted, or an empty image, gives none.
+        let flat = Canvas { size: [10, 10], to_master: [[0.0; 3], [0.0; 3]] };
+        assert!(PairMap::between(&first, [100, 80], &flat, [10, 10]).is_none());
+        assert!(PairMap::between(&first, [0, 80], &second, [120, 100]).is_none());
     }
 
     #[test]
