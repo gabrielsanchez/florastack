@@ -61,7 +61,11 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             set_source,
         ),
         CommandSpec::job(
-            Meta::new("retouch.repaint", "Paint strokes again", "Loads the sources the visible strokes need and paints them again where they changed.")
+            Meta::new(
+                "retouch.repaint",
+                "Paint strokes again",
+                "Loads the sources the visible strokes need and paints them again where they changed.",
+            )
                 .help(
                     "After an undo, a redo or a layer shown or hidden, the region where the visible strokes changed is \
                      painted again from the output. When a stroke there paints from a frame or output that isn't in \

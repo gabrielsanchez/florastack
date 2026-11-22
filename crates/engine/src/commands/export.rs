@@ -87,7 +87,8 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                     "The file is named by the settings' template, with the format's extension; the depth and \
                      confidence maps (a depth-map output's) are written beside it as 16-bit TIFF files ending in \
                      `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in \
-                     a folder ending in ` aligned` (in the output's format, depth and profile with `aligned_as_output`). Settings given apply to this export only, on top of the project's. \
+                     a folder ending in ` aligned` (in the output's format, depth and profile with \
+                     `aligned_as_output`). Settings given apply to this export only, on top of the project's. \
                      Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a \
                      failure leaves no partial file. Scientific extras include a float TIFF in micrometers, \
                      per-frame contribution maps and alignment CSV; visible annotation layers are rendered only \
