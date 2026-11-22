@@ -340,6 +340,7 @@ film-stop = Stop
 film-as-shot = As shot
 film-aligned = Aligned
 tip-film = Drag up and down over the thumbnails to play the stack frame by frame, and spot what moved between frames. Escape returns to the viewer.
+film-thumbnail = Preview of { $name }
 tip-film-as-shot = Plays the frames as they were shot rather than aligned: alignment's own corrections then show as movement.
 film-caption = Frame { $index } of { $count }: { $name } ({ $how })
 quality-master = master

@@ -328,6 +328,9 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
                 if filmed {
                     ui.painter().rect_stroke(thumb.rect, 2.0, ui.visuals().selection.stroke, egui::StrokeKind::Outside);
                 }
+                // Named for screen readers (and the UI tests, which scrub over them).
+                let name = tr_args("film-thumbnail", &[("name", frame.name.clone().into())]);
+                thumb.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &name));
                 let thumb = thumb.on_hover_text(tr("tip-film"));
                 if thumb.is_pointer_button_down_on() || thumb.dragged() {
                     scrubbing = true;
@@ -354,13 +357,10 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
             }
         }
     });
-    // Scrubbing: the frame under the pointer, as it moves over the rows.
+    // Scrubbing: the frame under the pointer, as it moves over the rows; between two rows the one above, above the
+    // first the first, below the last the last.
     if scrubbing && let Some(y) = ui.input(|i| i.pointer.interact_pos()).map(|p| p.y) {
-        let index = spans.iter().position(|s| s.contains(y)).unwrap_or(if spans.first().is_some_and(|s| y < s.min) {
-            0
-        } else {
-            spans.len().saturating_sub(1)
-        });
+        let index = spans.iter().rposition(|s| s.min <= y).unwrap_or(0);
         if app.film.as_ref().is_none_or(|f| f.index != index || f.playing) {
             app.film_at(index, false);
         }

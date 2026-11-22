@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::{app, drop_files, frames, shifted_frames, until};
-use egui::Key;
+use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use florastack_app::FloraStackApp;
@@ -208,5 +208,29 @@ fn the_filmstrip_plays_the_aligned_frames() {
     harness.key_press(Key::Escape);
     harness.step();
     assert!(harness.state().film.is_none(), "Escape returns to the viewer");
+    // Dragging down over the thumbnails plays the stack frame by frame, and back up returns; letting go keeps the
+    // frame shown.
+    let names: Vec<String> = harness.state().shell.frames.iter().map(|f| f.name.clone()).collect();
+    let thumb = |harness: &Harness<'static, FloraStackApp>, i: usize| harness.get_by_label(&format!("Preview of {}", names[i])).rect().center();
+    let (first, last) = (thumb(&harness, 0), thumb(&harness, names.len() - 1));
+    let mut seen = Vec::new();
+    harness.event(Event::PointerMoved(first));
+    harness.step();
+    harness.event(Event::PointerButton { pos: first, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    harness.step();
+    for at in (0..=12).map(|i| first + (last - first) * (i as f32 / 12.0)).chain([first + (last - first) * 0.4]) {
+        harness.event(Event::PointerMoved(at));
+        harness.step();
+        let film = harness.state().film.clone().expect("scrubbing shows the filmstrip");
+        assert!(!film.playing);
+        if seen.last() != Some(&film.index) {
+            seen.push(film.index);
+        }
+    }
+    harness.event(Event::PointerButton { pos: first, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    harness.step();
+    assert_eq!(&seen[..names.len()], (0..names.len()).collect::<Vec<_>>(), "each frame in turn, down: {seen:?}");
+    assert!(seen.len() > names.len() && seen.last() < Some(&(names.len() - 1)), "and back up: {seen:?}");
+    assert_eq!(harness.state().film.as_ref().map(|f| f.index), seen.last().copied(), "the frame stays shown");
     done(dir, harness);
 }
