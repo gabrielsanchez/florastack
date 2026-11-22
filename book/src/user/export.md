@@ -16,7 +16,7 @@ folder. The settings are the project's, saved with it, and a [preset](#presets) 
 | **Color profile** | **Keep the frames' profile** (the default: what they were shot or exported in), **sRGB** (the safest for sharing), or a wide gamut (**ProPhoto RGB** or **Rec. 2020**) that keeps saturated colors for editing |
 | **Copy metadata from frame** | The camera, lens, exposure, date, place and keywords of that frame (counted from 1 in the frame list), in the file |
 | **File name** | The name without its extension; `{project}`, `{name}` (the output's), `{method}`, `{frames}`, `{first}`, `{last}` (the first and last frames' file names), `{date}` and `{id}` are filled in |
-| **Also export** | A depth-map output's **depth map** and **confidence map**, as 16-bit gray TIFFs beside it; the **aligned frames**, each warped onto the output's canvas, as 16-bit TIFFs in a folder of their own, for retouching in other programs |
+| **Also export** | A depth-map output's **depth map** and **confidence map**, as 16-bit gray TIFFs beside it; the **aligned frames**, each warped onto the output's canvas, as 16-bit TIFFs in a folder of their own, for retouching in other programs, or with **In the output's format** in the format, depth, compression and profile set for the output |
 
 A 32-bit float DNG holds white at 1 and needs a raw converter that reads DNG 1.4 or later. TIFF and DNG files are written a part at a time, so exporting takes little memory beyond the output itself; one whose samples could pass 4 GB is written as BigTIFF, which most current software reads but older software may not.
 

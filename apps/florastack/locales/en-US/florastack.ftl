@@ -484,6 +484,8 @@ tip-export-confidence-map = How sure the depth map is at each point, as a 16-bit
 export-maps-none = Only depth-map outputs have a depth map and a confidence map.
 export-aligned-frames = Aligned frames
 tip-export-aligned-frames = Every frame as it was aligned onto the output's canvas, as 16-bit TIFF files in a folder of their own: for retouching in other programs.
+export-aligned-as-output = In the output's format
+tip-export-aligned-as-output = Writes the aligned frames in the format, bit depth, compression and color profile set above for the output, rather than as 16-bit TIFF: as JPEG for a quick look, say.
 export-pick = Pick an output to export.
 export-estimate = { $size } in { $files ->
     [one] one file

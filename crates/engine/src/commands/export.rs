@@ -69,7 +69,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                     "The file is named by the settings' template, with the format's extension; the depth and \
                      confidence maps (a depth-map output's) are written beside it as 16-bit TIFF files ending in \
                      `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in \
-                     a folder ending in ` aligned`. Settings given apply to this export only, on top of the project's. \
+                     a folder ending in ` aligned` (in the output's format, depth and profile with `aligned_as_output`). Settings given apply to this export only, on top of the project's. \
                      Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a \
                      failure leaves no partial file. Scientific extras include a float TIFF in micrometers, \
                      per-frame contribution maps and alignment CSV; visible annotation layers are rendered only \
@@ -160,6 +160,8 @@ pub struct OutputSettings {
     pub confidence_map: bool,
     /// Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder.
     pub aligned_frames: bool,
+    /// Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF.
+    pub aligned_as_output: bool,
     /// Write full-precision calibrated depth as float TIFF values in micrometers.
     pub calibrated_depth: bool,
     /// Signed capture step in micrometers, in the recorded capture order; unset when unknown.
@@ -201,6 +203,7 @@ impl Default for OutputSettings {
             depth_map: false,
             confidence_map: false,
             aligned_frames: false,
+            aligned_as_output: false,
             calibrated_depth: false,
             z_step_micrometers: None,
             z_origin_micrometers: 0.0,
@@ -226,6 +229,17 @@ impl OutputSettings {
             FileFormat::OpenExr => OutputFormat::OpenExr { compression: self.exr_compression, half: self.exr_half },
         };
         OutputSpec { format, depth: self.depth, profile: self.profile, extended_range: self.extended_range }
+    }
+
+    /// The spec of the aligned frames: the output's, without its extended range (frames have none), with
+    /// `aligned_as_output`; 16-bit TIFF with Deflate in the frames' own profile otherwise.
+    pub fn aligned_spec(&self) -> OutputSpec {
+        if self.aligned_as_output { OutputSpec { extended_range: false, ..self.spec() } } else { extra_spec(OutputProfile::Input) }
+    }
+
+    /// The aligned frames' file extension.
+    pub fn aligned_extension(&self) -> &'static str {
+        if self.aligned_as_output { self.format.extension() } else { FileFormat::Tiff.extension() }
     }
 
     /// Checks the settings: a depth the format holds, options in range, a template with known tokens.
@@ -514,7 +528,7 @@ fn estimate(session: &Session, p: EstimateParams) -> Result<Estimate, CommandErr
     }
     if settings.aligned_frames {
         let n = output_frames(project, output).len() as u64;
-        let (b, _) = file_bytes(pixels, 3, extra_spec(OutputProfile::Input));
+        let (b, _) = file_bytes(pixels, 3, settings.aligned_spec());
         bytes = bytes.saturating_add(b.saturating_mul(n));
         files += usize::try_from(n).unwrap_or(usize::MAX);
         exact = false;

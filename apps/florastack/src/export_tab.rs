@@ -276,6 +276,10 @@ fn alongside(app: &mut FloraStackApp, ui: &mut egui::Ui, depth_map: bool) {
         ui.weak(tr("export-maps-none"));
     }
     toggle(app, ui, "aligned_frames", "export-aligned-frames", "tip-export-aligned-frames", true);
+    let aligned = app.shell.export_settings["aligned_frames"] == json!(true);
+    ui.indent("aligned-format", |ui| {
+        toggle(app, ui, "aligned_as_output", "export-aligned-as-output", "tip-export-aligned-as-output", aligned);
+    });
 }
 
 /// The size the export takes and the main file's name, asked of the engine once for each output and change.

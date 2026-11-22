@@ -1720,6 +1720,7 @@ Parameters:
 |---|---|---|
 | `output` | integer | **Required.** The output, as `output.list` lists it. |
 | `settings` | object | Settings on top of the project's, for this estimate only. |
+| `settings.aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
 | `settings.aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
 | `settings.alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
 | `settings.annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |
@@ -1842,7 +1843,7 @@ Example:
 
 **Export output.** Writes an output into a folder with the output settings, and its extras alongside.
 
-The file is named by the settings' template, with the format's extension; the depth and confidence maps (a depth-map output's) are written beside it as 16-bit TIFF files ending in `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in a folder ending in ` aligned`. Settings given apply to this export only, on top of the project's. Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a failure leaves no partial file. Scientific extras include a float TIFF in micrometers, per-frame contribution maps and alignment CSV; visible annotation layers are rendered only onto the output copy. Every export includes a settings/version/input-hash JSON sidecar, published last; `export.reproduce` replays it. Runs as a job.
+The file is named by the settings' template, with the format's extension; the depth and confidence maps (a depth-map output's) are written beside it as 16-bit TIFF files ending in `-depth` and `-confidence`, and the frames aligned onto the output's canvas as 16-bit TIFF files in a folder ending in ` aligned` (in the output's format, depth and profile with `aligned_as_output`). Settings given apply to this export only, on top of the project's. Existing files are refused unless `overwrite`. Each file is written whole and then renamed, so a failure leaves no partial file. Scientific extras include a float TIFF in micrometers, per-frame contribution maps and alignment CSV; visible annotation layers are rendered only onto the output copy. Every export includes a settings/version/input-hash JSON sidecar, published last; `export.reproduce` replays it. Runs as a job.
 
 | Runs | Undoable | Requires | Changes |
 |---|---|---|---|
@@ -1856,6 +1857,7 @@ Parameters:
 | `output` | integer | **Required.** The output, as `output.list` lists it. |
 | `overwrite` | boolean | Replace files that exist. Default: `false`. |
 | `settings` | object | Settings on top of the project's, for this export only. |
+| `settings.aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
 | `settings.aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
 | `settings.alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
 | `settings.annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |
@@ -1912,6 +1914,7 @@ Parameters:
 
 | Name | Type | Description |
 |---|---|---|
+| `aligned_as_output` | boolean | Write the aligned frames in the output's format, depth, compression and profile rather than as 16-bit TIFF. Default: `false`. |
 | `aligned_frames` | boolean | Write every frame aligned onto the output's canvas alongside, as 16-bit TIFF files in a folder. Default: `false`. |
 | `alignment_csv` | boolean | Write master-to-input shift, scale, rotation, brightness gain and score as CSV. Default: `false`. |
 | `annotations` | boolean | Render visible annotation layers on the output copy. Default: `true`. |
