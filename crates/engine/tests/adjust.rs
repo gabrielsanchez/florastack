@@ -482,10 +482,51 @@ fn a_brush_strokes_undo_step_holds_the_stroke_alone() {
         assert!(bytes - last < 1024, "a step of {} bytes", bytes - last);
         last = bytes;
     }
-    let count = |engine: &mut Engine| run(engine, "adjust.get", &json!({"output": output}).to_string())["adjustments"]["masks"][0]["components"][0]["shape"]["strokes"].as_array().unwrap().len();
+    let count = |engine: &mut Engine| {
+        run(engine, "adjust.get", &json!({"output": output}).to_string())["adjustments"]["masks"][0]["components"][0]["shape"]["strokes"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
     assert_eq!(count(&mut engine), 21);
     run(&mut engine, "edit.undo", "{}");
     assert_eq!(count(&mut engine), 20, "undo takes the last stroke back");
     run(&mut engine, "edit.redo", "{}");
     assert_eq!(count(&mut engine), 21);
+}
+
+#[test]
+fn a_zoomed_view_previews_its_window() {
+    let dir = TempDir::new("adjust-window");
+    let (mut engine, output) = stacked(dir.path());
+    run(&mut engine, "adjust.open", &json!({"output": output}).to_string());
+    run(&mut engine, "adjust.set", &json!({"output": output, "adjustments": {"global": {"exposure": 0.5, "texture": 30}}}).to_string());
+    let whole = run(&mut engine, "adjust.preview", r#"{ "width": 160, "height": 120 }"#);
+    assert_eq!((whole["x"].as_u64(), whole["fullWidth"].as_u64()), (Some(0), Some(160)), "{whole}");
+    let full = engine.adjust().unwrap().preview().unwrap().rgba.clone();
+    let window = json!({"width": 160, "height": 120, "before": true, "window": {"x": 40, "y": 30, "width": 64, "height": 48}});
+    let part = run(&mut engine, "adjust.preview", &window.to_string());
+    assert_eq!(
+        [&part["x"], &part["y"], &part["width"], &part["height"], &part["fullWidth"], &part["fullHeight"]].map(|v| v.as_u64().unwrap()),
+        [40, 30, 64, 48, 160, 120],
+        "{part}"
+    );
+    let view = engine.adjust().unwrap();
+    let placement = view.placement();
+    assert_eq!((placement.full, placement.x, placement.y), ((160, 120), 40, 30));
+    let (preview, before) = view.previews();
+    let (preview, before) = (preview.unwrap(), before.unwrap());
+    assert_eq!((preview.width, preview.height, before.width, before.height), (64, 48, 64, 48), "Before shows the same window");
+    // Away from the window's edges, where texture has what it reads, the whole preview's pixels.
+    for y in 8..40 {
+        for x in 8..56 {
+            for c in 0..3 {
+                let (a, b) = (half_to_f32(preview.rgba[(y * 64 + x) * 4 + c]), half_to_f32(full[((y + 30) * 160 + x + 40) * 4 + c]));
+                assert!((a - b).abs() < 2e-3, "({x}, {y}): {a} against {b}");
+            }
+        }
+    }
+    // A window past the preview is cut back to it.
+    let beyond = run(&mut engine, "adjust.preview", r#"{ "width": 160, "height": 120, "window": { "x": 150, "y": 0, "width": 64, "height": 48 } }"#);
+    assert_eq!((beyond["x"].as_u64(), beyond["width"].as_u64()), (Some(150), Some(10)), "{beyond}");
 }

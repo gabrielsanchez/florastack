@@ -599,7 +599,9 @@ impl Project {
                 Edit::PopAdjustment { output, pointer }
             }
             Edit::PopAdjustment { pointer, .. } => {
-                let value = adjustment_list(&mut o.adjustments, output, &pointer)?.pop().ok_or_else(|| EditError::NoList { output, pointer: pointer.clone() })?;
+                let value = adjustment_list(&mut o.adjustments, output, &pointer)?
+                    .pop()
+                    .ok_or_else(|| EditError::NoList { output, pointer: pointer.clone() })?;
                 Edit::PushAdjustment { output, pointer, value }
             }
             Edit::SetOutputMap { name, map, .. } => {

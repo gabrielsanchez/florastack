@@ -13,7 +13,10 @@ its retouch strokes and before its annotations.
    shows it with its adjustments. **Output** picks another one.
 2. **Set the whole image.** The sliders under **Light**, **Color** and **Detail** adjust the whole image. The view
    follows as you drag, with a quick preview while the slider moves and a full one when you let go. A slider's whole
-   drag is one undo step.
+   drag is one undo step. To look closer, zoom with the mouse wheel (or a pinch), and pan with the middle or right
+   button (or Space and the left button), as in the Retouch tab; a double click fits the output in the view again.
+   Zoomed in, only the part in view is rendered, at the zoom's size, so sharpening and noise reduction show as they
+   will be written.
 3. **Add a mask.** **Add mask** adds a mask of one shape (below) and selects it. The panel then shows the mask: its
    shapes, their settings, and its own sliders under **Mask adjustments**, which apply only where the mask selects.
    **Show mask** tints the selected mask's region red.

@@ -21,5 +21,5 @@ pub mod settings;
 pub mod subject;
 
 pub use error::EditError;
-pub use render::{Renderer, Request, Size};
+pub use render::{Renderer, Request, Size, Window};
 pub use settings::{Adjustments, Click, Component, Global, Local, Mask, Op, Selection, Shape, Stroke};

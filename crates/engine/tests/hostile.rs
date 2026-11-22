@@ -92,6 +92,8 @@ fn hostile_values_are_refused_with_what_is_wrong() {
         ("adjust.setModel", json!({"folder":"x\u{0}"})),
         ("adjust.preview", json!({"width":0,"height":10})),
         ("adjust.preview", json!({"width":10,"height":usize::MAX})),
+        ("adjust.preview", json!({"width":10,"height":10,"window":{"x":0,"y":0,"width":0,"height":5}})),
+        ("adjust.preview", json!({"width":10,"height":10,"window":{"x":usize::MAX,"y":0,"width":5,"height":5}})),
         ("adjust.sampleColor", json!({"x":f64::MAX,"y":0.5})),
         ("capture.calculate", json!({"magnification":0,"aperture":4,"pixelPitch":4})),
         ("capture.calculate", json!({"magnification":1,"aperture":1e300,"pixelPitch":4})),

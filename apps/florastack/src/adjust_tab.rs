@@ -7,12 +7,12 @@
 //! mask's gradients and ellipses; dragging on the image paints the selected mask's brush.
 
 use egui::{Pos2, Rect, RichText, Sense, Vec2};
-use florastack_engine::adjust::{Click, Component, Global, Local, MAX_SAMPLES, Mask, Op, Settings, Shape, Stroke};
+use florastack_engine::adjust::{Click, Component, Global, Local, MAX_SAMPLES, Mask, Op, Placement, Settings, Shape, Stroke};
 use florastack_engine::json;
 
 use crate::app::FloraStackApp;
 use crate::i18n::{tr, tr_args};
-use crate::viewer::{Picture, draw, fit_zoom};
+use crate::viewer::{Picture, draw, fit_zoom, zoomed_center};
 
 /// How close to a handle, in points, a press grabs it.
 const GRAB: f32 = 10.0;
@@ -94,16 +94,28 @@ pub struct AdjustUi {
     read: Option<u64>,
     /// The mask the panel and the handles show.
     pub selected: Option<u32>,
+    /// The last preview of the whole output; when zoomed in, the last preview of the part in view, which a window of
+    /// a larger preview is (`adjust.preview`'s `window`), with where it lies; and the output without its adjustments,
+    /// as the last preview asked for it showed it.
     preview: Option<Picture>,
-    before: Option<Picture>,
+    zoomed: Option<(Picture, Placement)>,
+    before: Option<(Picture, Placement)>,
+    /// The view: device pixels per output pixel, now and where it is going, the output's point at the view's center,
+    /// the point the zoom is about, whether it fits the output in the view, and whether it is being panned.
+    zoom: f32,
+    target: f32,
+    center: Vec2,
+    anchor: Vec2,
+    fit: bool,
+    panning: bool,
     /// Shows the output without its adjustments (Before), and the selected mask tinted (Show mask).
     pub compare: bool,
     pub show_mask: bool,
     /// A preview is wanted: as a draft (a slider or a handle moves) or in full.
     pending: Option<bool>,
-    /// The size previews are asked for, in pixels, and the size last asked.
-    wanted: (usize, usize),
-    asked_size: (usize, usize),
+    /// The preview the view wants, and the one last asked for.
+    wanted: Option<Ask>,
+    sent: Option<Ask>,
     /// The output the tab opened on its own, once, when it was shown with none open.
     asked: Option<u64>,
     dragging: Option<Handle>,
@@ -134,12 +146,19 @@ impl Default for AdjustUi {
             read: None,
             selected: None,
             preview: None,
+            zoomed: None,
             before: None,
+            zoom: 1.0,
+            target: 1.0,
+            center: Vec2::ZERO,
+            anchor: Vec2::ZERO,
+            fit: true,
+            panning: false,
             compare: false,
             show_mask: false,
             pending: None,
-            wanted: (0, 0),
-            asked_size: (0, 0),
+            wanted: None,
+            sent: None,
             asked: None,
             dragging: None,
             brush_size: 0.03,
@@ -171,7 +190,32 @@ impl AdjustUi {
     fn mask(&self) -> Option<&Mask> {
         self.selected.and_then(|id| self.settings.mask(id))
     }
+
+    /// The view: device pixels per output pixel, and the output's point at the view's center.
+    pub fn view(&self) -> (f32, Vec2) {
+        (self.zoom, self.center)
+    }
+
+    /// Where the last zoomed-in preview lies in the whole preview it is part of; `None` when the view shows the whole
+    /// output's.
+    pub fn zoomed(&self) -> Option<Placement> {
+        self.zoomed.as_ref().map(|(_, p)| *p)
+    }
 }
+
+/// A preview of the output: the size it fits in and, zoomed in, the window of that preview to render (left, top,
+/// width, height).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Ask {
+    size: (usize, usize),
+    window: Option<[usize; 4]>,
+}
+
+/// The zoom's limits, in device pixels per output pixel.
+const MIN_ZOOM: f32 = 1.0 / 64.0;
+const MAX_ZOOM: f32 = 64.0;
+/// The largest preview the engine renders a window of, a side.
+const MAX_PREVIEW_SIDE: f32 = 16384.0;
 
 /// Brings the tab up to date with the engine: the output's adjustments when the project changed, and the previews the
 /// adjust session rendered.
@@ -185,14 +229,21 @@ pub fn sync(app: &mut FloraStackApp) {
     };
     let output = view.output().get();
     let (preview, before) = view.previews();
+    let placement = view.placement();
     let ui = &mut app.adjust;
     if changes.is_some_and(|c| c.opened) || ui.output != Some(output) {
-        (ui.output, ui.preview, ui.before, ui.read, ui.selected) = (Some(output), None, None, None, None);
+        (ui.output, ui.preview, ui.zoomed, ui.before, ui.read, ui.selected) = (Some(output), None, None, None, None, None);
+        ui.fit = true;
         ui.want_preview(false);
     }
     if changes.is_some_and(|c| c.preview) {
-        ui.preview = preview.map(Picture::new);
-        ui.before = before.map(Picture::new);
+        let whole = preview.as_ref().is_some_and(|p| (placement.x, placement.y) == (0, 0) && placement.full == (p.width, p.height));
+        if whole {
+            (ui.preview, ui.zoomed) = (preview.map(Picture::new), None);
+        } else {
+            ui.zoomed = preview.map(|p| (Picture::new(p), placement));
+        }
+        ui.before = before.map(|b| (Picture::new(b), placement));
     }
     if ui.read != Some(app.shell.revision) {
         if let Some(read) =
@@ -215,15 +266,20 @@ pub fn sync(app: &mut FloraStackApp) {
 /// Asks the engine for the preview the tab wants, when no preview job is running.
 fn request_preview(app: &mut FloraStackApp) {
     let Some(draft) = app.adjust.pending else { return };
-    let (w, h) = app.adjust.wanted;
-    if app.adjust.output.is_none() || w == 0 || h == 0 || app.shell.running(&["adjust.preview", "adjust.open"]) {
+    let Some(ask) = app.adjust.wanted else { return };
+    if app.adjust.output.is_none() || app.shell.running(&["adjust.preview", "adjust.open"]) {
         return;
     }
     app.adjust.pending = None;
     let overlay = if app.adjust.show_mask { app.adjust.selected } else { None };
     let before = app.adjust.compare && !draft;
-    app.adjust.asked_size = (w, h);
-    app.shell.run("adjust.preview", json!({ "width": w, "height": h, "draft": draft, "overlay": overlay, "before": before }));
+    app.adjust.sent = Some(ask);
+    let (w, h) = ask.size;
+    let mut params = json!({ "width": w, "height": h, "draft": draft, "overlay": overlay, "before": before });
+    if let Some([x, y, width, height]) = ask.window {
+        params["window"] = json!({ "x": x, "y": y, "width": width, "height": height });
+    }
+    app.shell.run("adjust.preview", params);
 }
 
 /// Stores the whole image's settings (one undo step for a slider's whole drag), and asks for a preview.
@@ -737,18 +793,31 @@ fn tools(app: &mut FloraStackApp, ui: &mut egui::Ui, mask: &Mask) {
     }
 }
 
-/// The central view: the preview (or the output before its adjustments), fitted, with the selected mask's handles.
+/// The central view: the preview (or the output before its adjustments), fitted or zoomed, with the selected mask's
+/// handles. Zoomed in past the fitted size, the engine renders the part in view (with a margin) at the zoom's size, up
+/// to the output's own, and the whole output's last preview fills in around it while that comes.
 pub fn view(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     let (pane, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     ui.painter().rect_filled(pane, 0.0, ui.visuals().extreme_bg_color);
     let ppp = ui.ctx().pixels_per_point();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // A view's size in pixels.
-    let wanted = ((pane.width() * ppp) as usize, (pane.height() * ppp) as usize);
-    let max = app.viewer.max_side();
-    let wanted = (wanted.0.clamp(1, max), wanted.1.clamp(1, max));
-    if wanted != app.adjust.wanted {
-        app.adjust.wanted = wanted;
-        if app.adjust.asked_size != wanted {
+    let size = app.shell.engine().adjust().map(|v| v.size());
+    let shown = if app.adjust.compare { app.adjust.before.is_some() } else { app.adjust.preview.is_some() || app.adjust.zoomed.is_some() };
+    let (Some((width, height)), true) = (size, shown) else {
+        app.adjust.image_rect = None;
+        let text = if app.shell.running(&["adjust.open"]) { tr("adjust-opening") } else { tr("adjust-hint") };
+        ui.painter().text(pane.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(15.0), ui.visuals().weak_text_color());
+        // The first preview, at the view's size.
+        app.adjust.wanted = Some(wanted(&app.adjust, pane.size() * ppp, None, app.viewer.max_side()));
+        request_preview(app);
+        return;
+    };
+    #[allow(clippy::cast_precision_loss)] // An image's size.
+    let size = Vec2::new(width as f32, height as f32);
+    navigate(&mut app.adjust, ui, &response, (pane, ppp, size));
+    let ask = wanted(&app.adjust, pane.size() * ppp, Some(size), app.viewer.max_side());
+    if Some(ask) != app.adjust.wanted {
+        app.adjust.wanted = Some(ask);
+        if app.adjust.sent != Some(ask) {
             app.adjust.want_preview(false);
         }
     }
@@ -756,25 +825,120 @@ pub fn view(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     let gpu = app.viewer.gpu();
     let ctx = ui.ctx().clone();
     let a = &mut app.adjust;
-    let shown = if a.compare { a.before.as_mut().or(a.preview.as_mut()) } else { a.preview.as_mut() };
-    let Some(picture) = shown else {
-        let text = if app.shell.running(&["adjust.open"]) { tr("adjust-opening") } else { tr("adjust-hint") };
-        ui.painter().text(pane.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(15.0), ui.visuals().weak_text_color());
-        return;
+    let (zoom, center) = (a.zoom, a.center);
+    // A picture lying at `placement` in a preview of the whole output, drawn with the view.
+    let place = |slot: usize, picture: &mut Picture, placement: Option<Placement>| {
+        #[allow(clippy::cast_precision_loss)] // Sizes in pixels.
+        let (scale, corner) = match placement {
+            Some(p) => (p.full.0 as f32 / size.x, Vec2::new(p.x as f32, p.y as f32)),
+            None => (picture.size().x / size.x, Vec2::ZERO),
+        };
+        draw(ui, &ctx, gpu, slot, picture, (pane, pane), zoom / scale, center * scale - corner, 1.0);
     };
-    let size = picture.size();
-    let zoom = fit_zoom(pane.size() * ppp, size);
-    draw(ui, &ctx, gpu, 0, picture, (pane, pane), zoom, size / 2.0, 1.0);
-    let image = Rect::from_center_size(pane.center(), size * zoom / ppp);
+    if a.compare {
+        if let Some((picture, placement)) = a.before.as_mut() {
+            place(0, picture, Some(*placement));
+        }
+    } else {
+        if let Some(picture) = a.preview.as_mut() {
+            place(0, picture, None);
+        }
+        if let (false, Some((picture, placement))) = (a.fit, a.zoomed.as_mut()) {
+            place(1, picture, Some(*placement));
+        }
+    }
+    let image = Rect::from_min_size(pane.center() - center * zoom / ppp, size * zoom / ppp);
     a.image_rect = Some(image);
     if a.compare {
         label(ui, pane, tr("adjust-before"));
         return;
     }
-    interact(app, ui, &response, image);
+    if !a.panning {
+        interact(app, ui, &response, image);
+    }
     if app.shell.running(&["adjust.preview"]) || app.adjust.pending.is_some() {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
     }
+}
+
+/// Panning (the middle or right button, or Space with the left), zooming (the wheel or a pinch, about the pointer, and
+/// eased), and fitting again (a double click), as in the Retouch tab.
+fn navigate(a: &mut AdjustUi, ui: &egui::Ui, response: &egui::Response, (pane, ppp, size): (Rect, f32, Vec2)) {
+    let fitted = fit_zoom(pane.size() * ppp, size);
+    if a.fit {
+        (a.zoom, a.target, a.center, a.anchor) = (fitted, fitted, size / 2.0, Vec2::ZERO);
+    }
+    let space = ui.input(|i| i.key_down(egui::Key::Space));
+    a.panning = response.dragged_by(egui::PointerButton::Middle)
+        || response.dragged_by(egui::PointerButton::Secondary)
+        || (space && response.dragged_by(egui::PointerButton::Primary));
+    if a.panning {
+        a.fit = false;
+        a.center -= response.drag_delta() * ppp / a.zoom;
+    }
+    if response.hovered() {
+        let (scroll, pinch, hover) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
+        let factor = pinch * (scroll * 0.0015).exp();
+        if (factor - 1.0).abs() > 1e-4 {
+            a.fit = false;
+            if let Some(p) = hover {
+                a.anchor = (p - pane.center()) * ppp;
+            }
+            a.target = (a.target * factor).clamp(MIN_ZOOM.min(fitted), MAX_ZOOM);
+        }
+    }
+    if response.double_clicked() {
+        (a.fit, a.zoomed) = (true, None);
+        a.want_preview(false);
+    }
+    if (a.target / a.zoom).ln().abs() > 1e-3 {
+        let dt = ui.input(|i| i.stable_dt).min(0.1);
+        let next = a.zoom * (a.target / a.zoom).powf((dt * 14.0).min(1.0));
+        a.center = zoomed_center(a.center, a.anchor, a.zoom, next);
+        a.zoom = next;
+        ui.ctx().request_repaint();
+    } else if (a.zoom - a.target).abs() > 0.0 {
+        a.center = zoomed_center(a.center, a.anchor, a.zoom, a.target);
+        a.zoom = a.target;
+    }
+}
+
+/// The preview the view wants: the whole output fitted in the view (`view`, in device pixels) when it fits it or is
+/// zoomed out further; zoomed in, a window of the output at the zoom's size (never above its own), around the part in
+/// view and with a margin for panning and for the adjustments that read around each pixel. The window shown is kept
+/// while it still covers the view. Without the output's `size`, the view's size.
+fn wanted(a: &AdjustUi, view: Vec2, size: Option<Vec2>, max: usize) -> Ask {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Sizes in pixels.
+    let pixels = |v: f32| (v.round().max(1.0) as usize).min(max.max(1));
+    let fitted = Ask { size: (pixels(view.x), pixels(view.y)), window: None };
+    let Some(size) = size else { return fitted };
+    if a.fit || a.target <= fit_zoom(view, size) * 1.001 {
+        return fitted;
+    }
+    // The zoomed preview's scale: the zoom's, at most the output's own size, and within what the engine renders.
+    let scale = a.target.min(1.0).min(MAX_PREVIEW_SIDE / size.x.max(size.y));
+    let full = size * scale;
+    let shown = Rect::from_center_size((a.center * scale).to_pos2(), view * scale / a.target).intersect(Rect::from_min_size(Pos2::ZERO, full));
+    if let Some((_, p)) = &a.zoomed {
+        #[allow(clippy::cast_precision_loss)] // Sizes in pixels.
+        let (same, covered) = (
+            (p.full.0 as f32 - full.x).abs() <= 1.0 && (p.full.1 as f32 - full.y).abs() <= 1.0,
+            a.wanted.and_then(|w| w.window).map(|[x, y, w, h]| Rect::from_min_size(Pos2::new(x as f32, y as f32), Vec2::new(w as f32, h as f32))),
+        );
+        if same
+            && covered.is_some_and(|c| c.contains_rect(shown))
+            && let Some(w) = a.wanted
+        {
+            return w;
+        }
+    }
+    let margin = (0.02 * full.x.max(full.y)).clamp(16.0, 256.0) + 0.25 * shown.width().max(shown.height());
+    let window = shown.expand(margin).intersect(Rect::from_min_size(Pos2::ZERO, full));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Pixels of a preview within 16384 a side.
+    let (x0, y0, x1, y1) = (window.min.x.floor() as usize, window.min.y.floor() as usize, window.max.x.ceil() as usize, window.max.y.ceil() as usize);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // As above.
+    let size = ((full.x.round() as usize).max(1), (full.y.round() as usize).max(1));
+    Ask { size, window: Some([x0, y0, (x1 - x0).max(1), (y1 - y0).max(1)]) }
 }
 
 /// A name in the view's top left corner.
@@ -802,7 +966,7 @@ fn to_image(image: Rect, p: Pos2) -> [f64; 2] {
 fn interact(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response, image: Rect) {
     let Some(mask) = app.adjust.mask().cloned() else { return };
     let long = image.width().max(image.height());
-    let painter = ui.painter().with_clip_rect(image);
+    let painter = ui.painter().with_clip_rect(image.intersect(response.rect));
     let mut handles: Vec<(Handle, Pos2)> = Vec::new();
     for (i, c) in mask.components.iter().enumerate() {
         match &c.shape {
@@ -896,7 +1060,7 @@ fn select_by_clicks(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Res
         .iter()
         .find_map(|c| if let Shape::Object { clicks, .. } = &c.shape { Some(clicks.clone()) } else { None })
         .unwrap_or_default();
-    let painter = ui.painter().with_clip_rect(image);
+    let painter = ui.painter().with_clip_rect(image.intersect(response.rect));
     for c in &clicks {
         let color = if c.include { egui::Color32::from_rgb(40, 200, 90) } else { egui::Color32::from_rgb(230, 40, 40) };
         painter.circle(to_screen(image, c.at), 5.0, color, egui::Stroke::new(1.5, egui::Color32::WHITE));
@@ -925,7 +1089,7 @@ fn select_by_clicks(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Res
 /// stroke sent (`adjust.stroke`) when the button is let go or the image clicked.
 fn paint(app: &mut FloraStackApp, ui: &egui::Ui, response: &egui::Response, (image, at): (Rect, Option<Pos2>), mask: u32) {
     let long = image.width().max(image.height());
-    let painter = ui.painter().with_clip_rect(image);
+    let painter = ui.painter().with_clip_rect(image.intersect(response.rect));
     let a = &mut app.adjust;
     if let Some(p) = at {
         #[allow(clippy::cast_possible_truncation)] // A radius on screen.

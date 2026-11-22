@@ -169,3 +169,93 @@ fn the_export_tab_shows_the_output_with_its_adjustments() {
     drop(harness);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_view_zooms_into_a_window_of_the_output_and_pans() {
+    let (dir, mut harness) = app("adjust-tab-zoom");
+    drop_files(&mut harness, &frames(&dir.join("photos")));
+    until(&mut harness, "the frames", |app| app.shell.frames.len() == 4);
+    harness.get_by_label("Align").click();
+    until(&mut harness, "the alignment", |app| app.aligned() && !app.shell.busy());
+    harness.get_by_label("Stack frames").click();
+    until(&mut harness, "the output", |app| app.shell.outputs.len() == 1 && !app.shell.busy());
+    harness.get_by_label("Adjust").click();
+    until(&mut harness, "the output's preview", |app| app.adjust.is_shown() && !app.shell.busy());
+    let (width, height) = harness.state().shell.engine().adjust().unwrap().size();
+    let (fitted, _) = harness.state().adjust.view();
+    let image = harness.state().adjust.image_rect.unwrap();
+
+    // Zoomed in about the image's center, past the fitted size: the engine renders a window of a larger preview.
+    harness.event(Event::PointerMoved(image.center()));
+    for _ in 0..12 {
+        harness.event(Event::Zoom(1.25));
+        harness.step();
+    }
+    until(&mut harness, "the zoomed preview", |app| app.adjust.zoomed().is_some() && !app.shell.busy());
+    let (zoom, center) = harness.state().adjust.view();
+    assert!(zoom > 4.0 * fitted, "{zoom} against {fitted}");
+    let placement = harness.state().adjust.zoomed().unwrap();
+    assert!(placement.full.0 > width / 2 && placement.full.0 <= width, "{placement:?} of {width}");
+    assert!((center.x - width as f32 / 2.0).abs() < 2.0 && (center.y - height as f32 / 2.0).abs() < 2.0, "{center:?}");
+
+    // Panned with the right button: the view's center moves the other way.
+    let pane = harness.state().adjust.image_rect.unwrap().intersect(image);
+    let from = pane.center();
+    harness.event(Event::PointerMoved(from));
+    harness.step();
+    harness.event(Event::PointerButton { pos: from, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    harness.step();
+    for i in 1..=5 {
+        harness.event(Event::PointerMoved(from + egui::vec2(-8.0 * i as f32, 0.0)));
+        harness.step();
+    }
+    harness.event(Event::PointerButton {
+        pos: from - egui::vec2(40.0, 0.0),
+        button: PointerButton::Secondary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    harness.step();
+    let (zoom, panned) = harness.state().adjust.view();
+    // 40 points to the left, less what egui takes before a drag starts: the center moves right by most of 40 points
+    // in output pixels.
+    let ppp = harness.ctx.pixels_per_point();
+    assert!(panned.x - center.x > 0.5 * 40.0 * ppp / zoom, "{panned:?} after {center:?}, at {zoom}");
+    assert!((panned.y - center.y).abs() < 1e-3);
+
+    // A brush stroke painted at the view's center lands at the output's point there.
+    harness.get_by_label("Add mask").click();
+    harness.run_steps(2);
+    harness.get_by_label("Brush").click();
+    harness.run_steps(2);
+    until(&mut harness, "the brush mask", |app| masks(app).len() == 1 && !app.shell.busy());
+    let middle = harness.state().adjust.image_rect.unwrap().intersect(image).center();
+    let (_, at) = harness.state().adjust.view();
+    drag(&mut harness, middle, middle + egui::vec2(4.0, 0.0), 2);
+    until(&mut harness, "the stroke", |app| masks(app).first().is_some_and(|m| !m.components.is_empty()) && !app.shell.busy());
+    let Shape::Brush { strokes } = &masks(harness.state())[0].components[0].shape else { panic!("a brush") };
+    let first = strokes[0].points[0];
+    let expected = [f64::from(at.x) / width as f64, f64::from(at.y) / height as f64];
+    // Within a few output pixels: the pointer is a point or two off the pane's center.
+    assert!((first[0] - expected[0]).abs() < 0.02 && (first[1] - expected[1]).abs() < 0.02, "{first:?} against {expected:?}");
+
+    // A double click fits the output in the view again (once the stroke's click, a short drag, is past the time two
+    // clicks make a double click in).
+    harness.event(Event::PointerMoved(middle));
+    for _ in 0..12 {
+        harness.step();
+    }
+    // The test's clock moves a quarter of a second a frame, and its clicks come a frame or two apart: more than the
+    // 0.3 seconds two clicks make a double click in, which this test lengthens.
+    harness.ctx.options_mut(|o| o.input_options.max_double_click_delay = 2.0);
+    for _ in 0..2 {
+        harness.event(Event::PointerButton { pos: middle, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        harness.event(Event::PointerButton { pos: middle, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        harness.step();
+    }
+    until(&mut harness, "the fitted view", |app| app.adjust.zoomed().is_none() && !app.shell.busy());
+    assert!((harness.state().adjust.view().0 - fitted).abs() < 1e-3);
+    assert!(harness.state().shell.notices.iter().all(|n| !n.error), "{:?}", harness.state().shell.notices);
+    drop(harness);
+    let _ = std::fs::remove_dir_all(dir);
+}

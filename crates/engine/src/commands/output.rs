@@ -474,7 +474,14 @@ impl Pixels {
 
     /// [`Pixels::of`], reading the result `output.render` keeps (the [`RESULT`] map) when it is still what the
     /// output's strokes and adjustments make, and `reuse` allows it.
-    fn choose(session: &Session, id: OutputId, map: Option<&str>, spec: OutputSpec, notes: &mut Vec<String>, reuse: bool) -> Result<Pixels, CommandError> {
+    fn choose(
+        session: &Session,
+        id: OutputId,
+        map: Option<&str>,
+        spec: OutputSpec,
+        notes: &mut Vec<String>,
+        reuse: bool,
+    ) -> Result<Pixels, CommandError> {
         let output = find(session, id)?;
         // "Retain extended range": the output's result from before its tone compression, when it has one.
         let extended = extended_map().and_then(|name| output.maps.get(&name)).cloned();

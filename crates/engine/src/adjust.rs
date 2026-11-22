@@ -125,8 +125,19 @@ pub(crate) struct AdjustSession {
     /// asked for.
     pub preview: Option<Arc<DisplayImage>>,
     pub before: Option<Arc<DisplayImage>>,
+    /// Where the previews lie in the whole preview they are part of.
+    pub placement: Placement,
     pub shown: Option<Adjustments>,
     pub changes: AdjustChanges,
+}
+
+/// Where a preview lies: the size of the whole preview it is part of, and its top left corner there (a zoomed view's
+/// window of it, `adjust.preview`'s `window`; the corner is 0, 0 without one).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Placement {
+    pub full: (usize, usize),
+    pub x: usize,
+    pub y: usize,
 }
 
 /// What changed in the adjust session since an app last asked ([`crate::Engine::take_adjust_changes`]).
@@ -167,6 +178,11 @@ impl AdjustView<'_> {
     /// The previews, shared: the last one, and the output without its adjustments.
     pub fn previews(&self) -> (Option<Arc<DisplayImage>>, Option<Arc<DisplayImage>>) {
         (self.session.preview.clone(), self.session.before.clone())
+    }
+
+    /// Where the previews lie in the whole preview they are part of.
+    pub fn placement(&self) -> Placement {
+        self.session.placement
     }
 
     /// Whether the session has the stack's depth map, which the depth masks need.

@@ -21,7 +21,7 @@ use florastack_core::{ColorSpace, Image};
 use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask as LcMask, MaskComponent, MaskOp, MaskShape, WbMode, WhiteBalance};
 use lightcraft_geom::Point;
 use lightcraft_pipeline::masks::{MatteKind, Mattes};
-use lightcraft_pipeline::{OutputDepth, OutputSpace, Overlay, Quality, RenderRequest, SourceInfo, StageCache};
+use lightcraft_pipeline::{OutputDepth, OutputSpace, Overlay, PixelWindow, Quality, RenderRequest, SourceInfo, StageCache};
 use lightcraft_raster::resample::{Filter, resize};
 use lightcraft_raster::{Plane, Rgb32f};
 
@@ -52,11 +52,31 @@ pub struct Request {
     pub draft: bool,
     /// Shows this mask's region tinted red over the adjusted image.
     pub overlay: Option<u32>,
+    /// Renders only this part of the image `size` gives (a zoomed view), its pixels as in the whole render.
+    pub window: Option<Window>,
 }
 
 impl Request {
     /// The full-size render, as an export writes it.
-    pub const FULL: Request = Request { size: Size::Full, draft: false, overlay: None };
+    pub const FULL: Request = Request { size: Size::Full, draft: false, overlay: None, window: None };
+}
+
+/// A rectangle of a render's pixels: its top left corner and its size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Window {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Window {
+    /// The window within a render of `width` by `height`: cut back to it, and at least a pixel.
+    #[must_use]
+    pub fn within(self, width: usize, height: usize) -> Window {
+        let w = PixelWindow { x: self.x, y: self.y, w: self.width, h: self.height }.clamped(width, height);
+        Window { x: w.x, y: w.y, width: w.w, height: w.h }
+    }
 }
 
 /// Gives each image a renderer is made for an id of its own.
@@ -208,8 +228,9 @@ impl Renderer {
     pub fn render(&self, adjustments: &Adjustments, request: &Request) -> Result<Image<f32>, EditError> {
         adjustments.validate()?;
         let (w, h) = self.output_size(request.size);
-        if request.overlay.is_none() && (w, h) == (self.source.width, self.source.height) && adjustments.is_neutral() {
-            return self.assemble(&self.source.data.iter().flatten().copied().collect::<Vec<_>>(), w, h);
+        let window = request.window.map(|win| win.within(w, h));
+        if request.overlay.is_none() && window.is_none() && (w, h) == (self.source.width, self.source.height) && adjustments.is_neutral() {
+            return self.assemble(&self.source.data.iter().flatten().copied().collect::<Vec<_>>(), (w, h), None);
         }
         let (settings, info) = self.lightcraft(adjustments)?;
         let overlay = request
@@ -228,7 +249,7 @@ impl Renderer {
             space: OutputSpace::Rec2020,
             depth: if matches!(overlay, Overlay::None) { OutputDepth::F32Linear } else { OutputDepth::U8 },
             proof: None,
-            window: None,
+            window: window.map(|w| PixelWindow { x: w.x, y: w.y, w: w.width, h: w.height }),
             display: None,
         };
         let rendered = lightcraft_pipeline::render_cached(&self.source, &info, &settings, &req, &self.cache);
@@ -236,13 +257,22 @@ impl Renderer {
             let lightcraft_pipeline::DeepSamples::F32(samples) = deep.samples else {
                 return Err(EditError::image("the pipeline gave integer samples for a float render"));
             };
-            return self.assemble(&samples, deep.width, deep.height);
+            return self.placed(&samples, (deep.width, deep.height), (w, h), window);
         }
         // An overlay is drawn on the 8-bit rendition, in Rec. 2020 with its curve: back to linear light.
         let trc = OutputSpace::Rec2020.trc();
         let image = rendered.image;
         let samples: Vec<f32> = image.data.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| trc.decode(f32::from(v) / 255.0))).collect();
-        self.assemble(&samples, image.width, image.height)
+        self.placed(&samples, (image.width, image.height), (w, h), window)
+    }
+
+    /// [`Renderer::assemble`] for a render of `got` pixels asked for at `full` size, or of `window` of it.
+    fn placed(&self, samples: &[f32], got: (usize, usize), full: (usize, usize), window: Option<Window>) -> Result<Image<f32>, EditError> {
+        match window {
+            Some(win) if (win.width, win.height) != got => Err(EditError::image("the pipeline rendered another window than the one asked for")),
+            Some(win) => self.assemble(samples, full, Some(win)),
+            None => self.assemble(samples, got, None),
+        }
     }
 
     /// The color a color-range mask samples at `point` (fractions of the image's width and height), in `OkLab`, as
@@ -283,23 +313,30 @@ impl Renderer {
         }
     }
 
-    /// An image of `w` by `h` from interleaved RGB `samples`, with the source's coverage resized to it.
-    fn assemble(&self, samples: &[f32], w: usize, h: usize) -> Result<Image<f32>, EditError> {
+    /// An image from interleaved RGB `samples`: a render of `full` (width, height), or of `window` of it, with the
+    /// source's coverage resized to `full` and cut to the window.
+    fn assemble(&self, samples: &[f32], full: (usize, usize), window: Option<Window>) -> Result<Image<f32>, EditError> {
+        let win = window.unwrap_or(Window { x: 0, y: 0, width: full.0, height: full.1 });
+        let (w, h) = (win.width, win.height);
         let Some(alpha) = &self.alpha else {
             return Ok(Image::from_vec(w, h, 3, self.color.clone(), samples.to_vec())?);
         };
         let resized;
-        let alpha = if (alpha.width, alpha.height) == (w, h) {
+        let alpha = if (alpha.width, alpha.height) == full {
             alpha
         } else {
-            resized = resize(alpha, w, h, Filter::Bilinear);
+            resized = resize(alpha, full.0, full.1, Filter::Bilinear);
             &resized
         };
         let mut data = Vec::new();
         data.try_reserve_exact(w.saturating_mul(h).saturating_mul(4)).map_err(|_| EditError::image("out of memory"))?;
-        for (rgb, a) in samples.as_chunks::<3>().0.iter().zip(&alpha.data) {
-            data.extend_from_slice(rgb);
-            data.push(*a);
+        for (y, row) in samples.chunks_exact(w.max(1) * 3).take(h).enumerate() {
+            let start = (win.y + y) * alpha.width + win.x;
+            let coverage = alpha.data.get(start..start + w).ok_or_else(|| EditError::image("the window reaches past the image"))?;
+            for (rgb, a) in row.as_chunks::<3>().0.iter().zip(coverage) {
+                data.extend_from_slice(rgb);
+                data.push(*a);
+            }
         }
         Ok(Image::from_vec(w, h, 4, self.color.clone(), data)?)
     }
