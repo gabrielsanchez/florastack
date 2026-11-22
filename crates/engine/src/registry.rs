@@ -110,6 +110,9 @@ pub struct Meta {
     pub effects: Effects,
     /// For a job: a newer call cancels the older ones that haven't finished (previews of changed settings).
     pub supersede: bool,
+    /// With `supersede`, only the older calls whose parameter of this name has the same value as the newer one's,
+    /// the second string standing for it when it is left out: previews of different methods both finish.
+    pub supersede_by: Option<(&'static str, &'static str)>,
     /// Parameters it can be called with, as JSON text: the reference shows them, and a test checks them.
     pub examples: &'static [&'static str],
 }
@@ -126,6 +129,7 @@ impl Meta {
             requires: Requires::Nothing,
             effects: Effects::None,
             supersede: false,
+            supersede_by: None,
             examples: &["{}"],
         }
     }
@@ -160,6 +164,15 @@ impl Meta {
     #[must_use]
     pub const fn supersede(mut self) -> Meta {
         self.supersede = true;
+        self
+    }
+
+    /// [`Meta::supersede`] among the calls whose parameter `field` is the same, `missing` standing for it when it is
+    /// left out.
+    #[must_use]
+    pub const fn supersede_by(mut self, field: &'static str, missing: &'static str) -> Meta {
+        self.supersede = true;
+        self.supersede_by = Some((field, missing));
         self
     }
 
@@ -207,6 +220,7 @@ pub(crate) enum Runner {
 pub struct CommandSpec {
     pub(crate) info: CommandInfo,
     pub(crate) supersede: bool,
+    pub(crate) supersede_by: Option<(&'static str, &'static str)>,
     pub(crate) check: Check,
     pub(crate) run: Runner,
 }
@@ -262,6 +276,7 @@ impl CommandSpec {
         CommandSpec {
             info: CommandSpec::info::<P, R>(&meta, Kind::Query, None),
             supersede: false,
+            supersede_by: None,
             check: CommandSpec::checker::<P>(name),
             run: Runner::Query(Box::new(move |session, params| to_json(name, &f(session, parse(name, params)?)?))),
         }
@@ -277,6 +292,7 @@ impl CommandSpec {
         CommandSpec {
             info: CommandSpec::info::<P, R>(&meta, Kind::Instant, None),
             supersede: false,
+            supersede_by: None,
             check: CommandSpec::checker::<P>(name),
             run: Runner::Instant(Box::new(move |session, params| to_json(name, &f(session, parse(name, params)?)?))),
         }
@@ -293,6 +309,7 @@ impl CommandSpec {
         CommandSpec {
             info: CommandSpec::info::<P, R>(&meta, Kind::Job, Some(lane)),
             supersede: meta.supersede,
+            supersede_by: meta.supersede_by,
             check: CommandSpec::checker::<P>(name),
             run: Runner::Job(Box::new(move |session, params| Ok(f(session, parse(name, params)?)?.map_result(move |r| to_json(name, &r))))),
         }
@@ -300,6 +317,17 @@ impl CommandSpec {
 
     pub fn name(&self) -> &'static str {
         self.info.name
+    }
+
+    /// What a job called with `params` supersedes: the older calls with the same key, or none without one.
+    pub(crate) fn supersede_key(&self, params: &Value) -> Option<String> {
+        if !self.supersede {
+            return None;
+        }
+        Some(match self.supersede_by {
+            Some((field, missing)) => params.get(field).and_then(Value::as_str).unwrap_or(missing).to_owned(),
+            None => String::new(),
+        })
     }
 
     pub fn describe(&self) -> &CommandInfo {

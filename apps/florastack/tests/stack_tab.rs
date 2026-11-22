@@ -93,7 +93,10 @@ fn the_depth_map_asks_for_its_contrast_threshold_first() {
 fn both_methods_make_two_outputs_to_compare() {
     let (dir, mut harness) = aligned("both");
     harness.get_by_label("Both (pyramid and depth map)").click();
-    harness.step();
+    // Choosing it previews both methods, shown compared.
+    until(&mut harness, "both previews compared", |app| app.shell.previews.len() == 2 && !app.shell.busy() && app.viewer.is_comparing());
+    assert_eq!(harness.state().selection, Selection::Preview);
+    assert_eq!(harness.state().shell.previews.keys().collect::<Vec<_>>(), ["depth-map", "pyramid"]);
     harness.get_by_label("Stack frames").click();
     until(&mut harness, "the threshold's picture", |app| app.shell.threshold.is_some());
     harness.get_by_label("Continue").click();

@@ -95,6 +95,9 @@ pub struct Film {
     next: Instant,
 }
 
+/// The name the pyramid's preview is loaded under when it is compared with the depth map's.
+const PAIRED_PREVIEW: &str = "pyramid preview";
+
 /// How fast the filmstrip plays.
 const FILM_FRAME: std::time::Duration = std::time::Duration::from_millis(125);
 /// The longest side the filmstrip's frames are read at: the previews' own (at most 512 pixels).
@@ -195,8 +198,9 @@ pub struct FloraStackApp {
     pub threshold_step: bool,
     /// The threshold picture shown last.
     shown_threshold: Option<PathBuf>,
-    /// The method the previews show for "both": the one whose setting changed last.
-    pub preview_method: &'static str,
+    /// With both methods chosen, the one whose setting changed, which alone needs a new preview; both do when it is
+    /// `None` (the framing or the method changed).
+    pub preview_only: Option<&'static str>,
     /// The Retouch tab's brush, view and stroke being drawn.
     pub retouch: crate::retouch_tab::RetouchUi,
     pub adjust: crate::adjust_tab::AdjustUi,
@@ -318,7 +322,7 @@ impl FloraStackApp {
             film: None,
             threshold_step: false,
             shown_threshold: None,
-            preview_method: "pyramid",
+            preview_only: None,
             retouch: crate::retouch_tab::RetouchUi::default(),
             adjust: crate::adjust_tab::AdjustUi::default(),
             export: crate::export_tab::ExportUi::default(),
@@ -591,6 +595,18 @@ impl FloraStackApp {
         self.selection = selection.clone();
         self.rendering = None;
         self.shown_edits = None;
+        // With both methods chosen, their previews are compared once both are made.
+        if selection == Selection::Preview
+            && let Some([first, second]) = self.preview_pair_images()
+        {
+            let max_side = Some(self.viewer.max_side());
+            let (path, other) = (PathBuf::from(PAIRED_PREVIEW), PathBuf::from("depth-map preview"));
+            self.pair = [None, None];
+            self.pair_loader.request(Request { path: other, max_side, image: Some(second) });
+            self.view_loader.request(Request { path: path.clone(), max_side, image: Some(first) });
+            self.loading = Some((path, selection, keep));
+            return;
+        }
         // An output with strokes or adjustments is shown as it is written: rendered, then loaded.
         if let Selection::Output(id) = selection
             && let Some(row) = self.shell.outputs.iter().find(|o| o.id == id)
@@ -688,11 +704,27 @@ impl FloraStackApp {
         }
     }
 
-    /// Asks for a quarter-scale preview of the method chosen.
+    /// Asks for a quarter-scale preview of the method chosen: with both, of the one whose setting changed, or of
+    /// each (the engine runs a preview of each method to its end, and shows them compared).
     pub fn preview(&mut self) {
-        let method = if self.prefs.method == crate::prefs::Method::Both { self.preview_method } else { self.prefs.method.name() };
-        self.shell.run("stack.preview", json!({ "method": method }));
+        let only = self.preview_only.take();
+        let methods = match self.prefs.method {
+            crate::prefs::Method::Both => only.map_or_else(|| vec!["pyramid", "depth-map"], |m| vec![m]),
+            method => vec![method.name()],
+        };
+        for method in methods {
+            self.shell.run("stack.preview", json!({ "method": method }));
+        }
         self.follow_preview = true;
+    }
+
+    /// With both methods chosen, the pyramid's preview and the depth map's, once both are made.
+    fn preview_pair_images(&self) -> Option<[Arc<florastack_engine::Image<f32>>; 2]> {
+        if self.prefs.method != crate::prefs::Method::Both {
+            return None;
+        }
+        let previews = &self.shell.previews;
+        Some([Arc::clone(previews.get("pyramid")?), Arc::clone(previews.get("depth-map")?)])
     }
 
     /// Stacks by the method chosen: a depth map asks for its contrast threshold first (the step stays open until
@@ -843,6 +875,7 @@ impl FloraStackApp {
             }
             match (done.image, selection) {
                 (Ok(image), Selection::Compare(..)) => self.pair[0] = Some(image),
+                (Ok(image), Selection::Preview) if path == std::path::Path::new(PAIRED_PREVIEW) => self.pair[0] = Some(image),
                 (Ok(image), _) if keep => self.viewer.replace(image),
                 (Ok(image), _) => self.viewer.show(image),
                 (Err(e), _) => self.shell.notify(e, true),
@@ -854,13 +887,7 @@ impl FloraStackApp {
                 Err(e) => self.shell.notify(e, true),
             }
         }
-        if let (Selection::Compare(a, b), [Some(_), Some(_)]) = (&self.selection, &self.pair) {
-            let name = |id: u64| self.shell.outputs.iter().find(|o| o.id == id).map(|o| o.name.clone()).unwrap_or_default();
-            let labels = [name(*a), name(*b)];
-            if let [Some(first), Some(second)] = std::mem::take(&mut self.pair) {
-                self.viewer.show_pair(first, second, labels);
-            }
-        }
+        self.show_pair();
         self.reading_ahead();
         for done in self.thumb_loader.done() {
             if let Ok(image) = done.image {
@@ -883,6 +910,21 @@ impl FloraStackApp {
         let reading = [&self.view_loader, &self.pair_loader, &self.thumb_loader, &self.ahead_loader].iter().any(|l| l.pending() > 0);
         if self.shell.busy() || self.loading.is_some() || (reading && cfg!(target_arch = "wasm32")) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// Shows the pair compared once both its images are loaded: two outputs, or with both methods chosen, their
+    /// previews (only these two fill the pair).
+    fn show_pair(&mut self) {
+        let [Some(_), Some(_)] = &self.pair else { return };
+        let name = |id: u64| self.shell.outputs.iter().find(|o| o.id == id).map(|o| o.name.clone()).unwrap_or_default();
+        let labels = match &self.selection {
+            Selection::Compare(a, b) => [name(*a), name(*b)],
+            Selection::Preview => [tr("method-pyramid"), tr("method-depth-map")],
+            _ => return,
+        };
+        if let [Some(first), Some(second)] = std::mem::take(&mut self.pair) {
+            self.viewer.show_pair(first, second, labels);
         }
     }
 

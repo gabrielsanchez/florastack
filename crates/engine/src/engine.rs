@@ -256,6 +256,12 @@ impl Engine {
         self.session.stack_preview.clone()
     }
 
+    /// The latest stack preview of `method` ("average", "pyramid", "depth-map" or "wavelet"), as
+    /// [`Engine::stack_preview`] holds the latest of any: previews of two methods can be shown side by side.
+    pub fn stack_preview_of(&self, method: &str) -> Option<std::sync::Arc<florastack_core::Image<f32>>> {
+        self.session.stack_previews.get(method).cloned()
+    }
+
     /// Reads a stacked output as full-precision linear samples in its recorded color space. The returned image
     /// owns its samples; changing it cannot change the project. Retouching is available through export commands.
     pub fn read_output(&self, id: florastack_project::OutputId) -> Result<florastack_core::Image<f32>, CommandError> {

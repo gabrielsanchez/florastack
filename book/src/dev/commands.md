@@ -81,7 +81,9 @@ A job (`CommandSpec::job(meta, lane, plan)`) does long work without blocking the
 3. It returns a **commit**, which the engine runs on its thread to apply the result as edits.
 
 Something irreversible outside the project, such as writing the user's file, comes after `JobContext::finalize`, past
-the last point where it can be cancelled. Previews that a newer request makes obsolete use `Meta::supersede`.
+the last point where it can be cancelled. Previews that a newer request makes obsolete use `Meta::supersede`, or
+`Meta::supersede_by` when only a request with the same value of a parameter makes them obsolete (`stack.preview`'s
+`method`: previews of two methods both finish).
 
 ## Tests
 

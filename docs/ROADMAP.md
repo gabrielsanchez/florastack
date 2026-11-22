@@ -406,7 +406,7 @@ Each frame's color and tone matched to the master's, and the geometry beyond a s
 - [ ] Follow-up: the UI tests play the filmstrip but don't scrub it, which takes pointer drags over the thumbnails
 - [ ] Follow-up: compared outputs share zoom and pan by their pixels, which matches their content only when they have the same canvas (the same framing)
 - [ ] Follow-up: a "?" opens `docs/stack-tab.md` on GitHub's main branch, so it needs a network and shows the docs of the latest version; bundle the docs with the app
-- [ ] Follow-up: with Both, the previews show the method whose setting changed last (the pyramid until a depth-map setting changes)
+- [x] Follow-up: with Both, the previews showed the method whose setting changed last (the pyramid until a depth-map setting changed). Now they show the pyramid's and the depth map's compared, split or side by side, with the outputs' comparison mode: a superseding job can be keyed by a parameter (`Meta::supersede_by`), so that `stack.preview` cancels only an older preview of its own method, and the session keeps the latest preview of each method (`Engine::stack_preview_of`); choosing Both, the framing or a shared setting previews both, a setting of one method that method alone. Tests: `tests/jobs.rs` (a keyed preview cancels only those with its key, a missing key counting as the default), `tests/stack.rs` (two methods' previews both finish and are kept, a newer one of the same method still cancels) and `tests/stack_tab.rs` (choosing Both shows the two previews compared)
 
 ### 5.3 Retouching *(plan first)*
 

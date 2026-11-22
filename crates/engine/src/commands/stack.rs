@@ -203,13 +203,15 @@ fn stacking() -> Vec<CommandSpec> {
                      shows in seconds what the full stack will look like. Takes the same settings as that method's command. The \
                      first preview reads every frame; the engine keeps the reduced frames in memory, so that later \
                      previews of the same frames read no file and take a fraction of the time. The engine \
-                     keeps the latest preview in memory for its viewer, until the project is closed: no output, no undo \
-                     step. With `keepFile` the preview is also written as a linear 32-bit float TIFF in the project's \
-                     `previews/` folder and its `path` returned; each such file stays until the project is closed. Runs beside other jobs as a preview; a newer call replaces an older one still \
-                     running, so call it after every change of a setting.",
+                     keeps the latest preview, and the latest of each method, in memory for its viewer, until the \
+                     project is closed: no output, no undo step. With `keepFile` the preview is also written as a \
+                     linear 32-bit float TIFF in the project's `previews/` folder and its `path` returned; each such \
+                     file stays until the project is closed. Runs beside other jobs as a preview; a newer call \
+                     replaces an older one of the same method still running, so call it after every change of a \
+                     setting, and previews of two methods both finish.",
                 )
                 .requires(Requires::Project)
-                .supersede()
+                .supersede_by("method", "average")
                 .examples(&[
                     "{}",
                     r#"{ "smoothing": 3.0 }"#,
@@ -2339,6 +2341,7 @@ fn preview(session: &Session, p: MethodParams) -> Result<JobPlan<Previewed>, Com
         };
         // The session keeps the latest preview, for the viewer: a job's result is JSON, which carries no pixels.
         Ok(commit(move |session: &mut Session| {
+            session.stack_previews.insert(previewed.method, std::sync::Arc::clone(&shown));
             session.stack_preview = Some(shown);
             Ok(previewed)
         }))

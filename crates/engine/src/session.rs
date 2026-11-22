@@ -60,6 +60,8 @@ pub struct Session {
     /// The latest stack preview (`stack.preview`), linear with the frames' color space and an alpha channel where
     /// frames leave pixels uncovered, for a viewer to read; dropped with the project.
     pub(crate) stack_preview: Option<std::sync::Arc<florastack_core::Image<f32>>>,
+    /// The latest stack preview of each method, by its name ("average", "pyramid", "depth-map", "wavelet").
+    pub(crate) stack_previews: std::collections::BTreeMap<&'static str, std::sync::Arc<florastack_core::Image<f32>>>,
     /// The frames' quarter-size copies the previews read, kept between them; dropped with the project.
     pub(crate) reduced: crate::commands::stack::SharedReduced,
     /// The depth-map method's quarter-size focus statistics the previews measured, kept between them; dropped with
@@ -112,6 +114,7 @@ impl Session {
             events: Vec::new(),
             threshold_shown: None,
             stack_preview: None,
+            stack_previews: std::collections::BTreeMap::new(),
             reduced: crate::commands::stack::SharedReduced::default(),
             reduced_focus: crate::commands::stack::SharedFocus::default(),
             retouch: None,
@@ -356,6 +359,7 @@ impl Session {
         let path = folder.path().display().to_string();
         self.threshold_shown = None;
         self.stack_preview = None;
+        self.stack_previews.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
         self.reduced_focus = crate::commands::stack::SharedFocus::default();
         self.close_retouch();
@@ -418,6 +422,7 @@ impl Session {
         let Some(open) = self.open.take() else { return Ok(None) };
         self.threshold_shown = None;
         self.stack_preview = None;
+        self.stack_previews.clear();
         self.reduced = crate::commands::stack::SharedReduced::default();
         self.reduced_focus = crate::commands::stack::SharedFocus::default();
         let cleaned = if open.folder.is_read_only() {
@@ -540,8 +545,9 @@ impl Session {
                     return Ok(Dispatched::Started(id));
                 }
                 // The lane is free: plan the job now, so that an error in the plan is the dispatch's.
+                let key = spec.supersede_key(&params);
                 let plan = guarded(name, || f(self, params))?;
-                let id = self.jobs.submit_running(spec.clone(), lane);
+                let id = self.jobs.submit_running(spec.clone(), lane, key);
                 if let Err(e) = self.jobs.launch(id, plan) {
                     self.jobs.fail(id, e);
                     return Err(self.jobs.take_failure(id).unwrap_or(CommandError::Internal { command: name.to_owned() }));

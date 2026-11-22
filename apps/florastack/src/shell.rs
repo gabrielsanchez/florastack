@@ -77,6 +77,9 @@ pub struct Shell {
     pub preview: Option<PathBuf>,
     /// The latest stack preview's pixels, when that is what `preview` names.
     pub preview_image: Option<Arc<florastack_engine::Image<f32>>>,
+    /// The latest stack preview of each method, by its name: with both methods chosen, the pyramid's and the depth
+    /// map's are shown side by side.
+    pub previews: std::collections::BTreeMap<String, Arc<florastack_engine::Image<f32>>>,
     /// Advances when a running capture replaces the contents at its preview path.
     pub preview_revision: u64,
     /// The output a stacking job just made, for the viewer to show.
@@ -134,6 +137,7 @@ impl Shell {
             notices: Vec::new(),
             preview: None,
             preview_image: None,
+            previews: std::collections::BTreeMap::new(),
             preview_revision: 0,
             made: None,
             stacks_found: None,
@@ -284,6 +288,7 @@ impl Shell {
                     if matches!(state, ProjectEvent::Opened | ProjectEvent::Closed) {
                         self.preview = None;
                         self.preview_image = None;
+                        self.previews.clear();
                         self.threshold = None;
                         self.relief = None;
                         self.previews_made.clear();
@@ -350,6 +355,11 @@ impl Shell {
                     self.notify(message, true);
                 }
                 JobState::Done if job.command == "stack.preview" => {
+                    if let Some(method) = job.result.as_ref().and_then(|r| r["method"].as_str())
+                        && let Some(image) = self.engine.stack_preview_of(method)
+                    {
+                        self.previews.insert(method.to_owned(), image);
+                    }
                     self.preview_image = self.engine.stack_preview();
                     self.preview = self.preview_image.is_some().then(|| PathBuf::from("stack preview"));
                     self.preview_revision = self.preview_revision.saturating_add(1);

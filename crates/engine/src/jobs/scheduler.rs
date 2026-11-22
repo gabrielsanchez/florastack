@@ -30,6 +30,9 @@ struct Active {
     locks: Aspects,
     tracker: Tracker,
     preview: Option<super::LivePreview>,
+    /// What it supersedes and is superseded by: the older and newer calls with the same key
+    /// (`CommandSpec::supersede_key`).
+    key: Option<String>,
 }
 
 impl Active {
@@ -107,17 +110,19 @@ impl Jobs {
 
     /// Queues a job of `spec` with checked `params`, to be planned when its lane has room.
     pub(crate) fn submit(&mut self, spec: Arc<CommandSpec>, lane: Lane, params: Value) -> JobId {
-        self.add(spec, lane, State::Queued(params))
+        let key = spec.supersede_key(&params);
+        self.add(spec, lane, State::Queued(params), key)
     }
 
-    /// Adds a job of `spec` that is planned already and starts at once ([`Jobs::launch`]).
-    pub(crate) fn submit_running(&mut self, spec: Arc<CommandSpec>, lane: Lane) -> JobId {
-        self.add(spec, lane, State::Running)
+    /// Adds a job of `spec` that is planned already and starts at once ([`Jobs::launch`]), with the key of what it
+    /// supersedes (`CommandSpec::supersede_key` of its parameters).
+    pub(crate) fn submit_running(&mut self, spec: Arc<CommandSpec>, lane: Lane, key: Option<String>) -> JobId {
+        self.add(spec, lane, State::Running, key)
     }
 
-    fn add(&mut self, spec: Arc<CommandSpec>, lane: Lane, state: State) -> JobId {
-        if spec.supersede {
-            let older: Vec<JobId> = self.active.iter().filter(|a| a.spec.name() == spec.name()).map(|a| a.id).collect();
+    fn add(&mut self, spec: Arc<CommandSpec>, lane: Lane, state: State, key: Option<String>) -> JobId {
+        if key.is_some() {
+            let older: Vec<JobId> = self.active.iter().filter(|a| a.spec.name() == spec.name() && a.key == key).map(|a| a.id).collect();
             for id in older {
                 self.cancel(id);
             }
@@ -125,8 +130,17 @@ impl Jobs {
         let id = JobId(self.next);
         self.next = self.next.saturating_add(1);
         let now = self.now();
-        let job =
-            Active { id, spec, lane, state, phase: Arc::new(Phase::default()), locks: Aspects::NONE, tracker: Tracker::new(&[], now), preview: None };
+        let job = Active {
+            id,
+            spec,
+            lane,
+            state,
+            phase: Arc::new(Phase::default()),
+            locks: Aspects::NONE,
+            tracker: Tracker::new(&[], now),
+            preview: None,
+            key,
+        };
         self.changed.push(job.info(now));
         self.active.push(job);
         id

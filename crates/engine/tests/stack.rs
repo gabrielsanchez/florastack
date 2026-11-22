@@ -226,6 +226,32 @@ fn the_depth_maps_previews_and_threshold_share_the_focus_they_measured() {
     assert_eq!(run(&mut engine, "stack.threshold", r#"{ "radius": 3.0 }"#)["measured"], true);
 }
 
+#[test]
+fn previews_of_two_methods_both_finish_and_each_is_kept() {
+    let dir = TempDir::new("stack-two-previews");
+    let files = synthetic_frames(dir.path(), "stack", 160, 120, &breathing(5, 0.01, None, 28));
+    let (mut engine, _) = project_with(dir.path(), &files);
+    run(&mut engine, "align.run", "{}");
+    // Asked for one after the other, without waiting: neither cancels the other.
+    let pyramid = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "pyramid" }"#).unwrap());
+    let depth = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "depth-map" }"#).unwrap());
+    assert_eq!(engine.wait(pyramid).unwrap()["method"], "pyramid");
+    assert_eq!(engine.wait(depth).unwrap()["method"], "depth-map");
+    let (p, d) = (engine.stack_preview_of("pyramid").unwrap(), engine.stack_preview_of("depth-map").unwrap());
+    assert_eq!((p.width(), p.height()), (d.width(), d.height()));
+    assert_ne!(*p, *d, "each method's own");
+    assert_eq!(*engine.stack_preview().unwrap(), *d, "the latest is the one committed last");
+    assert!(engine.stack_preview_of("average").is_none());
+    // A newer preview of the same method still replaces the older.
+    let older = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "pyramid", "grit": 0.5 }"#).unwrap());
+    let newer = common::job_of(engine.dispatch_json("stack.preview", r#"{ "method": "pyramid", "grit": 0.25 }"#).unwrap());
+    assert!(engine.job(older).unwrap().cancel_requested);
+    engine.wait(newer).unwrap();
+    // The previews go with the project.
+    run(&mut engine, "project.close", r#"{ "discardChanges": true }"#);
+    assert!(engine.stack_preview_of("pyramid").is_none());
+}
+
 /// The 8-bit RGBA pixels of a threshold picture.
 fn threshold_picture(shown: &serde_json::Value) -> Vec<u8> {
     let path = PathBuf::from(shown["path"].as_str().unwrap());
@@ -248,7 +274,7 @@ fn the_threshold_shows_the_depth_maps_colors_above_it_and_black_below() {
     // The colors composited by the threshold itself, at its first threshold.
     let shown = run(&mut engine, "stack.threshold", settings);
     let own = threshold_picture(&shown);
-    let pixels: Vec<&[u8]> = own.chunks_exact(4).collect();
+    let pixels = own.as_chunks::<4>().0;
     let black = pixels.iter().filter(|p| p[..3] == [0, 0, 0] && p[3] == 255).count();
     let below = shown["below"].as_f64().unwrap();
     assert!((black as f64 / pixels.len() as f64 - below).abs() < 0.01, "black where below: {black} of {} against {below}", pixels.len());
@@ -257,7 +283,7 @@ fn the_threshold_shows_the_depth_maps_colors_above_it_and_black_below() {
     // A later threshold keeps those colors, and darkens more.
     let more = run(&mut engine, "stack.threshold", r#"{ "threshold": "percentile", "percentile": 70 }"#);
     assert_eq!(more["measured"], false);
-    for (a, b) in own.chunks_exact(4).zip(threshold_picture(&more).chunks_exact(4)) {
+    for (a, b) in own.as_chunks::<4>().0.iter().zip(threshold_picture(&more).as_chunks::<4>().0) {
         assert!(b[..3] == [0, 0, 0] || a == b, "{a:?} became {b:?}");
     }
     // The same colors from a depth-map preview at that threshold, in a project opened again.

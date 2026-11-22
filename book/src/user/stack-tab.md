@@ -16,7 +16,7 @@ Changing a stacking setting renders a quarter-size preview once the frames are a
 - **Depth map** takes each pixel from the frame where it is sharpest. Colors and smooth backgrounds stay exactly as shot, but edges between near and far parts can show halos. It asks for its [contrast threshold](#contrast-threshold) before stacking.
 - **Weighted average** blends every frame, each weighted by its sharpness: fast and smooth, but softer than the others.
 - **Wavelet** picks the sharpest detail scale by scale, like the pyramid, and keeps a little more of the finest detail, with about as much noise. It stacks on the CPU only and takes several times as long as the pyramid, so it suits a final stack more than trying settings.
-- **Both** makes a pyramid output and a depth-map output from the same frames, to compare them, or to retouch one from the other later.
+- **Both** makes a pyramid output and a depth-map output from the same frames, to compare them, or to retouch one from the other later. Its previews show the two methods compared, split or side by side as the outputs' comparison is set; changing a setting of one method previews that method again.
 
 ## Radius
 

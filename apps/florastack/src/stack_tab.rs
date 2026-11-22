@@ -47,17 +47,18 @@ fn set_stack(app: &mut FloraStackApp, group: &str, key: &str, value: &Value, dra
     if let Some(result) = app.shell.run_with("stack.set", json!({ group: { key: value } }), coalesce) {
         app.shell.stack_settings = result["settings"].clone();
     }
-    app.preview_method = match group {
-        "depth_map" => "depth-map",
-        "average" => "average",
-        "wavelet" => "wavelet",
-        _ => "pyramid",
+    // With both methods chosen, only the one whose setting this is needs a new preview.
+    app.preview_only = match group {
+        "depth_map" => Some("depth-map"),
+        "pyramid" => Some("pyramid"),
+        _ => None,
     };
 }
 
 /// Changes alignment settings (`align.set`; with `drag`, one undo step for a slider's whole drag), keeping the
 /// settings the command returns.
 fn set_align(app: &mut FloraStackApp, patch: Value, drag: Option<&str>) {
+    app.preview_only = None;
     let coalesce = drag.map(|key| format!("align.set {key}"));
     if let Some(result) = app.shell.run_with("align.set", patch, coalesce) {
         app.shell.align_settings = result["settings"].clone();
@@ -268,7 +269,7 @@ fn settings(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         let response = row(ui, tip, "method", |ui| ui.radio(app.prefs.method == method, tr(method.label_key())));
         if response.clicked() && app.prefs.method != method {
             app.set_method(method);
-            app.preview_method = if method == Method::DepthMap { "depth-map" } else { method.name() };
+            app.preview_only = None;
             app.preview_if_aligned();
         }
     }

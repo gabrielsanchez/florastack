@@ -66,6 +66,28 @@ fn a_newer_preview_cancels_the_older_one() {
 }
 
 #[test]
+fn a_preview_keyed_by_a_parameter_cancels_only_the_older_ones_with_its_value() {
+    let dir = TempDir::new("supersede-by");
+    let gate = Gate::new();
+    let (mut engine, _) = open_fixture(dir.path(), test_registry(&gate));
+    let a = job_of(engine.dispatch("test.keyed", json!({ "steps": 1, "name": "a" })).unwrap());
+    until(&mut engine, "the first preview at the gate", |_| gate.running.load(Ordering::SeqCst) == 1);
+    let b = job_of(engine.dispatch("test.keyed", json!({ "steps": 1, "name": "b" })).unwrap());
+    let unnamed = job_of(engine.dispatch("test.keyed", json!({ "steps": 1 })).unwrap());
+    assert!(!engine.job(a).unwrap().cancel_requested, "another name leaves it be");
+    let again = job_of(engine.dispatch("test.keyed", json!({ "steps": 1, "name": "a" })).unwrap());
+    assert!(engine.job(a).unwrap().cancel_requested, "the same name cancels it");
+    let unnamed_again = job_of(engine.dispatch("test.keyed", json!({ "steps": 1, "name": "unnamed" })).unwrap());
+    assert!(engine.job(unnamed).unwrap().cancel_requested, "a name left out is the one the command stands for it");
+    gate.open(5);
+    assert!(matches!(engine.wait(a), Err(CommandError::Cancelled)));
+    assert!(matches!(engine.wait(unnamed), Err(CommandError::Cancelled)));
+    for job in [b, again, unnamed_again] {
+        engine.wait(job).unwrap();
+    }
+}
+
+#[test]
 fn a_cancelled_job_leaves_the_project_as_it_was() {
     let dir = TempDir::new("cancel");
     let gate = Gate::new();
