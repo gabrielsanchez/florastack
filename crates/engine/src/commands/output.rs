@@ -40,10 +40,10 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
                     "For viewers: the result is a lossless image in the project's cache, whose `path` the result gives, \
                      kept as the output's `result` map and keyed by what it is made from, so that rendering it again \
                      reads it back until a stroke or an adjustment changes. An output with neither is its own image, \
-                     with nothing rendered. Runs beside other jobs; a newer call replaces one still running.",
+                     with nothing rendered. Runs beside other jobs; a newer call for the same output replaces one                      still running, so that two outputs compared render side by side.",
                 )
                 .requires(Requires::Project)
-                .supersede()
+                .supersede_by("output", "")
                 .examples(&[r#"{ "output": 4 }"#]),
             Lane::Preview,
             render,

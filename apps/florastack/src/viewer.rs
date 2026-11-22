@@ -285,6 +285,11 @@ impl Viewer {
     }
 
     /// Whether two images are compared.
+    /// The images shown: the one, and the second when two are compared.
+    pub fn images(&self) -> [Option<&DisplayImage>; 2] {
+        [self.shown.as_ref().map(|p| &*p.image), self.other.as_ref().map(|p| &*p.image)]
+    }
+
     pub fn is_comparing(&self) -> bool {
         self.other.is_some()
     }

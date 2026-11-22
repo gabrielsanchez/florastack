@@ -325,7 +325,10 @@ impl CommandSpec {
             return None;
         }
         Some(match self.supersede_by {
-            Some((field, missing)) => params.get(field).and_then(Value::as_str).unwrap_or(missing).to_owned(),
+            // A string as it is, anything else (an id) as its JSON.
+            Some((field, missing)) => {
+                params.get(field).map_or_else(|| missing.to_owned(), |v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+            }
             None => String::new(),
         })
     }

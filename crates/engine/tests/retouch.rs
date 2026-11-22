@@ -161,7 +161,7 @@ fn strokes_whose_frame_is_removed_are_named_as_left_out() {
         "retouch.stroke",
         &format!(r#"{{ "stroke": {} }}"#, stroke("details", &format!(r#""source": {{ "output": {depth} }},"#), "[[20, 90, 1]]")),
     );
-    assert!(engine.retouch().unwrap().left_out().is_empty(), "every source is there");
+    assert_eq!(engine.retouch().unwrap().left_out(), [], "every source is there");
 
     run(&mut engine, "project.removeFrames", &format!(r#"{{ "frames": [{}] }}"#, frames[1]));
     let left_out = engine.retouch().unwrap().left_out().to_vec();
@@ -171,9 +171,30 @@ fn strokes_whose_frame_is_removed_are_named_as_left_out() {
     assert!(matches!(gone.source, florastack_engine::RetouchSource::Frame(id) if id.get() == frames[1]), "{gone:?}");
     // Undoing the removal brings the source back.
     run(&mut engine, "edit.undo", "{}");
-    assert!(engine.retouch().unwrap().left_out().is_empty());
+    assert_eq!(engine.retouch().unwrap().left_out(), [], "the frame is back");
     // A source output removed is named too.
     run(&mut engine, "output.remove", &format!(r#"{{ "output": {depth} }}"#));
     let left_out = engine.retouch().unwrap().left_out().to_vec();
     assert_eq!(left_out.iter().map(|l| (l.strokes, l.why)).collect::<Vec<_>>(), [(1, florastack_engine::retouch::Gone::OutputRemoved)]);
+}
+
+#[test]
+fn two_outputs_render_side_by_side() {
+    let dir = TempDir::new("retouch-render-two");
+    let (mut engine, pyramid, depth, frames) = stacked(dir.path());
+    // A stroke on each output.
+    for output in [pyramid, depth] {
+        run(&mut engine, "retouch.open", &format!(r#"{{ "output": {output} }}"#));
+        run(&mut engine, "retouch.setSource", &format!(r#"{{ "frame": {} }}"#, frames[0]));
+        let source = format!(r#""source": {{ "frame": {} }},"#, frames[0]);
+        run(&mut engine, "retouch.stroke", &format!(r#"{{ "stroke": {} }}"#, stroke("pixels", &source, "[[30, 30, 1], [100, 60, 1]]")));
+    }
+    run(&mut engine, "retouch.close", "{}");
+    // Asked for one after the other, without waiting: neither cancels the other.
+    let first = common::job_of(engine.dispatch_json("output.render", &format!(r#"{{ "output": {pyramid} }}"#)).unwrap());
+    let second = common::job_of(engine.dispatch_json("output.render", &format!(r#"{{ "output": {depth} }}"#)).unwrap());
+    assert!(!engine.job(first).is_some_and(|j| j.cancel_requested), "the other output's render goes on");
+    let (a, b) = (engine.wait(first).unwrap(), engine.wait(second).unwrap());
+    assert_eq!((a["output"].as_u64(), b["output"].as_u64()), (Some(pyramid), Some(depth)));
+    assert_ne!(a["path"], b["path"], "each output's own result");
 }

@@ -102,8 +102,8 @@ pub struct Shell {
     pub threshold: Option<Value>,
     /// What an `export.run` job just wrote, for the app to tell.
     pub exported: Option<Value>,
-    /// What the latest `output.render` job gave: the output and the file to show.
-    pub rendered: Option<Value>,
+    /// What the `output.render` jobs finished since the app last looked gave: each output and the file to show.
+    pub rendered: Vec<Value>,
     pub relief: Option<Value>,
     /// What the latest `compute.test` found, until the Preferences dialog opens again.
     pub tested: Option<Value>,
@@ -156,7 +156,7 @@ impl Shell {
             stacks_found: None,
             threshold: None,
             exported: None,
-            rendered: None,
+            rendered: Vec::new(),
             relief: None,
             tested: None,
             retouch: None,
@@ -391,7 +391,7 @@ impl Shell {
                 JobState::Done if job.command == "project.findStacks" => self.stacks_found.clone_from(&job.result),
                 JobState::Done if job.command == "stack.threshold" => self.threshold.clone_from(&job.result),
                 JobState::Done if job.command == "export.run" => self.exported.clone_from(&job.result),
-                JobState::Done if job.command == "output.render" => self.rendered.clone_from(&job.result),
+                JobState::Done if job.command == "output.render" => self.rendered.extend(job.result.clone()),
                 JobState::Done if job.command == "parallax.preview" => self.relief.clone_from(&job.result),
                 JobState::Done if job.command.starts_with("parallax.") => self.notify(crate::i18n::tr("parallax-exported"), false),
                 JobState::Done if job.command == "compute.test" => {
