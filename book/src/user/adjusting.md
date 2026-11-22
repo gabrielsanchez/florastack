@@ -61,7 +61,9 @@ a brushed mask needs most.
 - **Sharp areas** and **Soft areas**: where the stack has fine detail, and where it hasn't, found without a model. A
   focus stack brings everything its frames had in focus into one sharp image and leaves the rest as soft as the frames
   saw it, so these separate a subject from a blurred background well. They can't when the subject stands on a surface
-  that was in focus too, a textured floor or a leaf: use Subject (AI) there.
+  that was in focus too, a textured floor or a leaf, which they take in; and they leave out a smooth part of the
+  subject wider than about a hundredth of the image, a shiny shell or a wing's clear membrane, which has no fine
+  detail to find. Use Subject (AI) there.
 - **Depth range**: the part of the sharp areas in focus in a range of the stack's frames, **From** 0, the first frame, **To**
   1, the last (the nearest and the farthest, or the other way round, as the stack was shot), fading over **Feather**.
   It needs the stack's depth map: a depth-map output has its own; for the other methods, **Map the depth** measures the
