@@ -89,7 +89,8 @@ keys, and `develop.get`, `align.get`, `stack.get` and `export.get` show them all
   project's cache (4 GiB by default; the least recently used go beyond it), and **Clean up**, which removes what
   crashed stacks left behind.
 - **Autosave**: saves the project a few minutes after the first unsaved change (0 for never).
-- **Appearance**: the theme (dark or light, also Ctrl+Shift+T) and the language.
+- **Appearance**: the theme (dark or light, also Ctrl+Shift+T) and the language, which changes at once (English alone so
+  far: [Translating the app](../dev/translating.md) says how to add one).
 - **Display profile**: how the viewer's colors are made for your monitor. **Automatic** uses the profile your system
   has for the display the window is on (Windows' display settings, macOS's ColorSync, or a color manager such as
   colord on Linux under X11), and looks again when you move the window to another display; **sRGB** ignores it; and

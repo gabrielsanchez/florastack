@@ -1,7 +1,8 @@
 # The desktop app's English strings (Project Fluent: https://projectfluent.org/). Every key here is used by the code,
 # and every key the code uses is here: a test in src/i18n.rs checks both. A translation copies this file to
-# locales/<language>/florastack.ftl; it may also override a command's title and summary from the engine's registry
-# with `command-<name>-title` and `command-<name>-summary`, the name's dot written as a hyphen.
+# locales/<language>/florastack.ftl and gets a row in LANGUAGES (book/src/dev/translating.md); it may also override a
+# command's title, summary and help from the engine's registry with `command-<name>-title`, `command-<name>-summary`
+# and `command-<name>-help`, the name's dot written as a hyphen.
 
 untitled = Untitled
 title-unsaved = { $name } (unsaved)

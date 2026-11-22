@@ -113,9 +113,9 @@ pub fn dialog(app: &mut FloraStackApp, ui: &mut egui::Ui, mut form: Form) -> (bo
         });
         ui.horizontal(|ui| {
             ui.label(tr("prefs-language"));
-            let shown = crate::i18n::LANGUAGES.iter().find(|(id, _)| *id == form.language).map_or(form.language.as_str(), |(_, name)| name);
+            let shown = crate::i18n::LANGUAGES.iter().find(|(id, ..)| *id == form.language).map_or(form.language.as_str(), |(_, name, _)| name);
             egui::ComboBox::from_id_salt("prefs.language").selected_text(shown).show_ui(ui, |ui| {
-                for (id, name) in crate::i18n::LANGUAGES {
+                for (id, name, _) in crate::i18n::LANGUAGES {
                     ui.selectable_value(&mut form.language, id.to_owned(), name);
                 }
             });
@@ -316,6 +316,11 @@ impl FloraStackApp {
         self.prefs.autosave_minutes = (form.autosave_minutes != DEFAULT_AUTOSAVE_MINUTES).then_some(form.autosave_minutes);
         self.set_autosave();
         self.prefs.language = Some(form.language.clone()).filter(|l| l != crate::i18n::LANGUAGES[0].0);
+        // The UI shows the language from the next frame on.
+        if crate::i18n::language() != form.language {
+            crate::i18n::set_language(&form.language);
+            ctx.request_repaint();
+        }
         if self.prefs.display_profile == form.display {
             // The same file may have been calibrated again: read it again.
             self.display.refresh();

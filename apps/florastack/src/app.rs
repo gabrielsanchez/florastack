@@ -371,6 +371,12 @@ impl FloraStackApp {
     /// Hands the machine's settings the preferences remember to the engine: the device, the memory budget, the cache
     /// folder and the retouch sources' disk limit, each only when one is set.
     fn apply_saved(&mut self) {
+        // The language remembered, which a language the app no longer has leaves English.
+        if let Some(language) = &self.prefs.language
+            && !crate::i18n::set_language(language)
+        {
+            tracing::warn!("the language {language} isn't one the app has: showing English");
+        }
         let mut compute = serde_json::Map::new();
         if let Some(device) = self.prefs.device {
             compute.insert("device".to_owned(), json!(device));

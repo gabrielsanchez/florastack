@@ -1,53 +1,111 @@
 //! The UI's strings, through Fluent (Project Fluent's `fluent-bundle`): every string the app shows comes from
-//! `locales/<language>/florastack.ftl`, English (`en-US`) for now. [`tr`] looks a message up by its key, [`tr_args`]
-//! with arguments. A key the bundle lacks shows as itself, so a missing string is visible rather than blank; a test
-//! checks that the code uses no key the file lacks, and the file holds no message the code doesn't use.
+//! `locales/<language>/florastack.ftl`, compiled in, English (`en-US`) alone for now ([`LANGUAGES`]). [`tr`] looks a
+//! message up by its key, [`tr_args`] with arguments, in the language chosen ([`set_language`], which takes effect at
+//! once) and else in English, so that a translation missing a message shows the English one; a key no file has shows
+//! as itself, so a missing string is visible rather than blank. Tests check that the code uses no key the English file
+//! lacks, that the file holds no message the code doesn't use, and that every translation parses and has only
+//! messages the English file has. `book/src/dev/translating.md` says how to add a language.
 //!
 //! Commands' titles, summaries and help texts come from the engine's registry, in English; a translation can override
 //! them with the messages `command-<name>-title`, `command-<name>-summary` and `command-<name>-help`
 //! ([`command_title`], [`command_summary`], [`command_help`]), the name's dot written as a hyphen
 //! (`command-align-run-title`).
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
-use unic_langid::langid;
+use unic_langid::LanguageIdentifier;
 
 /// The English strings, compiled in.
 pub(crate) const EN_US: &str = include_str!("../locales/en-US/florastack.ftl");
 
-/// The languages the app has strings for: each one's tag and its name in itself, as the Preferences dialog lists them.
-pub const LANGUAGES: [(&str, &str); 1] = [("en-US", "English")];
+/// The languages the app has strings for: each one's tag, its name in itself, as the Preferences dialog lists them,
+/// and its strings, compiled in. English comes first: it is the default, and what the others fall back on.
+pub const LANGUAGES: [(&str, &str, &str); 1] = [("en-US", "English", EN_US)];
 
-fn bundle() -> &'static FluentBundle<FluentResource> {
-    static BUNDLE: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
-    BUNDLE.get_or_init(|| {
-        let mut bundle = FluentBundle::new_concurrent(vec![langid!("en-US")]);
-        // Isolation marks around arguments help right-to-left scripts, and show as boxes in some fonts: English has
-        // no need of them.
-        bundle.set_use_isolating(false);
-        let resource = FluentResource::try_new(EN_US.to_owned()).unwrap_or_else(|(resource, errors)| {
-            tracing::warn!("the English strings have {} syntax errors", errors.len());
-            resource
-        });
-        if let Err(errors) = bundle.add_resource(resource) {
-            tracing::warn!("the English strings have {} duplicate messages", errors.len());
-        }
-        bundle
-    })
+type Bundle = FluentBundle<FluentResource>;
+/// A language other than English, by its tag, and its strings.
+type Chosen = Option<(String, Arc<Bundle>)>;
+
+/// A bundle of the strings `text` for language `tag`; a syntax error or a duplicate leaves out what it spoils, with a
+/// warning.
+fn bundle_of(tag: &str, text: &str) -> Bundle {
+    let id: LanguageIdentifier = tag.parse().unwrap_or_default();
+    let mut bundle = FluentBundle::new_concurrent(vec![id]);
+    // Isolation marks around arguments help right-to-left scripts, and show as boxes in some fonts: languages
+    // written left to right have no need of them.
+    bundle.set_use_isolating(is_right_to_left(tag));
+    let resource = FluentResource::try_new(text.to_owned()).unwrap_or_else(|(resource, errors)| {
+        tracing::warn!("the {tag} strings have {} syntax errors", errors.len());
+        resource
+    });
+    if let Err(errors) = bundle.add_resource(resource) {
+        tracing::warn!("the {tag} strings have {} duplicate messages", errors.len());
+    }
+    bundle
 }
 
-/// The message `key` with `args`, or the key itself when there is none.
+/// Whether language `tag` is written right to left.
+fn is_right_to_left(tag: &str) -> bool {
+    let language = tag.split(['-', '_']).next().unwrap_or_default();
+    ["ar", "fa", "he", "ur", "ps", "yi", "dv", "ckb", "sd", "ug"].contains(&language)
+}
+
+/// The English bundle, which every other falls back on.
+fn english() -> &'static Bundle {
+    static ENGLISH: OnceLock<Bundle> = OnceLock::new();
+    ENGLISH.get_or_init(|| bundle_of("en-US", EN_US))
+}
+
+/// The language chosen, when it isn't English: its tag and its bundle.
+fn chosen() -> &'static RwLock<Chosen> {
+    static CHOSEN: OnceLock<RwLock<Chosen>> = OnceLock::new();
+    CHOSEN.get_or_init(|| RwLock::new(None))
+}
+
+/// Shows the UI in language `tag`, one of [`LANGUAGES`], from the next frame on; English when the app has no such
+/// language, which it says by returning false.
+pub fn set_language(tag: &str) -> bool {
+    let Some((_, _, text)) = LANGUAGES.iter().find(|(t, ..)| *t == tag) else {
+        use_strings("en-US", "");
+        return false;
+    };
+    use_strings(tag, text);
+    true
+}
+
+/// The language the UI is shown in.
+pub fn language() -> String {
+    chosen().read().unwrap_or_else(PoisonError::into_inner).as_ref().map_or_else(|| LANGUAGES[0].0.to_owned(), |(tag, _)| tag.clone())
+}
+
+/// Shows the UI in `tag` with the strings `text`, falling back on English; English alone for `en-US`.
+fn use_strings(tag: &str, text: &str) {
+    let bundle = (tag != LANGUAGES[0].0).then(|| (tag.to_owned(), Arc::new(bundle_of(tag, text))));
+    *chosen().write().unwrap_or_else(PoisonError::into_inner) = bundle;
+}
+
+/// The message `key` with `args`: the chosen language's, or English, or the key itself when neither has it.
 fn format(key: &str, args: Option<&FluentArgs<'_>>) -> String {
-    let bundle = bundle();
-    let Some(pattern) = bundle.get_message(key).and_then(|m| m.value()) else { return key.to_owned() };
-    let mut errors = Vec::new();
-    let text = bundle.format_pattern(pattern, args, &mut errors);
-    if !errors.is_empty() {
-        tracing::debug!("the string {key} has {} formatting errors", errors.len());
+    let translated = chosen().read().unwrap_or_else(PoisonError::into_inner).as_ref().map(|(_, b)| Arc::clone(b));
+    let bundles = translated.iter().map(|b| &**b).chain(std::iter::once(english()));
+    for bundle in bundles {
+        let Some(pattern) = bundle.get_message(key).and_then(|m| m.value()) else { continue };
+        let mut errors = Vec::new();
+        let text = bundle.format_pattern(pattern, args, &mut errors);
+        if !errors.is_empty() {
+            tracing::debug!("the string {key} has {} formatting errors", errors.len());
+        }
+        return text.into_owned();
     }
-    text.into_owned()
+    key.to_owned()
+}
+
+/// Whether the chosen language or English has message `key`.
+fn has(key: &str) -> bool {
+    let translated = chosen().read().unwrap_or_else(PoisonError::into_inner).as_ref().map(|(_, b)| Arc::clone(b));
+    translated.is_some_and(|b| b.has_message(key)) || english().has_message(key)
 }
 
 /// The message `key`. See the module documentation.
@@ -67,7 +125,7 @@ pub fn tr_args(key: &str, args: &[(&str, FluentValue<'_>)]) -> String {
 /// A command's message `kind` (`title`, `summary` or `help`) from the bundle, if a translation has one.
 fn command_text(name: &str, kind: &str) -> Option<String> {
     let key = format!("command-{}-{kind}", name.replace('.', "-"));
-    bundle().get_message(&key).and_then(|m| m.value()).map(|_| format(&key, None))
+    has(&key).then(|| format(&key, None))
 }
 
 /// A command's title: the translation's, or the registry's English.
@@ -181,6 +239,46 @@ mod tests {
         // A key can also be named where it is chosen (a label's, a setting's) and passed to `tr` later.
         let unused: Vec<&String> = defined.iter().filter(|key| !sources.iter().any(|t| t.contains(&format!("\"{key}\"")))).collect();
         assert!(unused.is_empty(), "strings in florastack.ftl that the code never names: {unused:?}");
+    }
+
+    #[test]
+    fn every_translation_parses_and_has_only_the_english_messages() {
+        let english = defined_keys();
+        for (tag, name, text) in LANGUAGES {
+            assert!(tag.parse::<LanguageIdentifier>().is_ok(), "{tag} isn't a language tag");
+            assert!(!name.is_empty(), "{tag} has no name");
+            assert!(FluentResource::try_new(text.to_owned()).is_ok(), "the {tag} strings have syntax errors");
+            let keys: BTreeSet<String> = text
+                .lines()
+                .filter(|l| l.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))
+                .filter_map(|l| l.split_once('=').map(|(id, _)| id.trim().to_owned()))
+                .collect();
+            let extra: Vec<&String> = keys.iter().filter(|k| !english.contains(*k) && !k.starts_with("command-")).collect();
+            assert!(extra.is_empty(), "{tag} has messages English doesn't: {extra:?}");
+        }
+    }
+
+    #[test]
+    fn a_language_takes_effect_at_once_and_falls_back_on_english() {
+        // A translation of one message and one command's title, which no other test reads: tests run side by side.
+        use_strings("de-DE", "test-only-greeting = Hallo { $name }\ncommand-test-only-title = Nur ein Test\n");
+        assert_eq!(language(), "de-DE");
+        assert_eq!(tr_args("test-only-greeting", &[("name", FluentValue::from("Welt"))]), "Hallo Welt");
+        assert_eq!(command_title("test.only", "Only a test"), "Nur ein Test");
+        assert_eq!(command_summary("test.only", "Tests."), "Tests.", "English where it has none");
+        assert_eq!(tr("action-undo"), english_of("action-undo"), "English for a message it lacks");
+        assert!(!set_language("xx-XX"), "a language the app doesn't have");
+        assert_eq!(language(), "en-US");
+        assert_eq!(tr("test-only-greeting"), "test-only-greeting");
+        assert!(set_language("en-US"));
+        assert!(is_right_to_left("ar-EG") && !is_right_to_left("de"));
+    }
+
+    /// Message `key` in English, read from the English bundle alone.
+    fn english_of(key: &str) -> String {
+        let bundle = english();
+        let mut errors = Vec::new();
+        bundle.format_pattern(bundle.get_message(key).unwrap().value().unwrap(), None, &mut errors).into_owned()
     }
 
     #[test]
