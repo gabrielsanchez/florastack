@@ -189,6 +189,18 @@ pub const BROWSER_MEMORY: u64 = 4 << 30;
 /// What a browser page keeps for itself beyond what a stack takes: the module, the app, its textures.
 const BROWSER_RESERVE: u64 = 384 << 20;
 
+/// What reading a frame may take at its peak, per pixel: aligning holds the frame before it as linear `f32` color
+/// (12 bytes) beside the one being read, whose samples as decoded (up to 8 bytes), linear `f32` copy and turned
+/// copy (12 bytes each) are briefly there at once, which comes to 44; 40 leaves the 24-megapixel frames of
+/// a 20-frame stack well inside a page and refuses the 100-megapixel ones that would take it all.
+const FRAME_BYTES_PER_PIXEL: u64 = 40;
+
+/// The most pixels a frame may have for a browser page to read it beside the `held` bytes of its files
+/// ([`FRAME_BYTES_PER_PIXEL`]): about 97 million in an empty page.
+pub fn browser_frame_pixels(held: u64) -> u64 {
+    BROWSER_MEMORY.saturating_sub(BROWSER_RESERVE).saturating_sub(held) / FRAME_BYTES_PER_PIXEL
+}
+
 /// The memory a stack of color frames of `frame` pixels (width and height) onto a canvas of `canvas` pixels may take
 /// at its peak, with `budget` bytes for its working tiles: the frame being folded and the next, read beside it, as
 /// linear `f32`; the working tiles; and the result with its alpha, its copy brought into range and its encoded file.
@@ -343,5 +355,15 @@ mod tests {
         assert!(!fits(large, 0, BROWSER_MEMORY), "a 100 MP stack doesn't");
         assert_eq!(stack_memory((usize::MAX, usize::MAX), (1, 1), 0), u64::MAX, "no overflow");
         assert!(check_memory("stack.pyramid", u64::MAX).is_ok(), "native targets always have the memory");
+    }
+
+    #[test]
+    fn a_page_reads_camera_frames_but_not_100_megapixel_ones() {
+        const MIB: u64 = 1 << 20;
+        let pixels = |w: u64, h: u64| w * h;
+        assert!(pixels(6000, 4000) <= browser_frame_pixels(1024 * MIB), "a 24 MP frame beside 1 GB of files");
+        assert!(pixels(8256, 5504) <= browser_frame_pixels(400 * MIB), "a 45 MP frame beside a few files");
+        assert!(pixels(11_648, 8_736) > browser_frame_pixels(0), "a 100 MP frame, even in an empty page");
+        assert_eq!(browser_frame_pixels(u64::MAX), 0, "no underflow");
     }
 }

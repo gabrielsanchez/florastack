@@ -86,21 +86,16 @@ pub(crate) struct Renderer {
 }
 
 impl Renderer {
-    /// As the viewer's (`viewer.rs`): not in a browser built with threads.
-    #[cfg(target_arch = "wasm32")]
-    pub fn install(_state: &egui_wgpu::RenderState) -> bool {
-        false
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Makes the renderer's resources and keeps them where its paint callbacks find them, as the viewer's are
+    /// (`viewer.rs`'s `keep`); `false` when its shaders don't compile there.
     pub fn install(state: &egui_wgpu::RenderState) -> bool {
         if let Some(renderer) = Self::new(&state.device, state.target_format) {
-            state.renderer.write().callback_resources.insert(renderer);
+            crate::viewer::keep(state, renderer);
             return true;
         }
         false
     }
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "a browser built with threads has no orbit view (`install`)"))]
+
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Option<Self> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -155,8 +150,7 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        if let Some(e) = pollster::block_on(scope.pop()) {
-            tracing::warn!("3D viewer unavailable: {e}");
+        if !crate::viewer::valid::<Self>(scope, |e| tracing::warn!("3D viewer unavailable: {e}")) {
             return None;
         }
         Some(Self { mesh_pipeline, blit_pipeline, uniform, sampler, mesh: None, target: None, encode: !format.is_srgb() })
@@ -244,7 +238,30 @@ impl egui_wgpu::CallbackTrait for Paint {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(renderer) = resources.get_mut::<Renderer>() else { return Vec::new() };
+        crate::viewer::with_viewer(resources, |renderer: &mut Renderer| self.prepare_in(renderer, device, queue, screen, encoder)).unwrap_or_default()
+    }
+    fn paint(&self, _: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+        crate::viewer::with_viewer_ref(resources, |renderer: &Renderer| {
+            if let Some(target) = &renderer.target {
+                pass.set_pipeline(&renderer.blit_pipeline);
+                pass.set_bind_group(0, &target.group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        });
+    }
+}
+
+impl Paint {
+    /// What `prepare` does with the renderer's resources.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Viewport sizes are clamped to positive device limits.
+    fn prepare_in(
+        &self,
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen: &egui_wgpu::ScreenDescriptor,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Vec<wgpu::CommandBuffer> {
         renderer.upload(device, queue, self.id, &self.scene);
         let side = |v: f32| (v * screen.pixels_per_point).round().clamp(1.0, 2048.0) as u32;
         renderer.resize(device, [side(self.rect.width()), side(self.rect.height())]);
@@ -278,15 +295,6 @@ impl egui_wgpu::CallbackTrait for Paint {
             pass.draw_indexed(0..mesh.count, 0, 0..1);
         }
         Vec::new()
-    }
-    fn paint(&self, _: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
-        if let Some(renderer) = resources.get::<Renderer>()
-            && let Some(target) = &renderer.target
-        {
-            pass.set_pipeline(&renderer.blit_pipeline);
-            pass.set_bind_group(0, &target.group, &[]);
-            pass.draw(0..3, 0..1);
-        }
     }
 }
 

@@ -77,6 +77,8 @@ impl Action {
             Action::New => "action-new",
             Action::Open => "action-open",
             Action::AddFrames => "action-add-frames",
+            // A page can't open a folder: in a browser, the files picked are split into stacks.
+            Action::ImportStacks if cfg!(target_arch = "wasm32") => "action-import-stacks-web",
             Action::ImportStacks => "action-import-stacks",
             Action::Save => "action-save",
             Action::SaveAs => "action-save-as",

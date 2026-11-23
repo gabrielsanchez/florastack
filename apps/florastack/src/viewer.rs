@@ -18,6 +18,10 @@
 //!   MB.
 //!
 //! Without a GPU renderer (headless tests), the viewer shows a reduced 8-bit copy through egui's own textures.
+//!
+//! The viewer's resources live in egui's renderer, which asks what it keeps to be `Send` and `Sync`; in a browser built
+//! with threads, wgpu's objects are neither, and the page's main thread, the only one that draws, keeps them in a
+//! thread-local instead ([`keep`], [`with_viewer`]).
 
 use std::sync::Arc;
 
@@ -238,6 +242,16 @@ impl Viewer {
         self.gpu.is_some()
     }
 
+    /// [`Viewer::gpu`], having heard whether the viewer's resources were valid: in a browser, that comes after they
+    /// are made ([`valid`]), and the viewer draws through egui from then on when they weren't.
+    fn still_on_gpu(&mut self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if self.gpu.is_some() && !kept::<GpuViewer>() {
+            self.gpu = None;
+        }
+        self.gpu.is_some()
+    }
+
     /// The longest side to load images at: twice the device's largest texture (larger images are tiled), at most
     /// [`MAX_LOAD_SIDE`] unless the texture itself is larger; or the fallback's size.
     pub fn max_side(&self) -> usize {
@@ -404,7 +418,7 @@ impl Viewer {
         let (zoom, center) = (self.zoom, self.center);
         let (second_zoom, second_center) = self.pair_map.map_or((zoom, center), |m| m.view(zoom, center));
         let ctx = ui.ctx().clone();
-        let gpu = self.gpu.is_some();
+        let gpu = self.still_on_gpu();
         for (slot, (shown, area, clip, zoom, center)) in
             [(self.shown.as_mut(), view, view, zoom, center), (self.other.as_mut(), second_view, second_clip, second_zoom, second_center)]
                 .into_iter()
@@ -564,20 +578,12 @@ impl GpuViewer {
     /// largest texture side it takes, or `None` when the viewer's shaders don't compile there (the viewer then draws
     /// through egui). The device then logs its errors instead of panicking, as wgpu does by default: a crash loses
     /// work.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn install(state: &egui_wgpu::RenderState) -> Option<u32> {
         state.device.on_uncaptured_error(Arc::new(|e: wgpu::Error| tracing::error!("the display's GPU reported an error: {e}")));
         let viewer = GpuViewer::new(&state.device, state.target_format)?;
         let limit = viewer.limit;
-        state.renderer.write().callback_resources.insert(viewer);
+        keep(state, viewer);
         Some(limit)
-    }
-
-    /// In a browser built with threads, wgpu's objects can't be shared between threads, which egui's renderer asks of
-    /// what it keeps: the viewer draws through egui there.
-    #[cfg(target_arch = "wasm32")]
-    pub fn install(_state: &egui_wgpu::RenderState) -> Option<u32> {
-        None
     }
 
     /// The viewer's resources on `device`, drawing to textures of the format `target`; `None` when its shaders don't
@@ -637,11 +643,8 @@ impl GpuViewer {
             table: table_texture(device, None, 2, &[]),
             table_size: None,
         };
-        if let Some(e) = pollster::block_on(scope.pop()) {
-            tracing::warn!("the viewer's shaders don't compile on this GPU ({e}): images are drawn without them");
-            return None;
-        }
-        Some(resources)
+        valid::<GpuViewer>(scope, |e| tracing::warn!("the viewer's shaders don't compile on this GPU ({e}): images are drawn without them"))
+            .then_some(resources)
     }
 
     /// Uses `lut`, a monitor profile's table, as the display transform after sRGB's curve; `None` for sRGB's curve
@@ -1021,6 +1024,82 @@ struct Paint {
     center: Vec2,
 }
 
+/// Keeps `resource` where the paint callbacks find it ([`with_viewer`]): in egui's renderer natively, in a thread-local
+/// of the page's main thread in a browser built with threads (see the module documentation).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn keep<T: Send + Sync + 'static>(state: &egui_wgpu::RenderState, resource: T) {
+    state.renderer.write().callback_resources.insert(resource);
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// The resources of the paint callbacks, by type, on the page's main thread.
+    static KEPT: std::cell::RefCell<std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn keep<T: 'static>(_state: &egui_wgpu::RenderState, resource: T) {
+    KEPT.with_borrow_mut(|kept| kept.insert(std::any::TypeId::of::<T>(), Box::new(resource)));
+}
+
+/// Whether what was made under `scope`, a `T` for [`keep`], is valid, `on_error` hearing why not. Natively, the scope's
+/// errors are waited for. A browser's main thread may not wait: the `T` is taken as valid and kept meanwhile, and let go
+/// when the errors come, so that the viewer draws through egui from then on ([`kept`]).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::extra_unused_type_parameters, reason = "the browser's version lets the `T` go")]
+pub(crate) fn valid<T: 'static>(scope: wgpu::ErrorScopeGuard, on_error: impl FnOnce(wgpu::Error) + 'static) -> bool {
+    match pollster::block_on(scope.pop()) {
+        Some(e) => {
+            on_error(e);
+            false
+        }
+        None => true,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn valid<T: 'static>(scope: wgpu::ErrorScopeGuard, on_error: impl FnOnce(wgpu::Error) + 'static) -> bool {
+    // Scopes are popped in the order they were pushed, at once: only the answer is waited for.
+    let popped = scope.pop();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Some(e) = popped.await {
+            on_error(e);
+            KEPT.with_borrow_mut(|kept| kept.remove(&std::any::TypeId::of::<T>()));
+        }
+    });
+    true
+}
+
+/// Whether a `T` is kept ([`keep`]): in a browser, one whose resources turned out invalid ([`valid`]) is let go.
+#[cfg(target_arch = "wasm32")]
+fn kept<T: 'static>() -> bool {
+    KEPT.with(|kept| kept.try_borrow().is_ok_and(|kept| kept.contains_key(&std::any::TypeId::of::<T>())))
+}
+
+/// Runs `f` on the `T` that [`keep`] kept, from a paint callback's `resources`; `None` when there is none.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn with_viewer<T: Send + Sync + 'static, R>(resources: &mut egui_wgpu::CallbackResources, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+    resources.get_mut::<T>().map(f)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn with_viewer<T: 'static, R>(_resources: &mut egui_wgpu::CallbackResources, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+    // A callback that drew while another held them (none does) finds nothing rather than panicking.
+    KEPT.with(|kept| kept.try_borrow_mut().ok()?.get_mut(&std::any::TypeId::of::<T>())?.downcast_mut::<T>().map(f))
+}
+
+/// [`with_viewer`] for a paint callback's `paint`, which sees the resources unchangeable.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn with_viewer_ref<T: Send + Sync + 'static, R>(resources: &egui_wgpu::CallbackResources, f: impl FnOnce(&T) -> R) -> Option<R> {
+    resources.get::<T>().map(f)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn with_viewer_ref<T: 'static, R>(_resources: &egui_wgpu::CallbackResources, f: impl FnOnce(&T) -> R) -> Option<R> {
+    KEPT.with(|kept| kept.try_borrow().ok()?.get(&std::any::TypeId::of::<T>())?.downcast_ref::<T>().map(f))
+}
+
 impl egui_wgpu::CallbackTrait for Paint {
     fn prepare(
         &self,
@@ -1030,7 +1109,31 @@ impl egui_wgpu::CallbackTrait for Paint {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(viewer) = resources.get_mut::<GpuViewer>() else { return Vec::new() };
+        with_viewer(resources, |viewer: &mut GpuViewer| self.prepare_in(viewer, device, queue, screen, encoder)).unwrap_or_default()
+    }
+
+    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+        with_viewer_ref(resources, |viewer: &GpuViewer| {
+            let Some(slot) = viewer.slots.get(self.slot) else { return };
+            pass.set_pipeline(&viewer.pipeline);
+            for group in &slot.drawn {
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+        });
+    }
+}
+
+impl Paint {
+    /// What `prepare` does with the viewer's resources.
+    fn prepare_in(
+        &self,
+        viewer: &mut GpuViewer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen: &egui_wgpu::ScreenDescriptor,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Vec<wgpu::CommandBuffer> {
         viewer.frame += 1;
         viewer.update(device, queue, encoder, self.id, &self.image, &self.updates);
         let Some(index) = viewer.uploaded(device, queue, encoder, self.id, &self.image) else { return Vec::new() };
@@ -1104,16 +1207,6 @@ impl egui_wgpu::CallbackTrait for Paint {
             slot.drawn = drawn;
         }
         Vec::new()
-    }
-
-    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
-        let Some(viewer) = resources.get::<GpuViewer>() else { return };
-        let Some(slot) = viewer.slots.get(self.slot) else { return };
-        pass.set_pipeline(&viewer.pipeline);
-        for group in &slot.drawn {
-            pass.set_bind_group(0, group, &[]);
-            pass.draw(0..6, 0..1);
-        }
     }
 }
 

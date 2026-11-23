@@ -190,6 +190,12 @@ wasm_sync = "0.1"
 futures-channel = "0.3.34"
 futures-core = "0.3"
 
+# The browser build's module compressed ahead, for servers that send it so (`cargo xtask web`, developer tooling only):
+# gzip through flate2 (MIT OR Apache-2.0, pure Rust with miniz_oxide, already in the dependency graph) and Brotli
+# (BSD-3-Clause AND MIT, pure Rust).
+flate2 = "1.1"
+brotli = "8"
+
 # Image codecs that florastack-codecs uses directly, at the versions LightCraft already brings in (ATTRIBUTION.md says
 # what each one does).
 png = "0.18"
@@ -305,6 +311,9 @@ opt-level = 2
 [profile.dev.package.fdeflate]
 opt-level = 2
 [profile.dev.package.flate2]
+opt-level = 2
+# xtask's Brotli: unoptimized, compressing the browser build's module at its best would take minutes.
+[profile.dev.package.brotli]
 opt-level = 2
 [profile.dev.package.adler2]
 opt-level = 2

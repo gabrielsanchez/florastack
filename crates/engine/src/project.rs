@@ -133,6 +133,7 @@ pub struct FrameRead {
 pub fn read_frame_file(path: &Path) -> Result<FrameRead, ProjectDataError> {
     let bytes = florastack_core::fs::read(path).map_err(|source| ProjectError::Read { path: path.to_path_buf(), source })?;
     let source = crate::frames::source(&bytes)?;
+    crate::frames::check_size(&bytes)?;
     let (file, exif) = frame_file(path, &bytes)?;
     Ok(FrameRead { file, exif, source })
 }

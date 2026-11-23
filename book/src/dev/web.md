@@ -25,9 +25,19 @@ cargo xtask web --test     # and run the headless browser test
    up to 4 GiB, and the thread-local storage exports wasm-bindgen's glue starts threads with. The nightly is the
    one the fuzz targets pin (`fuzz/rust-toolchain.toml`); a test keeps the two the same.
 2. **Runs wasm-bindgen** (`--target web`) for the JavaScript glue. Its CLI must be exactly the version of the library
-   in `Cargo.lock`, which the workspace pins with `=`; a test checks that the two stay together.
+   in `Cargo.lock`, which the workspace pins with `=`; a test checks that the two stay together. Optimized builds
+   leave out the module's name section (`--remove-name-section`), 10 MB of 34 that serve only stack traces; `--dev`
+   keeps it.
 3. **Fills `packaging/web/index.html.in` and `worker.js.in`** with the product identity, and copies the hosting
    files (`_headers`, `.htaccess`), the licenses and an icon.
+4. **Compresses the module and its glue ahead**, beside them: `.br` (Brotli at quality 11) and `.gz` (gzip at level
+   9), for servers that send such copies (nginx's `gzip_static`, Caddy's `precompressed`). The 24 MB module is
+   4.7 MB with Brotli and 7.3 MB with gzip; compressing takes about a minute. `--serve` and the test's server send
+   the copy the browser accepts, so the test loads what a server would send.
+
+Two things were tried for size and left out: fat LTO with one codegen unit took 9 minutes to build here (CI builds without it in about 4)
+and the module from 24.0 to 23.8 MB (the code grew, the names shrank), and binaryen's `wasm-opt` hasn't been tried:
+Visual Studio 2022's compiler here (MSVC 14.34) can't build it from the `wasm-opt` crate, which needs C++20.
 
 The `Dockerfile` at the root does the same in a container and serves the site with nginx
 (`packaging/web/nginx.conf`); `packaging/web/README.md` is for whoever hosts it.
@@ -75,12 +85,17 @@ Then, in the browser:
 - **The app** (`apps/florastack/src/web.rs`) starts rayon's pool and the storage worker, then eframe's web runner on the
   page's canvas, drawn with WebGPU or WebGL. Files come from the hidden file input and from drops, are written to the
   in-memory file system's `/files`, and reach the app as paths; anything written under `/downloads` is downloaded.
-  `dialogs.rs` hands out `/downloads` folders where the desktop's file dialogs pick folders. What needs the user's
+  `dialogs.rs` hands out `/downloads` folders where the desktop's file dialogs pick folders. The GPU viewer and the
+  3D view draw on the page's main thread: egui's renderer keeps paint-callback resources in a map that asks them to
+  be `Send` and `Sync`, which wgpu's objects aren't with threads, so they live in a thread-local there (`viewer.rs`'s
+  `keep`), and their shaders' errors, which the main thread may not wait for, let them go when they come (`valid`). What needs the user's
   folders or devices is left out with `cfg`: opening and saving projects elsewhere, recent projects, the batch and
   capture tabs, the control channel. Workers never touch egui's locks: they ask for no repaints, and the app
   repaints on a timer while jobs run or images load.
 - **Memory**: the module may grow to 4 GiB. Files given to the page may take half of that, and a stack checks that
-  its frames and working data fit before it starts, with a message that says what to do when they don't.
+  its frames and working data fit before it starts, with a message that says what to do when they don't. A frame is
+  checked from its headers when it is added, and before every read, against what the page has left beside its files
+  (40 bytes a pixel, `compute::browser_frame_pixels`), since a decoder that runs out of memory aborts the page.
 
 ## Testing
 
@@ -89,7 +104,9 @@ Then, in the browser:
 with Playwright's library (installed outside the repository at the version `xtask/src/web.rs` pins, as the glTF
 validator is), opens the site in a headless Chrome or Edge, gives the page the frames through its file input,
 aligns and stacks them by the pyramid through `window.florastack.dispatch`, and downloads the output; the example
-then compares it with the native one, which it must match within 40 dB of PSNR. `FLORASTACK_BROWSER` names another
+then compares it with the native one, which it must match within 40 dB of PSNR. The script also saves a
+screenshot of the page showing the output (`target/web-test/downloads/page.png`), and the timings
+(`timings.json`). With `FLORASTACK_FRAMES` set to a folder of camera files, it times a real stack by hand. `FLORASTACK_BROWSER` names another
 browser: a Playwright channel (`chrome`, `msedge`, `chromium`) or a path.
 
 The native unit tests cover what can be tested natively: the in-memory file system, the lane executor, the server's

@@ -1,6 +1,6 @@
 // The browser build's headless test, which `cargo xtask web --test` runs (xtask/src/web.rs) with Playwright's library
 // and these variables: FLORASTACK_URL, the site, served with its headers; FLORASTACK_FRAMES, a folder of PNG frames;
-// FLORASTACK_DOWNLOADS, where the output goes, as web.png; FLORASTACK_BROWSER, a Playwright channel (chrome, msedge,
+// FLORASTACK_DOWNLOADS, where the output goes, as web.png, with timings.json; FLORASTACK_BROWSER, a Playwright channel (chrome, msedge,
 // chromium) or a browser's path.
 //
 // The page stacks the frames as a user would: they come through its file input, the app adds them to a new project,
@@ -24,8 +24,15 @@ setTimeout(() => {
   console.error('the test took more than 15 minutes');
   process.exit(1);
 }, 15 * MINUTE).unref();
-const within = (promise, ms, what) =>
-  Promise.race([promise, sleep(ms).then(() => Promise.reject(new Error(`${what} took more than ${ms / 1000} s: the page doesn't answer`)))]);
+// Each call's timer is cleared once it answers: Node waits for every pending timer before it exits, and the last
+// call's would hold the test for its whole limit (five minutes of an export's).
+const within = (promise, ms, what) => {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} took more than ${ms / 1000} s: the page doesn't answer`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+};
 const launch = /[\\/]/.test(browser) ? { executablePath: browser } : { channel: browser };
 const instance = await chromium.launch({ ...launch, headless: true });
 const errors = [];
@@ -47,7 +54,8 @@ try {
   const threads = await within(page.evaluate(() => navigator.hardwareConcurrency), 30_000, 'reading the cores');
   console.log(`the app runs, ${threads} threads, after ${timings.start} ms`);
 
-  const files = readdirSync(frames).filter((f) => f.endsWith('.png')).sort().map((f) => join(frames, f));
+  // The test's PNG frames, or a real stack's camera files to time it on (run by hand with FLORASTACK_FRAMES).
+  const files = readdirSync(frames).filter((f) => /\.(png|jpe?g|tiff?)$/i.test(f)).sort().map((f) => join(frames, f));
   start = Date.now();
   await page.setInputFiles('#florastack-files', files);
   // The app adds the files picked as frames, in a new project (`project.addFrames`, a job): wait for them all.
@@ -95,6 +103,8 @@ try {
     console.log(`${name}: downloaded ${download.suggestedFilename()}`);
   };
   await stack('web');
+  // The page as it shows the output, to look at: the viewer draws it on the display's GPU where the browser has one.
+  await within(page.screenshot({ path: join(downloads, 'page.png') }), 30_000, 'the screenshot');
   // On the GPU, the CPU's threads too.
   if (compute.device === 'gpu') {
     await dispatch('compute.set', { device: 'cpu' }, 30_000);

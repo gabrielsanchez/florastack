@@ -266,8 +266,11 @@ fn build(meta: &serde_json::Value, root: &Path, target_dir: &Path, site: &Path, 
     std::fs::create_dir_all(site).map_err(|e| format!("{}: {e}", site.display()))?;
     let mut bindgen = Command::new("wasm-bindgen");
     bindgen.arg(&wasm).args(["--target", "web", "--no-typescript", "--out-name", &branding.binaries.gui, "--out-dir"]).arg(site);
+    // The functions' names, a third of the module (10 MB of 34), serve only stack traces: a dev build keeps them.
     if dev {
         bindgen.arg("--debug");
+    } else {
+        bindgen.arg("--remove-name-section");
     }
     step(bindgen, "wasm-bindgen")?;
 
@@ -286,18 +289,35 @@ fn build(meta: &serde_json::Value, root: &Path, target_dir: &Path, site: &Path, 
     for name in ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"] {
         crate::dist::copy(&root.join(name), &site.join(name))?;
     }
-    let bytes = |name: &str| std::fs::metadata(site.join(name)).map_or(0, |m| m.len());
+    let module = format!("{}_bg.wasm", branding.binaries.gui);
+    if !dev {
+        for name in [module.as_str(), &format!("{}.js", branding.binaries.gui)] {
+            precompress(&site.join(name))?;
+        }
+    }
+    let mb = |name: &str| std::fs::metadata(site.join(name)).map_or(0, |m| m.len()) as f64 / 1e6;
     println!(
-        "the site is ready in {} ({:.1} MB of WebAssembly, {:.1} MB in all)",
+        "the site is ready in {} ({:.1} MB of WebAssembly; {:.1} MB with Brotli, {:.1} MB with gzip)",
         site.display(),
-        bytes(&format!("{}_bg.wasm", branding.binaries.gui)) as f64 / 1e6,
-        dir_size(site) as f64 / 1e6
+        mb(&module),
+        mb(&format!("{module}.br")),
+        mb(&format!("{module}.gz"))
     );
     Ok(())
 }
 
-fn dir_size(dir: &Path) -> u64 {
-    std::fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|e| e.metadata().ok()).filter(std::fs::Metadata::is_file).map(|m| m.len()).sum()
+/// Writes `file`'s precompressed copies beside it, `.br` (Brotli at its best, with a 16 MiB window) and `.gz` (gzip at
+/// its best), for servers that send them rather than compress every answer (nginx's `gzip_static`, Caddy's
+/// `precompressed`).
+fn precompress(file: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    gzip.write_all(&bytes).and_then(|()| gzip.try_finish()).map_err(|e| format!("gzip {}: {e}", file.display()))?;
+    crate::dist::write(&sibling(file, "gz"), gzip.get_ref())?;
+    let params = brotli::enc::BrotliEncoderParams { quality: 11, lgwin: 24, size_hint: bytes.len(), ..Default::default() };
+    let mut brotli = Vec::new();
+    brotli::BrotliCompress(&mut bytes.as_slice(), &mut brotli, &params).map_err(|e| format!("Brotli {}: {e}", file.display()))?;
+    crate::dist::write(&sibling(file, "br"), &brotli)
 }
 
 fn mime(path: &Path) -> &'static str {
@@ -341,20 +361,37 @@ fn respond(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let mut header = String::new();
+    let mut accepted = String::new();
     while reader.read_line(&mut header)? > 2 {
+        if let Some((name, value)) = header.split_once(':')
+            && name.trim().eq_ignore_ascii_case("accept-encoding")
+        {
+            value.trim().clone_into(&mut accepted);
+        }
         header.clear();
     }
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("");
     let target = parts.next().unwrap_or("/");
     let file = resolve(dir, target);
-    let body = file.as_ref().and_then(|f| std::fs::read(f).ok());
+    // The precompressed copy the browser accepts, as nginx's `gzip_static` and Caddy's `precompressed` send it, so that
+    // the test loads the files a server would send.
+    let (body, encoding) = match &file {
+        Some(f) => match precompressed(f, &accepted) {
+            Some((body, encoding)) => (Some(body), Some(encoding)),
+            None => (std::fs::read(f).ok(), None),
+        },
+        None => (None, None),
+    };
     let (status, body, kind) = match (method, body) {
         ("GET" | "HEAD", Some(body)) => ("200 OK", body, file.as_deref().map_or("application/octet-stream", mime)),
         ("GET" | "HEAD", None) => ("404 Not Found", b"not found".to_vec(), "text/plain; charset=utf-8"),
         _ => ("405 Method Not Allowed", Vec::new(), "text/plain; charset=utf-8"),
     };
     let mut head = format!("HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n", body.len());
+    if let Some(encoding) = encoding {
+        let _ = write!(head, "Content-Encoding: {encoding}\r\nVary: Accept-Encoding\r\n");
+    }
     for (name, value) in HEADERS {
         let _ = write!(head, "{name}: {value}\r\n");
     }
@@ -364,6 +401,22 @@ fn respond(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
         stream.write_all(&body)?;
     }
     stream.flush()
+}
+
+/// `file`'s precompressed copy (`.br`, then `.gz`) and its encoding, when the request's `Accept-Encoding` takes one.
+fn precompressed(file: &Path, accepted: &str) -> Option<(Vec<u8>, &'static str)> {
+    let takes = |coding: &str| accepted.split(',').any(|c| c.split(';').next().is_some_and(|c| c.trim().eq_ignore_ascii_case(coding)));
+    [("br", "br"), ("gzip", "gz")]
+        .into_iter()
+        .filter(|(coding, _)| takes(coding))
+        .find_map(|(coding, extension)| std::fs::read(sibling(file, extension)).ok().map(|body| (body, coding)))
+}
+
+/// `file` with `.extension` added to its name.
+fn sibling(file: &Path, extension: &str) -> PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(format!(".{extension}"));
+    PathBuf::from(name)
 }
 
 /// npm, which is a script on Windows.
@@ -491,6 +544,30 @@ mod tests {
         assert_eq!(mime(Path::new("florastack_bg.wasm")), "application/wasm");
         assert_eq!(mime(Path::new("worker.js")), "text/javascript; charset=utf-8");
         assert_eq!(mime(Path::new("NOTICE")), "text/plain; charset=utf-8");
+    }
+
+    #[test]
+    fn precompressed_copies_are_what_the_browser_accepts() {
+        let dir = std::env::temp_dir().join(format!("florastack-precompress-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("app.wasm");
+        let text: Vec<u8> = (0..200_000_u32).flat_map(|i| (i % 251).to_le_bytes()).collect();
+        std::fs::write(&file, &text).unwrap();
+        precompress(&file).unwrap();
+        let (gz, coding) = precompressed(&file, "gzip, deflate").unwrap();
+        assert_eq!(coding, "gzip");
+        let mut unzipped = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(gz.as_slice()), &mut unzipped).unwrap();
+        assert_eq!(unzipped, text);
+        let (br, coding) = precompressed(&file, "gzip, deflate, br;q=1.0, zstd").unwrap();
+        assert_eq!(coding, "br", "Brotli first, when the browser takes it");
+        let mut unbrotlied = Vec::new();
+        brotli::BrotliDecompress(&mut br.as_slice(), &mut unbrotlied).unwrap();
+        assert_eq!(unbrotlied, text);
+        assert!(br.len() <= gz.len() && gz.len() < text.len() / 4, "{} {} {}", br.len(), gz.len(), text.len());
+        assert!(precompressed(&file, "").is_none() && precompressed(&file, "identity, brotli").is_none(), "only what is accepted");
+        assert!(precompressed(&dir.join("other.js"), "br, gzip").is_none(), "only files that have copies");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
