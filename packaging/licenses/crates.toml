@@ -1,0 +1,19 @@
+# Where the license texts of a crate are when they aren't license files at the top of its package (or, for a crate
+# from a git repository, at the top of that repository): `cargo xtask dist` writes the texts of every crate compiled
+# into the packages into THIRD-PARTY-LICENSES.txt (xtask/src/dist/notices.rs, book/src/dev/packaging.md).
+#
+# A crate that ships no license text at all, and isn't listed here, gets the standard text of a license it offers:
+# Apache-2.0 (the repository's LICENSE-APACHE), BSL-1.0 or MIT (the files next to this one; MIT with the authors its
+# manifest names). `dist` fails on a crate none of these covers: list it here.
+#
+# Per crate, by name, either of:
+#   files = ["path", ...]   files in the crate's package, relative to its folder
+#   from = "crate"          another crate of the same repository, whose top-level license files are this one's
+
+# egui's fonts: each font's license is in the fonts folder.
+[epaint_default_fonts]
+files = ["fonts/OFL.txt", "fonts/UFL.txt", "fonts/Hack-Regular.txt", "fonts/emoji-icon-font-mit-license.txt", "fonts/egui-icons.txt"]
+
+# BSD-3-Clause, Copyright Dropbox: its repository's other crate has the text (its package has none).
+[alloc-stdlib]
+from = "alloc-no-stdlib"

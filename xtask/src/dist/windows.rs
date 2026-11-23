@@ -85,7 +85,7 @@ pub fn msi(dist: &Dist, pins: &pins::Pins) -> Result<PathBuf, String> {
     let icon_file = inputs.join("icon.ico");
     super::write(&icon_file, &icon::ico()?)?;
     let mut licenses = Vec::new();
-    for (name, path) in dist.licenses() {
+    for (name, path) in dist.own_licenses() {
         licenses.push((name, super::read_text(&path)?));
     }
     let license_file = inputs.join("License.rtf");
@@ -135,7 +135,8 @@ fn license_rtf(display_name: &str, files: &[(&str, String)]) -> String {
     let mut rtf = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Segoe UI;}}\\f0\\fs18\n");
     let intro = format!(
         "{display_name} is free software: you can use, copy, modify and share it under the terms of either the MIT license or the Apache \
-         License, Version 2.0, at your option. Both follow, and then the notices of the code it includes."
+         License, Version 2.0, at your option. Both follow, and then the notices of the code it includes. The licenses of the libraries \
+         compiled into it are in THIRD-PARTY-LICENSES.txt, in the folder it installs to."
     );
     rtf.push_str(&rtf_text(&intro));
     rtf.push_str("\\par\\par\n");

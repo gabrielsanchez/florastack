@@ -185,7 +185,8 @@ pub fn deb(dist: &Dist) -> Result<PathBuf, String> {
     stage(dist, &root.join("usr"))?;
     let copyright = format!(
         "{} is licensed under the MIT license or the Apache License, Version 2.0, at your option.\n\
-         Their texts and the notices of the code it includes are in /usr/share/doc/{package}/: LICENSE-MIT, LICENSE-APACHE and NOTICE.\n",
+         Their texts and the notices of the code it includes are in /usr/share/doc/{package}/: LICENSE-MIT, LICENSE-APACHE and NOTICE,\n\
+         and the licenses of the libraries compiled into it in THIRD-PARTY-LICENSES.txt there.\n",
         dist.branding.display_name
     );
     super::write(&root.join("usr/share/doc").join(package).join("copyright"), copyright.as_bytes())?;
@@ -389,6 +390,7 @@ mod tests {
             work: root.join("target/dist/x86_64-unknown-linux-gnu"),
             downloads: root.join("target/dist/downloads"),
             out: root.join("target/dist/out"),
+            notices: root.join("target/dist/notices.txt"),
             root,
         }
     }

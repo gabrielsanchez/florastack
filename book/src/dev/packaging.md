@@ -15,8 +15,8 @@ app ID. Release packaging refuses an app ID that still contains the `OWNER` plac
 | Every platform | `florastack-cli-<version>-<platform>.zip` or `.tar.gz`, the command-line tool alone | As above, from the system (Homebrew's on macOS) |
 | Python | `florastack-<version>-cp39-abi3-<platform>.whl`, one wheel per platform for every Python from 3.9 (the bindings use the stable ABI) | Not used |
 
-Every package but the wheel includes `LICENSE-MIT`, `LICENSE-APACHE` and `NOTICE` (the wheel names its license in
-its metadata). The release also carries the source archives
+Every package includes `LICENSE-MIT`, `LICENSE-APACHE` and `NOTICE`, and `THIRD-PARTY-LICENSES.txt` (below); the wheel
+keeps them in its `.dist-info/licenses/` folder. The release also carries the source archives
 of the libraries that the macOS app and the Flatpak include (see below), and `SHA256SUMS.txt`, which
 `sha256sum --check SHA256SUMS.txt` verifies.
 
@@ -142,14 +142,41 @@ The LGPL asks three things of a package that includes these libraries, and the p
      or build the Flatpak from other sources (`cargo xtask dist --formats flatpak` writes its manifest into
      `target/dist/<target>/flatpak/`).
 
+## Third-party licenses
+
+`THIRD-PARTY-LICENSES.txt` lists the crates compiled into a package, with the license each declares and its
+repository, and then their license texts, each written once with the crates that ship it. `dist` writes it for each
+target from `cargo metadata` (`xtask/src/dist/notices.rs`): the crates that the apps' packages reach through normal
+dependencies for that target and its features (build dependencies run on the build machine and ship nothing), and for
+the wheel those of the Python bindings. A crate's texts are:
+
+1. the files that [`packaging/licenses/crates.toml`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/licenses/crates.toml)
+   names for it, such as egui's fonts' licenses in their folder;
+2. otherwise the license and notice files at the top of its package (`LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`,
+   `COPYRIGHT*`, `UNLICENSE*`), or for a crate from a git repository, such as LightCraft's, at the top of that
+   repository;
+3. otherwise, for a crate that ships none, the standard text of a license it offers: Apache-2.0 first (the
+   repository's `LICENSE-APACHE`), then BSL-1.0, then MIT with the authors its manifest names
+   (`packaging/licenses/`).
+
+A crate that none of these covers stops `dist`; the test `every_shipped_crate_has_its_texts`, which `cargo test`
+runs, checks every target's crates so that a new dependency fails there first. Then add the crate to `crates.toml`:
+`files` for texts elsewhere in its package, or `from` for another crate of its repository that has them. maturin takes
+license files from the Python project's folder alone, so `dist` adds them to the wheel it built
+(`xtask/src/dist/wheel_licenses.py`), with their `License-File` lines in its metadata. The camera libraries in the
+macOS app and the Flatpak, which aren't crates, have their own notice (below).
+
 ## The pieces
 
 - [`xtask/src/dist/`](https://github.com/gabrielsanchez/florastack/tree/main/xtask/src/dist/): `mod.rs` (targets, formats, the build, the checks), `windows.rs`,
-  `macos.rs`, `linux.rs`, `pins.rs` (the pinned downloads) and `icon.rs`.
+  `macos.rs`, `linux.rs`, `pins.rs` (the pinned downloads), `notices.rs` (the third-party licenses), `wheel_licenses.py`
+  and `icon.rs`.
 - [`packaging/windows/main.wxs`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/windows/main.wxs): the installer, whose names xtask passes as WiX
   variables. Its `UpgradeCode` must never change.
 - [`packaging/linux/`](https://github.com/gabrielsanchez/florastack/tree/main/packaging/linux/): the desktop entry, the AppStream metadata and the tarball's README.
 - [`packaging/macos/`](https://github.com/gabrielsanchez/florastack/tree/main/packaging/macos/): the camera libraries' build and the entitlements.
+- [`packaging/licenses/`](https://github.com/gabrielsanchez/florastack/tree/main/packaging/licenses/): where crates' license texts are when they aren't at the
+  top of their packages, and the standard texts for those that ship none.
 - [`packaging/gphoto/LIBGPHOTO2.txt.in`](https://github.com/gabrielsanchez/florastack/blob/main/packaging/gphoto/LIBGPHOTO2.txt.in): the camera libraries' notice.
 - The icon is a placeholder drawn by `xtask/src/dist/icon.rs` (SVG for Linux, PNG, ICO and ICNS), until a designed
   one replaces it.
