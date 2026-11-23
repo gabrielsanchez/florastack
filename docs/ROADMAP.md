@@ -568,6 +568,62 @@ Editing the stacked image after stacking and retouching: tone, color and detail 
 - [ ] Follow-up: `wasm-opt` on the module (binaryen): the `wasm-opt` crate's C++ needs C++20, which this machine's MSVC 14.34 can't compile; CI could install binaryen's release pinned by SHA-256, as it does wasm-bindgen's, once its gain is measured
 - [ ] Follow-up: when the browser's storage quota is full, spilling a tile fails with the browser's own words ("No space available for this operation"): say that the computer's disk is full, and how much the stack needed
 
+## Phase 8 — Stack and stitch
+
+Mosaics of focus stacks shot on an XY stage: each tile stacked as today, then the stacked tiles placed, matched in brightness and color, and blended into one image of up to about a gigapixel (about 85 tiles from a 24 MP camera at 30% overlap), within the memory budget. Three choices hold throughout the phase:
+
+- A mosaic is a project whose tiles are ordinary projects in its folder (`tiles/`), each of which can be opened, aligned, retouched and stacked again with the existing tools.
+- The mosaic is never held or stored whole (a gigapixel is 12 GB of 32-bit float samples): any window of it is rendered from the stacked tiles, a reduced copy (at most about 64 MP, half floats) serves zoomed-out views, and exports stream bands of rows to BigTIFF.
+- Tiles move by shifts first, with a model of the stage fitted to them (micrometers to pixels, and the camera's turn against the stage's axes), which places tiles whose overlaps have nothing to match.
+
+The methods come from papers (Szeliski 2006, Burt and Adelson 1983, Goldman 2010, Kwatra et al. 2003), never from Hugin, panotools or enblend.
+
+### 8.1 Mosaic project and tiles *(plan first)*
+
+- [ ] The mosaic project: tiles as projects in its folder, with a grid (rows, columns, overlap, row-by-row or back-and-forth order, starting corner) or the stage's recorded positions, in a new project format version with its migration
+- [ ] `mosaic.create`: tiles from a batch of files, cut by `split` (a jump in framing starts a tile), or from existing projects
+- [ ] `mosaic.stackAll`: every tile stacked from one shared preset, as a cancellable job that resumes without stacking again a tile whose output is current
+- [ ] How tile outputs are stored at this scale: a gigapixel's tiles take about 24 GB as 32-bit floats; half floats with compression, or as today, decided by measurement
+- [ ] Tests: a few hundred small synthetic frames into about 20 tiles; a cancelled and resumed `mosaic.stackAll` stacks no finished tile again; dispatch, undo and hostile cases for every new command
+
+### 8.2 Placing the tiles *(plan first)*
+
+- [ ] Neighbor pairs from the grid; each pair's shift by phase correlation on the expected overlap at reduced size, refined by ECC on the overlap at full size, with its score; optionally a small rotation and scale per tile
+- [ ] One weighted least-squares solve for every tile's position and the stage model, rejecting and flagging bad links; overlaps without texture placed by the stage model. A dense solve written for it, without a linear-algebra crate
+- [ ] Tests: a large synthetic scene cut into a grid with noise, gains, vignetting and the camera turned on the stage: mean placement error under 0.2 px, tiles with blank overlaps placed by the model, 200 tiles solved in under a second
+
+### 8.3 Matching brightness and color
+
+- [ ] A gain per tile and channel, solved from the overlaps; one vignetting model shared by the tiles and fitted from the overlaps (Goldman 2010); an optional flat-field frame
+- [ ] Tests: with known vignetting and gains, the color difference across seams under 1 ΔE00 (florastack-metrics' CIEDE2000)
+
+### 8.4 Seams, blending and export *(plan first)*
+
+- [ ] Seams: each pixel from the tile that is best there, by the frames its stack had there (`Coverage`: focus breathing leaves tile edges weak), the distance to the tile's edge and, where there is one, the depth map's confidence
+- [ ] Multiband blending (Burt and Adelson 1983) with its levels bounded so that a window renders with a fixed margin; a window rendered alone has the same pixels as the whole rendered at once
+- [ ] The reduced copy for views, cached; `export.run` on a mosaic streams bands of rows to BigTIFF; Deep Zoom tiles for web viewers as an option
+- [ ] Tests: PSNR against the synthetic truth and the halo metric along the seams; windows equal to the whole bit for bit; a 1 GP synthetic export within the memory budget (the quality runner's peak heap), with its disk use measured; the quality gate's entries
+
+### 8.5 XY stage capture *(plan first)*
+
+- [ ] A `Stage` with X and Y axes beside the focus `Rail` (Marlin's `G1 X Y` on the same controller, Z for focus)
+- [ ] A grid planner: the step in micrometers for the overlap asked for, from the sensor's size and the magnification, shot back and forth; each tile's position recorded for 8.2
+- [ ] Tests with mock drivers: the planned grid's overlap, and a grid cancelled or disconnected midway
+
+### 8.6 Mosaic view
+
+- [ ] The tiles laid out with each link colored by its score; dragging a tile (an undoable `mosaic.moveTile`) and stacking one again
+- [ ] A viewer that zooms from the reduced copy down to rendered windows
+- [ ] The book's chapter on stack and stitch, and the command reference
+
+### Later in Phase 8
+
+- [ ] Graph-cut seams (Kwatra et al. 2003)
+- [ ] Local warps for parallax between tiles
+- [ ] Stitched depth maps, for the scientific exports and 3D models
+- [ ] Blending on the GPU, with its CPU oracle
+- [ ] The browser build leaves mosaics out (its 4 GiB); revisit if that limit lifts
+
 ### After the last step
 
 - [ ] `cargo xtask quality` on the real corpus, compared side by side with Helicon Focus and Zerene Stacker trial outputs; the gaps become the next round of work
