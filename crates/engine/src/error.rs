@@ -162,6 +162,9 @@ impl CommandError {
                 | ProjectDataError::ReadFrame { source: FrameError::Raw(_), .. } => "raw",
                 ProjectDataError::Op(_) => "internal",
                 ProjectDataError::Frame(FrameError::Image(_)) | ProjectDataError::ReadFrame { source: FrameError::Image(_), .. } => "frame",
+                // A frame too large for a browser page, as a stack too large for it is.
+                ProjectDataError::Frame(FrameError::TooLargeForPage { .. })
+                | ProjectDataError::ReadFrame { source: FrameError::TooLargeForPage { .. }, .. } => "unavailable",
                 ProjectDataError::Align(AlignError::Cancelled(_)) | ProjectDataError::Stack(StackError::Cancelled(_)) => "cancelled",
                 ProjectDataError::Align(_) => "align",
                 ProjectDataError::Stack(_) => "stack",
@@ -170,6 +173,7 @@ impl CommandError {
                 FrameError::Raw(_) => "raw",
                 FrameError::Codec(_) => "codec",
                 FrameError::Image(_) => "frame",
+                FrameError::TooLargeForPage { .. } => "unavailable",
             },
             CommandError::Codec(_) => "codec",
             CommandError::Raw(_) => "raw",

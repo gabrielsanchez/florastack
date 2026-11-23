@@ -281,7 +281,8 @@ fn frame_list(app: &mut FloraStackApp, ui: &mut egui::Ui) {
         ui.weak(app.shell.frames.len().to_string());
     });
     if !app.has_project() || app.shell.frames.is_empty() {
-        ui.label(tr("frames-empty"));
+        // A page can't open a folder, nor a project from the user's files.
+        ui.label(if cfg!(target_arch = "wasm32") { tr("frames-empty-web") } else { tr("frames-empty") });
         if ui.button(Action::AddFrames.label()).clicked() {
             let ctx = ui.ctx().clone();
             app.perform(&ctx, Action::AddFrames);
@@ -578,7 +579,8 @@ fn empty_view(app: &mut FloraStackApp, ui: &mut egui::Ui) {
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Center)), |ui| {
         ui.add_space(rect.height() * 0.35);
         let loading = app.loading.is_some();
-        ui.label(RichText::new(if loading { tr("view-loading") } else { tr("view-hint") }).weak());
+        let hint = if cfg!(target_arch = "wasm32") { tr("view-hint-web") } else { tr("view-hint") };
+        ui.label(RichText::new(if loading { tr("view-loading") } else { hint }).weak());
         if !loading && !app.has_project() && !app.prefs.recent.is_empty() {
             ui.add_space(12.0);
             ui.label(RichText::new(tr("menu-recent")).strong());
@@ -706,7 +708,8 @@ fn dialogs(app: &mut FloraStackApp, ctx: &egui::Context) {
             dialog @ (Dialog::ApplyPreset(_) | Dialog::SavePreset(_) | Dialog::Preferences(_)) => close = settings_dialog(app, ui, dialog),
             Dialog::Stacks { stacks } => {
                 ui.heading(tr("stacks-title"));
-                ui.label(tr_args("stacks-found", &[("count", stacks.len().into())]));
+                let found = if cfg!(target_arch = "wasm32") { "stacks-found-web" } else { "stacks-found" };
+                ui.label(tr_args(found, &[("count", stacks.len().into())]));
                 egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                     for files in &stacks {
                         let first = files.first().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

@@ -58,6 +58,45 @@ pub enum FrameError {
     Codec(#[from] CodecError),
     #[error(transparent)]
     Image(#[from] ImageError),
+    /// In the browser build, a frame too large for the page's memory, refused from its headers before it is decoded
+    /// ([`check_size`]).
+    #[error(
+        "the frame is {width}x{height} ({megapixels} MP), and beside the {held_mb} MB of files it holds a browser page can read frames of          up to about {limit_mp} MP: give it fewer or smaller files, or use the desktop app"
+    )]
+    TooLargeForPage { width: usize, height: usize, megapixels: u64, limit_mp: u64, held_mb: u64 },
+}
+
+/// In the browser build, refuses a frame whose pixels wouldn't fit in the page's memory beside the files it holds
+/// ([`crate::compute::browser_frame_pixels`]), from its headers: what adding a frame checks, and every read before it
+/// decodes, since the files held may have grown since. A decoder that runs out of the page's memory aborts the whole
+/// page, which loses the project. Native targets have the memory, and check nothing here.
+pub fn check_size(bytes: &[u8]) -> Result<(), FrameError> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let held = florastack_core::fs::bytes_in_memory().unwrap_or(0);
+        fits(bytes, crate::compute::browser_frame_pixels(held), held)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (bytes, fits);
+        Ok(())
+    }
+}
+
+/// Whether the frame in `bytes` has at most `limit` pixels, as its headers say; a file whose headers can't be read
+/// passes, for its read to say what is wrong.
+fn fits(bytes: &[u8], limit: u64, held: u64) -> Result<(), FrameError> {
+    let size = match source(bytes) {
+        Ok(FrameSource::Raw(_)) => florastack_raw::info(bytes).ok().map(|i| (i.width, i.height)),
+        Ok(FrameSource::Image(_)) => florastack_codecs::probe(bytes).ok().map(|i| (i.width, i.height)),
+        Err(_) => None,
+    };
+    let Some((width, height)) = size else { return Ok(()) };
+    let pixels = (width as u64).saturating_mul(height as u64);
+    if pixels <= limit {
+        return Ok(());
+    }
+    Err(FrameError::TooLargeForPage { width, height, megapixels: pixels / 1_000_000, limit_mp: limit / 1_000_000, held_mb: held / 1_000_000 })
 }
 
 /// The file extensions of the image formats florastack-codecs reads, lower case and without the dot.
@@ -134,6 +173,7 @@ impl FrameReader {
     }
 
     fn read_as(&mut self, bytes: &[u8], size: Size) -> Result<Frame, FrameError> {
+        check_size(bytes)?;
         match source(bytes)? {
             FrameSource::Raw(format) => {
                 let raw = florastack_raw::decode(bytes, self.options.max_pixels)?;
@@ -184,5 +224,18 @@ mod tests {
         assert_eq!(source(b"\x89PNG\r\n\x1a\n\0\0\0\x0d").unwrap(), FrameSource::Image(Format::Png));
         assert_eq!(source(b"FUJIFILMCCD-RAW 0201FF383501").unwrap(), FrameSource::Raw(RawFormat::Raf));
         assert!(matches!(source(b"hello"), Err(FrameError::Codec(CodecError::UnknownFormat))));
+    }
+
+    #[test]
+    fn a_frame_too_large_for_a_page_is_refused_from_its_headers() {
+        let image = Image::<u8>::new(40, 30, 3, florastack_core::ColorSpace::SRGB).unwrap();
+        let spec = florastack_codecs::OutputSpec::new(Format::Png).unwrap();
+        let png = florastack_codecs::write(&AnyImage::U8(image), &spec, &florastack_codecs::OutputMetadata::default()).unwrap().bytes;
+        assert!(fits(&png, 1200, 0).is_ok(), "40 x 30 is 1200 pixels");
+        let refused = fits(&png, 1199, 5_000_000).unwrap_err();
+        assert!(matches!(refused, FrameError::TooLargeForPage { width: 40, height: 30, held_mb: 5, .. }), "{refused:?}");
+        assert!(refused.to_string().contains("40x30") && refused.to_string().contains("desktop app"), "{refused}");
+        assert!(fits(b"hello", 0, 0).is_ok(), "a file whose headers can't be read is left to its read");
+        assert!(check_size(&png).is_ok(), "native targets have the memory");
     }
 }

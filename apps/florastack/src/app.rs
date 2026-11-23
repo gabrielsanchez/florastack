@@ -1088,7 +1088,7 @@ impl FloraStackApp {
                 .filter(|files: &Vec<PathBuf>| !files.is_empty())
                 .collect();
             match stacks.len() {
-                0 => self.shell.notify(tr("notice-no-stacks"), true),
+                0 => self.shell.notify(if cfg!(target_arch = "wasm32") { tr("notice-no-stacks-web") } else { tr("notice-no-stacks") }, true),
                 1 => {
                     let files = stacks.into_iter().next().unwrap_or_default();
                     self.add_frames(&files);

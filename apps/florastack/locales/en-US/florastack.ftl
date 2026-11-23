@@ -24,6 +24,8 @@ action-new = New project
 action-open = Open project…
 action-add-frames = Add frames…
 action-import-stacks = Import stacks from a folder…
+# In the browser, which can't open folders: the files picked are split into stacks.
+action-import-stacks-web = Import stacks from files…
 action-save = Save
 action-save-as = Save as…
 action-close = Close project
@@ -122,6 +124,7 @@ job-eta = { $stage }, { $time } left
 notice-dismiss = Dismiss
 notice-saved-as = Saved as { $path }
 notice-no-stacks = No stacks found in that folder.
+notice-no-stacks-web = No stacks found among those files.
 notice-exported = Exported { $count ->
     [one] one file
    *[other] { $count } files
@@ -138,6 +141,7 @@ device-cpu = CPU
 
 frames-heading = Frames
 frames-empty = Drop frames or a folder here, or add them:
+frames-empty-web = Drop frames here, or add them:
 frames-enabled = Use this frame in stacks
 frames-check = { $missing ->
     [0] { $changed ->
@@ -602,6 +606,7 @@ prefs-ok = OK
 ## The viewer
 
 view-hint = Drop frames, a folder or a project here.
+view-hint-web = Drop frames here.
 view-loading = Loading…
 drop-hint = Drop to open or add
 
@@ -630,6 +635,7 @@ about-version = Version { $version }
 about-text = Free, open-source focus stacking. Licensed under the MIT or Apache 2.0 license.
 stacks-title = Stacks found
 stacks-found = { $count } stacks in that folder. Pick one to add:
+stacks-found-web = { $count } stacks among those files. Pick one to add:
 stacks-stack = { $first } and the following, { $count } frames
 
 ## Command palette

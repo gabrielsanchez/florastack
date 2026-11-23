@@ -25,7 +25,7 @@ The page opens the app on the Stack tab, as the desktop app opens.
 
 1. **Give it frames.** Drop image or RAW files on the page, or choose **File > Add frames…**, which opens the
    browser's file picker. A browser can't open folders: pick the files themselves (Ctrl+A in the picker takes a
-   folder's files). **File > Import stacks from a folder…** opens the picker too, and splits the files picked into
+   folder's files). **File > Import stacks from files…** opens the picker too, and splits the files picked into
    their stacks.
 2. **Align and stack** as in [Your first stack](first-stack.md): Ctrl+L aligns, Ctrl+Enter stacks.
 3. **Retouch** in the Retouch tab if the stack needs it ([Retouching](retouching.md)).
@@ -42,15 +42,18 @@ starts: until the test ends, the status line says `CPU`, and a stack started mea
   opened from or saved to your folders, and there are no recent projects.
 - **Memory is limited.** A page can hold at most 4 GB, the limit of WebAssembly's 32-bit memory, and the files given
   to it may take at most half of that. Files that don't fit are refused with a message that says how much they take,
-  as is a stack that wouldn't fit to stack. A 20-frame stack of 24-megapixel JPEGs fits; 100 RAW files don't. Stacks
+  as is a stack that wouldn't fit to stack, and a frame too large to read beside the files the page holds (above
+  about 97 megapixels in an empty page), which is refused when it is added. A 20-frame stack of 24-megapixel JPEGs fits; 100 RAW files don't. Stacks
   spill tiles beyond a 512 MB budget to the browser's private file system, which the site gets for itself and which is
   emptied when the page closes.
 - **No batches, watch folders or capture.** The Batch and Capture tabs, which need folders and devices, aren't there.
-- **The viewer** shows images through egui rather than the desktop's own GPU viewer, so very large images are shown
-  reduced.
+- **The viewer** draws on the GPU, as the desktop's does, where the browser draws the page with WebGPU or WebGL and
+  the viewer's shaders work there; otherwise through egui, with very large images shown reduced. The 3D view is
+  drawn the same way.
 - **Slower.** WebAssembly is slower than the desktop app's native code, and on WebGPU each frame is copied to the
-  thread that owns the GPU, which costs more than it saves on small stacks: 20 frames of 480 x 360 stack in 0.5 s on
-  the CPU's threads and in 1 to 4 s on WebGPU. To stack on the CPU, run **Set compute device** from the command palette
+  thread that owns the GPU, which costs more than it saves on small stacks: 20 frames of 480 x 360 stack in 0.5 to
+  0.7 s on the CPU's threads and in 0.9 to 4 s on WebGPU. A browser gives a page less of the GPU's memory than the
+  desktop app has: a stack that runs out of it starts again on the CPU, which costs the time it took to get there. To stack on the CPU, run **Set compute device** from the command palette
   (Ctrl+K) with `{"device": "cpu"}`.
 
 ## Running your own

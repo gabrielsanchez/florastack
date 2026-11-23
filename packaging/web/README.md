@@ -10,6 +10,7 @@ version does and doesn't do.
 |---|---|
 | `index.html` | The page. Every URL in it is relative, so the site works from any path. |
 | `florastack.js`, `florastack_bg.wasm` | The app, as JavaScript glue and WebAssembly (wasm-bindgen's) |
+| `*.br`, `*.gz` | The same two compressed ahead, with Brotli and gzip, for servers that send such copies |
 | `worker.js` | Starts each of the app's threads, a Web Worker running the same module |
 | `icon.png` | The page's icon |
 | `_headers`, `.htaccess` | The headers below, for Netlify and Cloudflare Pages, and for Apache |
@@ -42,7 +43,9 @@ Also:
 - **MIME types:** serve `.wasm` as `application/wasm` and `.js` as `text/javascript`. Most servers already do.
 - **HTTPS:** browsers give threads and the origin-private file system (where spilled tiles go) only to secure pages:
   `https://`, or `http://localhost` for testing. The page can't be opened from `file://`.
-- **Compression:** gzip or Brotli for `.wasm` and `.js` takes the download from about 25 MB to about 7 MB.
+- **Compression:** the 24 MB module is 4.7 MB with Brotli and 7.3 MB with gzip. The site has both copies beside
+  it, compressed at their best: a server that sends them (nginx's `gzip_static`, Caddy's `precompressed`) saves
+  compressing it on every request; any other compresses as it goes.
 
 ### nginx
 
@@ -55,6 +58,7 @@ location /florastack/ {
     add_header Cross-Origin-Resource-Policy "same-origin" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Cache-Control "no-cache" always;
+    gzip_static on;
     gzip on;
     gzip_types application/wasm text/javascript application/javascript;
 }
@@ -72,7 +76,9 @@ in the server's configuration.
 ```caddy
 example.org {
     root * /srv/florastack
-    file_server
+    file_server {
+        precompressed br gzip
+    }
     encode gzip zstd
     header {
         Cross-Origin-Opener-Policy "same-origin"
