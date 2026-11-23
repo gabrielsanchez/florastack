@@ -235,6 +235,7 @@ mod tests {
             work: root.join("target/dist/universal-apple-darwin"),
             downloads: root.join("target/dist/downloads"),
             out: root.join("target/dist/out"),
+            notices: root.join("target/dist/notices.txt"),
             root,
         };
         let plist = info_plist(&dist);

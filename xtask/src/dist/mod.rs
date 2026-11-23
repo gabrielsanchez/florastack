@@ -9,6 +9,7 @@
 pub(crate) mod icon;
 mod linux;
 mod macos;
+mod notices;
 mod pins;
 mod windows;
 
@@ -53,8 +54,15 @@ const PROFILE: &str = "dist";
 /// The oldest macOS the apps and the bundled libraries are built for.
 pub const MACOS_MINIMUM: &str = "11.0";
 
-/// The files every package carries next to the binaries.
+/// FloraStack's own license files, which every package carries next to the binaries with the third-party notices
+/// (`notices::FILE`).
 const LICENSE_FILES: [&str; 3] = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"];
+
+/// The Cargo package of the Python bindings, which the wheel holds.
+const PYTHON_PACKAGE: &str = "florastack-python";
+
+/// The Python script that adds license files to a built wheel.
+const WHEEL_LICENSES: &str = include_str!("wheel_licenses.py");
 
 const SUMS: &str = "SHA256SUMS.txt";
 
@@ -332,6 +340,8 @@ pub struct Dist {
     /// Downloads shared by every target, `target/dist/downloads/`.
     pub downloads: PathBuf,
     pub out: PathBuf,
+    /// The apps' third-party notices, written after they are built (`notices`).
+    pub notices: PathBuf,
 }
 
 impl Dist {
@@ -362,9 +372,35 @@ impl Dist {
         self.binary(&self.branding.binaries.cli)
     }
 
-    /// The license and notice files, with their names.
+    /// The license and notice files the app packages carry, with their names: FloraStack's own and the third-party
+    /// notices.
     pub fn licenses(&self) -> Vec<(&'static str, PathBuf)> {
+        let mut files = self.own_licenses();
+        files.push((notices::FILE, self.notices.clone()));
+        files
+    }
+
+    /// FloraStack's own license and notice files, with their names.
+    pub fn own_licenses(&self) -> Vec<(&'static str, PathBuf)> {
         LICENSE_FILES.iter().map(|name| (*name, self.root.join(name))).collect()
+    }
+
+    /// Camera control on Linux and macOS: the features that turn it on in both apps.
+    fn app_features(&self) -> Option<String> {
+        self.target.gphoto().then(|| format!("{}/gphoto,{}/gphoto", self.gui_package, self.cli_package))
+    }
+
+    /// Writes the third-party notices of the crates that the packages `roots` build into `path`.
+    fn write_notices(&self, roots: &[&str], features: Option<String>, what: &str, path: &Path) -> Result<(), String> {
+        let scope = notices::Scope {
+            title: format!("{what} {}, {}", self.version, self.target.label()),
+            roots: roots.to_vec(),
+            triples: self.target.rust_triples(),
+            features,
+        };
+        let count = notices::write(&self.root, &scope, path)?;
+        println!("{} lists {count} crates", path.display());
+        Ok(())
     }
 
     /// `work/<name>`, emptied.
@@ -410,8 +446,8 @@ impl Dist {
             let mut cargo = crate::cargo();
             cargo.current_dir(&self.root).args(["build", "--locked", "--profile", PROFILE, "--target", triple]);
             cargo.args(["--package", &self.gui_package, "--package", &self.cli_package]);
-            if self.target.gphoto() {
-                cargo.args(["--features", &format!("{}/gphoto,{}/gphoto", self.gui_package, self.cli_package)]);
+            if let Some(features) = self.app_features() {
+                cargo.args(["--features", &features]);
             }
             if self.target.os == Os::Macos {
                 cargo.env("MACOSX_DEPLOYMENT_TARGET", MACOS_MINIMUM);
@@ -421,7 +457,7 @@ impl Dist {
         if self.target.arch == Arch::Universal {
             macos::join_binaries(self)?;
         }
-        Ok(())
+        self.write_notices(&[&self.gui_package, &self.cli_package], self.app_features(), &self.branding.display_name, &self.notices)
     }
 
     /// Builds the Python bindings' wheel with maturin, in a virtual environment of its own. The bindings use the
@@ -449,7 +485,23 @@ impl Dist {
                 built.push(to);
             }
         }
-        if built.is_empty() { Err("maturin wrote no wheel".to_owned()) } else { Ok(built) }
+        if built.is_empty() {
+            return Err("maturin wrote no wheel".to_owned());
+        }
+        // maturin takes license files from the Python project's folder alone: add FloraStack's, and the notices of
+        // the crates in the bindings, to each wheel.
+        let notices = self.work.join("wheel-notices").join(notices::FILE);
+        let what = format!("{}'s Python bindings", self.branding.display_name);
+        self.write_notices(&[PYTHON_PACKAGE], Some(format!("{PYTHON_PACKAGE}/extension-module")), &what, &notices)?;
+        let script = self.work.join("wheel_licenses.py");
+        write(&script, WHEEL_LICENSES.as_bytes())?;
+        for wheel in &built {
+            let mut add = Command::new(&python);
+            add.arg("-I").arg(&script).arg(wheel);
+            add.args(self.own_licenses().into_iter().map(|(_, path)| path)).arg(&notices);
+            crate::python::checked(&mut add, "add the license files to the wheel")?;
+        }
+        Ok(built)
     }
 
     fn package(&self, format: Format, pins: &pins::Pins) -> Result<Vec<PathBuf>, String> {
@@ -554,6 +606,7 @@ pub fn run(meta: &Value, args: &[&str]) -> Result<(), String> {
         cli_package: cli_package.to_owned(),
         downloads: cargo_target.join("dist").join("downloads"),
         cargo_target,
+        notices: work.join("notices").join(notices::FILE),
         work,
         out,
     };
@@ -938,6 +991,59 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  a.msi\n\
              3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d  b.zip\n"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Makes a small wheel, adds two license files to it with the script `dist` runs, and checks the wheel as pip
+    /// would read it: the files under `.dist-info/licenses/`, METADATA naming them before its description, and every
+    /// RECORD line's hash and size those of its file. The same file can't be added twice.
+    #[test]
+    fn license_files_are_added_to_a_wheel() {
+        const MAKE: &str = r#"
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as wheel:
+    wheel.writestr("pkg/__init__.py", "")
+    wheel.writestr("pkg-1.0.dist-info/METADATA", "Metadata-Version: 2.4\nName: pkg\nVersion: 1.0\n\nThe description.\n")
+    wheel.writestr("pkg-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\n")
+    wheel.writestr("pkg-1.0.dist-info/RECORD", "stale\n")
+"#;
+        const CHECK: &str = r#"
+import base64, hashlib, sys, zipfile
+wheel = zipfile.ZipFile(sys.argv[1])
+assert wheel.read("pkg-1.0.dist-info/licenses/LICENSE-X") == b"license x\n"
+assert wheel.read("pkg-1.0.dist-info/licenses/NOTICES.txt") == b"notices\n"
+metadata = wheel.read("pkg-1.0.dist-info/METADATA").decode()
+assert metadata == "Metadata-Version: 2.4\nName: pkg\nVersion: 1.0\nLicense-File: LICENSE-X\nLicense-File: NOTICES.txt\n\nThe description.\n", metadata
+lines = wheel.read("pkg-1.0.dist-info/RECORD").decode().splitlines()
+assert sorted(line.split(",")[0] for line in lines) == sorted(wheel.namelist()), lines
+for line in lines:
+    name, digest, size = line.rsplit(",", 2)
+    if name.endswith("/RECORD"):
+        assert digest == size == ""
+        continue
+    data = wheel.read(name)
+    assert digest == "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode(), line
+    assert int(size) == len(data), line
+"#;
+        let dir = std::env::temp_dir().join(format!("florastack-wheel-licenses-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let python = std::env::var_os("PYO3_PYTHON").unwrap_or_else(|| if cfg!(windows) { "python".into() } else { "python3".into() });
+        let run = |args: &[&OsStr]| Command::new(&python).arg("-I").args(args).output().unwrap();
+        let wheel = dir.join("pkg-1.0-py3-none-any.whl");
+        let script = dir.join("wheel_licenses.py");
+        std::fs::write(&script, WHEEL_LICENSES).unwrap();
+        let (license, notices) = (dir.join("LICENSE-X"), dir.join("NOTICES.txt"));
+        std::fs::write(&license, "license x\n").unwrap();
+        std::fs::write(&notices, "notices\n").unwrap();
+
+        assert!(run(&["-c".as_ref(), MAKE.as_ref(), wheel.as_os_str()]).status.success());
+        let added = run(&[script.as_os_str(), wheel.as_os_str(), license.as_os_str(), notices.as_os_str()]);
+        assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stderr));
+        let checked = run(&["-c".as_ref(), CHECK.as_ref(), wheel.as_os_str()]);
+        assert!(checked.status.success(), "{}", String::from_utf8_lossy(&checked.stderr));
+        let again = run(&[script.as_os_str(), wheel.as_os_str(), license.as_os_str()]);
+        assert!(!again.status.success() && String::from_utf8_lossy(&again.stderr).contains("already has"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

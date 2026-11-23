@@ -54,6 +54,9 @@
       <Component Id="Notice" Guid="*">
         <File Id="Notice" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
       </Component>
+      <Component Id="ThirdPartyLicenses" Guid="*">
+        <File Id="ThirdPartyLicenses" Source="$(var.BinDir)\THIRD-PARTY-LICENSES.txt" KeyPath="yes" />
+      </Component>
     </ComponentGroup>
 
     <!-- A shortcut's component needs a per-user registry value as its key path. -->
