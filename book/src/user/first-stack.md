@@ -6,6 +6,9 @@ does turning the focus ring a little between shots on a tripod. [Shooting for fo
 to make a good one; for a first try, any 5 to 30 photos of a small subject will do. RAW files, DNG, TIFF, JPEG, PNG,
 WebP and OpenEXR all work.
 
+This chapter is also a [five-minute video](https://www.youtube.com/watch?v=RiN_XMd93IQ "Your first stack in five minutes"), which stacks a cricket from
+start to finish.
+
 ## 1. Add the frames
 
 Start FloraStack and drop the photos, or the folder that holds them, on its window, or copy them in Explorer or Finder
